@@ -1,0 +1,132 @@
+{
+ "date": "2026-09-27",
+ "what": "0.2.5: issue #2 (github.com/rulith-dev/strixllama/issues/2) - a ROCm 'unspecified launch failure' on a large text prefill after many images in a conversation; its cause and the fix (apply_image_dense_bound)",
+ "setup": "Qwen3.8-Flash-Next UD-IQ4_XS, F16 mmproj, context 262144, f16 K/V, QSA on, vision on, one slot, MTP with the shared Q4_K_M / IQ4_XS head and draft_max 2, the disk tier on, batch = ubatch = 8192 (the reporter's configuration). tools/vision_long_append.py on a server started as production (tmp/kvr/with_server.py): ~58K tokens of generated numbered records, 27 generated 1920x1080 PNGs in seven turns of 4,4,4,4,4,4,3 with the whole history kept (~114K tokens), a short text turn, then ~14K tokens more records. temperature 0, seed 42, 64 tokens, cache_prompt on, thinking off. Memory from tmp/kvr/gpu_mem_monitor.ps1 every 2-3 s: the server's shared and dedicated GPU memory (Windows GPU Process Memory counters), available RAM, free commit. Ryzen AI Max+ 395, 96 GB carve, 31.6 GB of RAM visible to Windows, TdrDelay 60 s.",
+ "reproduction_0_2_4": {
+  "result": "the append failed after 3.3-6.6 s with 'ROCm error: unspecified launch failure', in four runs of four",
+  "not_tdr": "TdrDelay is 60 s on this machine and the fault came within seconds, so this is not a GPU timeout",
+  "one_image_control": "the same lengths with one image (106K of text, one image, 14K append) completed, with and without serialized kernels",
+  "serialized": "AMD_SERIALIZE_KERNEL=3, AMD_SERIALIZE_COPY=3, graphs off, a sync before every node: the first node of the append's first ubatch (5811 tokens), the token-embedding GET_ROWS from the pinned host buffer, faulted with every index in range",
+  "memory": {
+   "first": {
+    "time": "00:59:30",
+    "pid": "29064",
+    "dedicated_gb": "31.22",
+    "shared_gb": "0.01",
+    "avail_ram_gb": "20.94",
+    "free_commit_gb": "106.03"
+   },
+   "last": {
+    "time": "01:05:16",
+    "pid": "29064",
+    "dedicated_gb": "18.27",
+    "shared_gb": "0.00",
+    "avail_ram_gb": "1.75",
+    "free_commit_gb": "136.16"
+   },
+   "max_shared_gb": 13.68,
+   "min_avail_ram_gb": 1.75
+  }
+ },
+ "cause": "Once an image is in a conversation every later ubatch takes the dense sparse-attention inputs: a KQ mask and a per-block bias over n_kv x n_tokens, ~6.6 bytes a pair, staged in the pinned host compute buffer. They grow with every image, so that buffer was reallocated for almost every image (GGML_ALLOC_DEBUG: ROCm_Host 269 -> 271, 296 -> 298, 324 -> 346 MiB ... ), and ROCm on Windows keeps each freed pinned buffer: the server's shared GPU memory rose ~0.45 GB an image, 1.5 -> 13.7 GB, and available RAM fell 17 -> 3.4 GB. The first large batch after that faulted. One image per request at short context does not show it (the buffer grows once); the growth is in chunks and scales with the context. Not the legacy CUDA pool (no new pool allocations), not the disk tier (nothing is written for a conversation with images). GGML_CUDA_NO_PINNED=1 is not a way out: the runtime reads host buffers from the GPU and faults at warmup without pinned memory.",
+ "fix": {
+  "dense_ubatch_bound": "once a conversation holds an image (or a position gap, the sticky kb_dup), its ubatches are held to n_kv x n_tokens <= 2^27 (STRIX_DENSE_UBATCH_BUDGET; about 1024 tokens at 128K cells, 512 at 256K). Text before any image keeps the full ubatch",
+  "buffer_growth": "a compute buffer that has to grow again grows by at least a quarter (on top of the 3% + 16 MiB headroom since 0.1.12), so it is reallocated a handful of times per process instead of once per image",
+  "fault_report": "a kernel fault reported after an op now names the node, its sources, and where each lies in its buffer"
+ },
+ "fixed_budget_2_28": {
+  "result": "completed",
+  "append_prefill_tps": 261.1,
+  "image_turn_prefill_tps": [
+   250.9,
+   239.4,
+   228.0,
+   215.8,
+   204.0,
+   193.7,
+   186.9
+  ],
+  "host_buffer_growths_mib": [
+   [
+    269.6,
+    786.5
+   ],
+   [
+    827.1,
+    831.4
+   ],
+   [
+    1082.1,
+    1097.9
+   ],
+   [
+    1410.9,
+    1421.0
+   ]
+  ],
+  "memory": {
+   "first": {
+    "time": "01:24:08",
+    "pid": "17808",
+    "dedicated_gb": "19.45",
+    "shared_gb": "0.01",
+    "avail_ram_gb": "20.42",
+    "free_commit_gb": "106.07"
+   },
+   "last": {
+    "time": "01:31:04",
+    "pid": "17808",
+    "dedicated_gb": "78.26",
+    "shared_gb": "6.84",
+    "avail_ram_gb": "8.90",
+    "free_commit_gb": "67.08"
+   },
+   "max_shared_gb": 6.84,
+   "min_avail_ram_gb": 8.03
+  }
+ },
+ "fixed_budget_2_27": {
+  "result": "completed",
+  "append_prefill_tps": 244.8,
+  "image_turn_prefill_tps": [
+   250.7,
+   233.8,
+   219.4,
+   209.1,
+   200.8,
+   194.8,
+   188.1
+  ],
+  "host_buffer_growths_mib": [
+   [
+    269.6,
+    786.5
+   ],
+   [
+    827.1,
+    831.4
+   ]
+  ],
+  "memory": {
+   "first": {
+    "time": "01:33:52",
+    "pid": "31660",
+    "dedicated_gb": "25.71",
+    "shared_gb": "0.01",
+    "avail_ram_gb": "19.58",
+    "free_commit_gb": "104.42"
+   },
+   "last": {
+    "time": "01:40:56",
+    "pid": "31660",
+    "dedicated_gb": "78.25",
+    "shared_gb": "3.67",
+    "avail_ram_gb": "10.98",
+    "free_commit_gb": "69.19"
+   },
+   "max_shared_gb": 3.67,
+   "min_avail_ram_gb": 10.8
+  },
+  "chosen": "the default: half the memory of 2^28 for 6% on a long text append to an image conversation"
+ }
+}

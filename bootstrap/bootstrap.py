@@ -76,6 +76,7 @@ PATCH_ORDER = [
     "apply_bf16_mid_batches", "apply_q6k_mmq_rdna35",
     "apply_small_batch_decode",
     "apply_verify_small_products",
+    "apply_image_dense_bound",
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

@@ -505,3 +505,12 @@ to TheRock ROCm 10.2.0a20260925. Measured in `docs/results/multi-stream-20260926
 | patch | files | what |
 |---|---|---|
 | `apply_verify_small_products` | `ggml-cuda.cu`, `concat.cu` | three more products of a several-conversation verify step off kernels that ran a few workgroups for the whole GPU: the GDN conv input's concat of a transposed batch of 2-31 tokens on the tiled transpose (`STRIX_CONCAT_T_MIN`, upstream 32: the non-contiguous kernel ran one 256-thread block per channel and sequence for 3 + tokens values, ~30K blocks at three conversations); at 9-32 columns a BF16 weight (`STRIX_BF16_VEC_CHUNK_MAX`; the indexer's k projection [2560 x 128] took MMB's one 128-row tile) and a quantized weight of at most 1024 output rows (`STRIX_Q_VEC_CHUNK_MAX`, `STRIX_Q_VEC_CHUNK_ROWS`; the hyper-connection down projection, the attention k and v, the shared expert took 3-5 MMQ tiles) on the vector kernel over chunks of 8 columns. A nine-token verify step 106.4 -> 103.0 ms, a twelve-token one 129.4 -> 123.5 (the server's timing, default sampling). Batches of one to eight tokens give the same output as before (the concat is a copy either way), and so do batches of more than 32 |
+
+## Addendum 2026-09-27: 0.2.5
+
+No new files in the delta (53: 49 modified, 4 added); replay 53 / 53, 59 patches. Measured in
+`docs/results/issue2-image-history-20260927.json`.
+
+| patch | files | what |
+|---|---|---|
+| `apply_image_dense_bound` | `llama-memory-hybrid-idx.cpp`, `ggml-alloc.c`, `ggml-cuda.cu` | once a conversation holds an image (or a position gap), its ubatches take the dense sparse-attention inputs, a KQ mask and a per-block bias over n_kv x n_tokens staged in pinned host memory; they grew with every image, and ROCm on Windows kept each pinned buffer the growth freed - 27 images of 1920x1080 on a 58K conversation took 12 GiB of RAM, and a 14K text append at batch 8192 then faulted (issue #2). Such ubatches are held to n_kv x n_tokens <= 2^27 (`STRIX_DENSE_UBATCH_BUDGET`, 0: off), a compute buffer that has to grow again grows by at least a quarter, and a kernel fault names the failing node and where its tensors lie in their buffers. The reported workload completes with 3.7 GB of shared GPU memory instead of 13.7; text before any image is bitwise unchanged |
