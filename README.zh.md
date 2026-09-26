@@ -62,8 +62,9 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 系统的 7.1（同样的源码，预填充 +60%）；而实测所用的 SDK 版本来自一个约 27 天滚动窗口的 nightly
 索引——也就是说这个钉死的版本号迟早会失效，那篇文档写了届时怎么办。模型文件是另外约 95 GB 的下载。
 
-可选：`integrations/jan/apply.py` 把三个管理页面叠加进
-[Jan](https://github.com/menloresearch/jan) 的源码树，中英双语。
+可选：`integrations/jan/apply.py` 把模型页面（模型库、配置、日志）、替换 Jan 引导页的欢迎页、侧栏和
+聊天页上方的模型状态，以及 Rulith 的设计风格叠加进 [Jan](https://github.com/menloresearch/jan) 的源码树，
+中英双语。
 
 ## 里面到底有什么
 

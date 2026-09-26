@@ -1,0 +1,113 @@
+/* Strix Llama in Rulith's design language (Rulith Console and the Rulith desktop app): neutral greys, a white
+   primary button on dark (black on light), hairline borders, 6-8 px corners, compact system type, and one
+   brand colour, Rulith green, for state. Jan's theme variables are overridden rather than its components:
+   the chat, the settings and our pages all follow. !important because Jan's interface settings write --primary
+   and --sidebar inline on the root element (the accent picker is gone from Settings for that reason). */
+:root {
+  --radius: 0.5rem !important;
+  --background: #f6f6f6 !important;
+  --foreground: #161616 !important;
+  --card: #ffffff !important;
+  --card-foreground: #161616 !important;
+  --popover: #ffffff !important;
+  --popover-foreground: #161616 !important;
+  --primary: #161616 !important;
+  --primary-foreground: #fafafa !important;
+  --secondary: #eeeeee !important;
+  --secondary-foreground: #161616 !important;
+  --muted: #f0f0f0 !important;
+  --muted-foreground: #6b6b6b !important;
+  --accent: #ececec !important;
+  --accent-foreground: #161616 !important;
+  --destructive: #d23b3b !important;
+  --border: #e2e2e2 !important;
+  --input: #d6d6d6 !important;
+  --ring: #2563eb !important;
+  --sidebar: #efefef !important;
+  --sidebar-foreground: #1c1c1c !important;
+  --sidebar-primary: #161616 !important;
+  --sidebar-primary-foreground: #fafafa !important;
+  --sidebar-accent: #e3e3e3 !important;
+  --sidebar-accent-foreground: #161616 !important;
+  --sidebar-border: #e0e0e0 !important;
+  --sidebar-ring: #2563eb !important;
+  /* Rulith's own */
+  --rl-green: #12a574;
+  --rl-green-soft: rgb(18 165 116 / 0.12);
+  --rl-blue: #2563eb;
+  --rl-amber: #b7791f;
+  --rl-amber-soft: rgb(183 121 31 / 0.10);
+  --rl-label: #707070;
+  --rl-banner: #ffffff;
+  --rl-bubble: rgb(37 99 235 / 0.09);
+}
+
+.dark {
+  --background: #151515 !important;
+  --foreground: #ececec !important;
+  --card: #1b1b1b !important;
+  --card-foreground: #ececec !important;
+  --popover: #1e1e1e !important;
+  --popover-foreground: #ececec !important;
+  --primary: #f3f3f3 !important;
+  --primary-foreground: #121212 !important;
+  --secondary: #242424 !important;
+  --secondary-foreground: #e6e6e6 !important;
+  --muted: #1f1f1f !important;
+  --muted-foreground: #9b9b9b !important;
+  --accent: #262626 !important;
+  --accent-foreground: #ececec !important;
+  --destructive: #f07070 !important;
+  --border: #2b2b2b !important;
+  --input: #353535 !important;
+  --ring: #4b8df7 !important;
+  --sidebar: #181818 !important;
+  --sidebar-foreground: #dcdcdc !important;
+  --sidebar-primary: #f3f3f3 !important;
+  --sidebar-primary-foreground: #121212 !important;
+  --sidebar-accent: #262626 !important;
+  --sidebar-accent-foreground: #f0f0f0 !important;
+  --sidebar-border: #262626 !important;
+  --sidebar-ring: #4b8df7 !important;
+  --rl-green: #2fd69a;
+  --rl-green-soft: rgb(47 214 154 / 0.12);
+  --rl-blue: #5b9bff;
+  --rl-amber: #e3a948;
+  --rl-amber-soft: rgb(227 169 72 / 0.10);
+  --rl-label: #a8a8a8;
+  --rl-banner: #202020;
+  --rl-bubble: rgb(91 155 255 / 0.15);
+}
+
+/* the system's type, as Rulith's apps use it; Jan's display face (font-studio) goes with Jan's look */
+body,
+.font-sans {
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif !important;
+}
+.font-studio {
+  font-family: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif !important;
+  font-weight: 600 !important;
+}
+
+/* a flush sidebar in one flat colour with a hairline, not Jan's floating card with a gradient */
+[data-sidebar="sidebar"] {
+  background: var(--sidebar) !important;
+}
+
+/* buttons with a label have Rulith's 6 px corners; round icon buttons (send, close) stay round. Matched on the
+   attributes Button always writes: a button that opens a menu carries the menu's data-slot instead of its own */
+[data-variant][data-size="default"],
+[data-variant][data-size="sm"],
+[data-variant][data-size="xs"],
+[data-variant][data-size="lg"] {
+  border-radius: 6px !important;
+}
+[data-variant][data-size="sm"] {
+  font-size: 13px;
+}
+
+/* toasts in the plain popover colour rather than tinted with Jan's accent */
+.toaster {
+  --normal-bg: var(--popover) !important;
+  --normal-border: var(--border) !important;
+}

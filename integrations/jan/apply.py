@@ -6,6 +6,7 @@ Every edit is anchored against upstream Jan text and fails loudly rather than gu
 has moved, so a Jan version this was not written for is a clear error and not a half-applied tree.
 """
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -19,10 +20,29 @@ ROOT = HERE.parents[1]
 NAME = 'Strix Llama'
 SLUG = 'strixllama'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.2.4'
+VERSION = '0.2.5'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
+# The model pages (StrixLlamaPage lays out the three views), the welcome screen that replaces Jan's
+# setup screen, the chat header's model state, the app-wide status poll, and the canned answers the
+# browser preview uses (fixtures.ts, imported only by development builds).
+UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
+            'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
+            'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
+# NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
+NSIS_HOOKS = r"""!macro NSIS_HOOK_PREINSTALL
+  ; a model server still running from this install holds runtime\bin\hip open. Stop it as the app does -
+  ; through the manager, which writes its conversations to the disk tier first - then stop whatever of this
+  ; install is still running: only processes whose file lies under $INSTDIR.
+  IfFileExists "$INSTDIR\runtime\tools\manager.py" 0 +2
+    nsExec::Exec 'cmd /c echo {"op":"stop"}| "$INSTDIR\runtime\python\python.exe" "$INSTDIR\runtime\tools\manager.py"'
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process llama-server -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
+  ; up to 0.2.4 the runtime lived in runtime\bin\hip-rocm101, named after the ROCm 10.1 it was first built
+  ; with; it is runtime\bin\hip now, and the old copy would otherwise stay behind after an upgrade
+  RMDir /r "$INSTDIR\runtime\bin\hip-rocm101"
+!macroend
+"""
 
 def replace_once(path, old, new):
     text = path.read_text(encoding='utf-8')
@@ -36,7 +56,7 @@ def main():
     shutil.copyfile(HERE / 'strixllama.rs', JAN / 'src-tauri/src/strixllama.rs')
     ui = JAN / 'web-app/src/components/strixllama'
     ui.mkdir(parents=True, exist_ok=True)
-    for name in ('StrixLlamaPage.tsx', 'StrixLlamaSync.tsx', 'status.ts', 'strixllama.css'):
+    for name in UI_FILES:
         shutil.copyfile(HERE / name, ui / name)
     # StrixLlamaSync polls the manager for the whole app and registers the one provider Jan's chat
     # needs, so a fresh install can chat without first naming an endpoint in a dialog.
@@ -55,12 +75,21 @@ def main():
         shutil.copyfile(HERE / 'locales' / locale / 'strixllama.json', target / 'strixllama.json')
     routes = JAN / 'web-app/src/routes/strixllama'
     routes.mkdir(parents=True, exist_ok=True)
-    for view in ('models', 'configuration', 'developer'):
+    for view in ('models', 'configuration', 'logs'):
         (routes / f'{view}.tsx').write_text(
             "import { createFileRoute } from '@tanstack/react-router'\n"
             "import StrixLlamaPage from '@/components/strixllama/StrixLlamaPage'\n"
             f"export const Route = createFileRoute('/strixllama/{view}')({{\n"
             f"  component: () => <StrixLlamaPage view=\"{view}\" />,\n}})\n", encoding='utf-8')
+    # the sidebar links to /strixllama, so its one entry is active on all three views
+    (routes / 'index.tsx').write_text(
+        "import { createFileRoute, redirect } from '@tanstack/react-router'\n"
+        "export const Route = createFileRoute('/strixllama/')({\n"
+        "  beforeLoad: () => { throw redirect({ to: '/strixllama/models' }) },\n})\n", encoding='utf-8')
+    # the log view was /strixllama/developer up to 0.2.4; the file is ours, written by this script
+    stale = routes / 'developer.tsx'
+    if stale.is_file() and "createFileRoute('/strixllama/developer')" in stale.read_text(encoding='utf-8'):
+        stale.unlink()
     lib = JAN / 'src-tauri/src/lib.rs'
     replace_once(lib, 'pub mod core;', 'pub mod core;\nmod strixllama;')
     replace_once(lib, 'tauri::generate_handler![', 'tauri::generate_handler![\n            strixllama::strixllama_request,')
@@ -83,16 +112,139 @@ def main():
     app_lib::run();
 """)
     nav = JAN / 'web-app/src/components/left-sidebar/NavMain.tsx'
-    replace_once(nav, "import { LucideIcon } from 'lucide-react'", "import { LucideIcon, Database, SlidersHorizontal, Terminal } from 'lucide-react'")
-    anchor = "  {\n    title: 'common:settings',"
-    # Jan renders t(item.title) and its own entries are namespaced keys, so these follow the
-    # language Jan is set to instead of being pinned to one, as they were.
-    addition = """  { title: 'strixllama:tabs.models', url: '/strixllama/models', icon: Database },
-  { title: 'strixllama:tabs.configuration', url: '/strixllama/configuration', icon: SlidersHorizontal },
-  { title: 'strixllama:tabs.developer', url: '/strixllama/developer', icon: Terminal },
-"""
-    replace_once(nav, anchor, addition + anchor)
+    # a tree this script patched before has entries of its own in the main list - the three model pages up
+    # to 0.2.4, one model entry in the first 0.2.5 builds - and their imports: take them out first. The model
+    # pages are a sidebar group of their own now (Sidebar.tsx), and Settings moved to the sidebar's foot.
+    text = nav.read_text(encoding='utf-8')
+    for old_line in ("  { title: 'strixllama:tabs.models', url: '/strixllama/models', icon: Database },\n",
+                     "  { title: 'strixllama:tabs.configuration', url: '/strixllama/configuration', icon: SlidersHorizontal },\n",
+                     "  { title: 'strixllama:tabs.developer', url: '/strixllama/developer', icon: Terminal },\n",
+                     "  { title: 'strixllama:title', url: '/strixllama', icon: Cpu, shortcut: <NavStatus /> },\n"):
+        text = text.replace(old_line, '')
+    text = text.replace("import { LucideIcon, Database, SlidersHorizontal, Terminal } from 'lucide-react'",
+                        "import { LucideIcon } from 'lucide-react'")
+    text = text.replace("import { LucideIcon, Cpu } from 'lucide-react'\n"
+                        "import { NavStatus } from '@/components/strixllama/ModelState'", "import { LucideIcon } from 'lucide-react'")
+    nav.write_text(text, encoding='utf-8', newline='\n')
+    # Jan never marks the section you are in: an entry with a URL is active on every page under it
+    # (Settings on all of /settings, the model entry on all of /strixllama)
+    replace_once(nav, "import { Link, useNavigate } from '@tanstack/react-router'",
+                 "import { Link, useNavigate, useRouterState } from '@tanstack/react-router'")
+    replace_once(nav, "  ).filter((item) => item.title !== 'common:newAgentChat')\n",
+                 "  ).filter((item) => item.title !== 'common:newAgentChat')\n"
+                 "    .map((item) => ({ ...item, isActive: item.isActive ?? (!!item.url && pathname.startsWith(item.url.replace(/\\/general$/, ''))) }))\n")
+    replace_once(nav, "  const navigate = useNavigate()\n",
+                 "  const navigate = useNavigate()\n"
+                 "  const pathname = useRouterState({ select: (s) => s.location.pathname })\n")
+    # Jan's setup screen offers to download Jan's own model; ours finds the model files and loads one
+    home = JAN / 'web-app/src/routes/index.tsx'
+    thread = JAN / 'web-app/src/routes/threads/$threadId.tsx'
+    for page in (home, thread):   # the first 0.2.5 builds put a pill beside the model picker
+        text = page.read_text(encoding='utf-8')
+        text = (text.replace("import { ModelState } from '@/components/strixllama/ModelState'\n", '')
+                    .replace("          <ModelState />\n", ''))
+        page.write_text(text, encoding='utf-8', newline='\n')
+    replace_once(home, "import SetupScreen from '@/containers/SetupScreen'\n",
+                 "import Welcome from '@/components/strixllama/Welcome'\n"
+                 "import { ModelBanner } from '@/components/strixllama/ModelState'\n")
+    replace_once(home, "    return <SetupScreen />\n", "    return <Welcome />\n")
+    # above a new chat and a thread, as Rulith's desktop app has it: why the model cannot answer, and the fix
+    replace_once(home, '    <div className="flex h-full flex-col justify-center">\n      <HeaderPage>',
+                 '    <div className="flex h-full flex-col justify-center">\n      <ModelBanner />\n      <HeaderPage>')
+    replace_once(thread, "import DropdownModelProvider from '@/containers/DropdownModelProvider'\n",
+                 "import DropdownModelProvider from '@/containers/DropdownModelProvider'\n"
+                 "import { ModelBanner } from '@/components/strixllama/ModelState'\n")
+    replace_once(thread, '      <HeaderPage>\n        <div className="flex items-center justify-between w-full pr-2">',
+                 '      <ModelBanner />\n      <HeaderPage>\n        <div className="flex items-center justify-between w-full pr-2">')
+    # the sidebar in Rulith's shape: flush with a hairline instead of a floating card, the model pages as a
+    # group under the chat entries, the loaded model and Settings at its foot (brand() puts the brand block in)
+    side = JAN / 'web-app/src/components/left-sidebar/index.tsx'
+    replace_once(side, "import { NavProjects } from './NavProjects'\n",
+                 "import { NavProjects } from './NavProjects'\n"
+                 "import { ModelNav, ModelPanel, SidebarBrand } from '@/components/strixllama/Sidebar'\n")
+    replace_once(side, "  SidebarContent,\n", "  SidebarContent,\n  SidebarFooter,\n")
+    replace_once(side, '<Sidebar variant="floating" collapsible="offcanvas">', '<Sidebar variant="sidebar" collapsible="offcanvas">')
+    replace_once(side, "          <NavMain />\n        </SidebarHeader>", "          <NavMain />\n          <ModelNav />\n        </SidebarHeader>")
+    replace_once(side, "        <SidebarRail />", '        <SidebarFooter className="p-0">\n          <ModelPanel />\n        </SidebarFooter>\n        <SidebarRail />')
     drop_nav_entries(nav)
+    # Rulith's palette is fixed (rulith-theme.css overrides --primary and --sidebar), so Jan's accent colour
+    # picker would change nothing: it goes, kept in the source behind a constant
+    interface = JAN / 'web-app/src/routes/settings/interface.tsx'
+    replace_once(interface, """              <CardItem
+                title="Accent color"
+                description="Customize the accent color of the application."
+                className="flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-y-2"
+                actions={<AccentColorPicker />}
+              />""", """              {/* strixllama: Rulith's palette is fixed, see rulith-theme.css */}
+              {false && (
+              <CardItem
+                title="Accent color"
+                description="Customize the accent color of the application."
+                className="flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-y-2"
+                actions={<AccentColorPicker />}
+              />
+              )}""")
+    # Settings in the model pages' layout: the card's name as a small caps label above a bordered card,
+    # 13 px titles over 12 px descriptions (Jan's are 16 and 14 px with the name inside the card)
+    card = JAN / 'web-app/src/containers/Card.tsx'
+    replace_once(card, """        <div className="space-y-1.5">
+          <h1 className="font-medium text-foreground">{title}</h1>
+          {description && (
+            <span className="text-muted-foreground leading-normal">""", """        <div className="space-y-1">
+          <h1 className="text-[13px] font-medium text-foreground">{title}</h1>
+          {description && (
+            <span className="text-xs text-muted-foreground leading-normal">""")
+    replace_once(card, """    <div className="bg-card p-4 rounded-lg text-muted-foreground w-full">
+      {title && (
+        <h1 className="text-foreground font-studio font-medium text-base mb-4">
+          {title}
+        </h1>
+      )}
+      {header && header}
+      {children}
+    </div>""", """    <div className="w-full not-first:mt-2">
+      {title && (
+        <h1 className="mb-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-[var(--rl-label)]">
+          {title}
+        </h1>
+      )}
+      <div className="bg-card border px-4 py-3 rounded-lg text-[13px] text-muted-foreground w-full">
+        {header && header}
+        {children}
+      </div>
+    </div>""")
+    # "Colored user message bubble" filled your messages with the accent, which is white on dark in Rulith's
+    # palette: a blue tint instead (Rulith's link colour; green means a state), the plain grey one when off
+    replace_once(JAN / 'web-app/src/containers/MessageItem.tsx', "? 'bg-primary text-primary-foreground'",
+                 "? 'bg-[var(--rl-bubble)] text-foreground'")
+    # Our provider is llama-server, but Jan builds its requests as for any OpenAI-compatible endpoint, which drops
+    # the llama.cpp-only sampling keys: Repeat Penalty, its window and Min P were shown in the chat's parameter panel
+    # and never sent. Send them, with the rest of what Jan asserts for its own llama-server (cache_prompt, progress).
+    replace_once(JAN / 'web-app/src/lib/model-factory.ts',
+                 ": createCustomFetch(getRuntimeFetch(), parameters, false, undefined, true)",
+                 ": createCustomFetch(getRuntimeFetch(), parameters, provider.provider === 'strixllama', undefined, true)")
+    # A reply the server ended with an error - every answer in flight when an allocation failed - was saved as an
+    # ordinary finished message, cut off mid-sentence and without a Continue button; later turns then copied the
+    # cut-off text. It is saved as a stopped turn now, like one the user stopped: marked, and continued in place.
+    thread_page = JAN / 'web-app/src/routes/threads/$threadId.tsx'
+    # A thread keeps its own copy of the assistant it was started with (thread.json), and that copy is what the chat
+    # sends - so the date line brand_text() removes from the default assistant stayed in every existing conversation.
+    # It is dropped when the prompt is built: an existing conversation's prefix changes once, then never again.
+    replace_once(thread_page, """  const systemMessage = threadAssistant?.instructions
+    ? renderInstructions(threadAssistant.instructions)
+    : undefined""", """  // strixllama: without the date line Jan's default instructions ended with (see brand_text in apply.py)
+  const threadInstructions =
+    threadAssistant?.id === 'jan' && threadAssistant.instructions
+      ? threadAssistant.instructions.replace(/\\s*Current date: \\{\\{\\s*current_date\\s*\\}\\}\\s*$/, '')
+      : threadAssistant?.instructions
+  const systemMessage = threadInstructions
+    ? renderInstructions(threadInstructions)
+    : undefined""")
+    replace_once(thread_page, "    onFinish: ({ message, isAbort }) => {\n",
+                 "    onFinish: ({ message, isAbort, isError, isDisconnect }) => {\n")
+    replace_once(thread_page, "      const isStoppedTurn = isAbort || finishReason === 'length'\n",
+                 "      // strixllama: an error or a dropped connection mid-reply leaves a partial too\n"
+                 "      const isStoppedTurn = isAbort || isError || isDisconnect || finishReason === 'length'\n")
     converge_settings()
     drop_integrations()
     brand(KEEP_DATA_DIR)
@@ -209,8 +361,14 @@ def brand(keep_data_dir=False):
     # Settings › General reads the web app's package version
     web_pkg = JAN / 'web-app/package.json'
     web = json.loads(web_pkg.read_text(encoding='utf-8'))
-    if web.get('version') != VERSION:
+    # ...and its build type-checks before Vite runs, against the committed routeTree.gen.ts, which does
+    # not list the /strixllama routes: a fresh checkout failed there. Vite's router plugin writes the
+    # tree as the build starts, so type-check after it.
+    build = web.get('scripts', {}).get('build')
+    if web.get('version') != VERSION or build == 'tsc -b && vite build':
         web['version'] = VERSION
+        if build == 'tsc -b && vite build':
+            web['scripts']['build'] = 'vite build && tsc -b'
         web_pkg.write_text(json.dumps(web, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
     if not keep_data_dir:
         data['identifier'] = 'dev.rulith.strixllama'
@@ -244,18 +402,23 @@ def brand(keep_data_dir=False):
                      'pub const TAURI_BUNDLE_IDENTIFIER: &str = "dev.rulith.strixllama";')
         replace_once(constants, 'assert_eq!(TAURI_BUNDLE_IDENTIFIER, "jan.ai.app");',
                      'assert_eq!(TAURI_BUNDLE_IDENTIFIER, "dev.rulith.strixllama");')
-    # Disable the updater. It points at Jan's endpoints AND carries Jan's signing key, so an
-    # upstream release would validate and install — replacing this build with stock Jan, runtime
-    # and management pages gone. Jan's own release notes feed goes with it, for the same reason:
-    # it would advertise versions that have nothing to do with what is installed.
+    # The updater, pointed at this project's releases and this project's key. Jan's configuration named
+    # Jan's endpoints and carried Jan's signing key, so an upstream release would have verified and installed
+    # over this build - runtime and model pages gone - and up to 0.2.4 the updater was simply off. Since 0.2.5
+    # every release carries latest.json and a signature made with the key whose public half is updater.pub;
+    # an update is installed only if it verifies against that. The private key never enters the repository:
+    # a build signs only when TAURI_SIGNING_PRIVATE_KEY is set, and one without it still checks for, verifies
+    # and installs official releases (tools/make_update_manifest.py writes latest.json at release time).
     plugins = data.get('plugins') or {}
-    if 'updater' in plugins:
-        plugins.pop('updater')
-        data['plugins'] = plugins
+    plugins['updater'] = {
+        'pubkey': (HERE / 'updater.pub').read_text(encoding='utf-8').strip(),
+        'endpoints': [f'https://github.com/rulith-dev/{SLUG}/releases/latest/download/latest.json'],
+        'windows': {'installMode': 'passive'},
+    }
+    data['plugins'] = plugins
     bundle = data.get('bundle') or {}
-    if bundle.get('createUpdaterArtifacts'):
-        bundle['createUpdaterArtifacts'] = False
-        data['bundle'] = bundle
+    bundle['createUpdaterArtifacts'] = bool(os.environ.get('TAURI_SIGNING_PRIVATE_KEY'))
+    data['bundle'] = bundle
     # The runtime bundle, when one has been made (tools/make_runtime_bundle.py): the server, the
     # ROCm DLLs it needs, the manager and an embedded Python, installed under <app>/runtime so a
     # user needs nothing but the model files. Without one, the build is a development build that
@@ -277,14 +440,6 @@ def brand(keep_data_dir=False):
         print('  brand: runtime bundle from %s' % runtime)
     bundle['resources'] = resources
     data['bundle'] = bundle
-    # ...and the plugin that reads it: the call is `?`-propagated inside setup(), so an updater
-    # with no configuration would stop the application from starting at all.
-    replace_once(JAN / 'src-tauri/src/lib.rs',
-                 """            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            app.handle()
-                .plugin(tauri_plugin_updater::Builder::new().build())?;""",
-                 """            // strixllama: no updater. It was configured with Jan's endpoints and Jan's signing
-            // key, so an upstream release would verify and install over this build.""")
     conf.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n', encoding='utf-8', newline='\n')
 
     # No `jan` command on the user's PATH. Jan copies its CLI into resources/bin at every launch
@@ -295,6 +450,13 @@ def brand(keep_data_dir=False):
                  "            setup::setup_jan_cli(app.handle().clone(), stored_version != app_version);\n",
                  "            // strixllama: no `jan` CLI install - it serves Jan's engine and edits the user's PATH\n"
                  "            let _ = (&stored_version, &app_version);\n")
+
+    # The tray icon's menu and tooltip are Rust string literals: "Open Jan" was still there in 0.2.5's first builds
+    tray = JAN / 'src-tauri/src/core/setup.rs'
+    replace_once(tray, 'MenuItem::with_id(app.handle(), "open", "Open Jan", true, None::<&str>)?',
+                 f'MenuItem::with_id(app.handle(), "open", "Open {NAME}", true, None::<&str>)?')
+    replace_once(tray, '        .icon(app.default_window_icon().unwrap().clone())\n        .menu(&menu)\n',
+                 f'        .icon(app.default_window_icon().unwrap().clone())\n        .tooltip("{NAME}")\n        .menu(&menu)\n')
 
     # The window title lives in the per-platform config, not in index.html and not in the main one -
     # this is the name in the title bar, which is the first thing anyone sees.
@@ -308,6 +470,16 @@ def brand(keep_data_dir=False):
         for w in windows:
             if w.get('title') == 'Jan':
                 w['title'] = NAME
+                changed = True
+        # The runtime's folder was runtime\bin\hip-rocm101 up to 0.2.4 and is runtime\bin\hip since: a hook
+        # removes the old one before the files are laid down, so an upgrade cannot leave 340 MB behind.
+        if name == 'tauri.windows.conf.json':
+            hooks = JAN / 'src-tauri' / 'windows' / 'strixllama-hooks.nsh'
+            hooks.parent.mkdir(exist_ok=True)
+            hooks.write_text(NSIS_HOOKS, encoding='utf-8', newline='\r\n')
+            nsis = pdata.setdefault('bundle', {}).setdefault('windows', {}).setdefault('nsis', {})
+            if nsis.get('installerHooks') != './windows/strixllama-hooks.nsh':
+                nsis['installerHooks'] = './windows/strixllama-hooks.nsh'
                 changed = True
         # One installer. Jan also builds an MSI, which needs the WiX toolset fetched from GitHub
         # at bundle time and adds nothing the NSIS setup does not already do.
@@ -355,10 +527,8 @@ def brand(keep_data_dir=False):
     # The name at the top of the sidebar - the native title bar is hidden behind Jan's own window
     # chrome, so this is the name people actually see.
     sidebar = JAN / 'web-app/src/components/left-sidebar/index.tsx'
-    replace_once(sidebar, '<span className="ml-2 font-medium font-studio">Jan</span>',
-                 f'<span className="ml-2 font-medium font-studio">{NAME}</span>')
-    replace_once(sidebar, '<span className="mr-2 font-medium font-studio">Jan</span>',
-                 f'<span className="mr-2 font-medium font-studio">{NAME}</span>')
+    replace_once(sidebar, '<span className="ml-2 font-medium font-studio">Jan</span>', '<SidebarBrand />')
+    replace_once(sidebar, '<span className="mr-2 font-medium font-studio">Jan</span>', '<SidebarBrand />')
     # The download tray beside it managed Hub models and engine backends, neither of which this
     # build fetches; models come from the catalog on disk.
     replace_once(sidebar, "              {isLeftPanelOpen && <DownloadManagement />}\n",
@@ -369,6 +539,11 @@ def brand(keep_data_dir=False):
         text = (text.replace("  const { open: isLeftPanelOpen } = useLeftPanel()\n", "", 1)
                     .replace("import { useLeftPanel } from '@/hooks/useLeftPanel'\n", "", 1))
     sidebar.write_text(text, encoding='utf-8', newline='\n')
+    # ...and its twin in the page header, shown beside the sidebar toggle while the sidebar is closed
+    header = JAN / 'web-app/src/containers/HeaderPage.tsx'
+    replace_once(header, "            <DownloadManagement />\n", "            {/* strixllama: no download tray */}\n")
+    replace_once(header, "import { DownloadManagement } from '@/containers/DownloadManegement'\n",
+                 "// strixllama: no download tray, so no DownloadManagement\n")
     # Jan capitalises a provider it has no title for: give ours its name.
     replace_once(JAN / 'web-app/src/lib/utils.ts', "    case 'llamacpp':\n      return 'Llama.cpp'\n",
                  f"    case '{SLUG}':\n      return '{NAME}'\n    case 'llamacpp':\n      return 'Llama.cpp'\n")
@@ -420,13 +595,36 @@ def brand_text():
     # a curly apostrophe survives both the single- and the double-quoted string it lands in
     description = ("A local assistant that reasons through complex tasks and uses tools to "
                    "complete them on the user’s behalf.")
+    # The default instructions end with "Current date: {{current_date}}", which Jan renders into the system prompt -
+    # the first tokens of every conversation. At local midnight the rendered date changes, and with it every cached
+    # prefix: a 51K-token conversation continued after midnight shared 226 tokens with its stored state and was
+    # processed again from the start (44 s). The date line goes; an assistant a user wrote keeps whatever it asks for.
+    date_line = "\n\nCurrent date: {{current_date}}`"
+    # Jan's default parameters also set a repeat penalty of 1.12. Jan dropped it for our provider (an OpenAI-compatible
+    # endpoint gets no llama.cpp-only keys), so the model always ran without one; now that the panel's settings are
+    # sent, it would apply - and on this model it costs MTP a tenth of its acceptance and a tenth of the speed
+    # (Chinese prose, 400 tokens, two seeds: acceptance 0.49/0.54 -> 0.40/0.44, 32.3/33.9 -> 28.9/30.3 tok/s). The
+    # default goes, here and in saved assistants and conversations; a penalty someone sets is sent as set.
     for path in (JAN / 'extensions/assistant-extension/src/index.ts',
                  JAN / 'web-app/src/hooks/useAssistant.ts'):
         text = path.read_text(encoding='utf-8')
         new = sentence.sub(description, text.replace("name: 'Jan',", f"name: '{NAME}',", 1)
-                           .replace("avatar: '👋',", "avatar: '🦉',", 1))
+                           .replace("avatar: '👋',", "avatar: '🦉',", 1)
+                           .replace(date_line, "`")
+                           .replace("          repeat_penalty: 1.12,\n", "")
+                           .replace("      repeat_penalty: 1.12,\n", ""))
         if new != text:
             path.write_text(new, encoding='utf-8', newline='\n')
+    # conversations keep their own copy of the assistant's parameters (thread.json), which the chat sends
+    replace_once(JAN / 'web-app/src/hooks/useThreads.ts', "  setThreads: (threads) => {\n",
+                 "  setThreads: (threads) => {\n"
+                 "    // strixllama: Jan's default repeat penalty, which the model never ran with (see brand_text in apply.py)\n"
+                 "    for (const t of threads) {\n"
+                 "      const a = t.assistants?.[0] as { id?: string; parameters?: Record<string, unknown> } | undefined\n"
+                 "      if (a?.id === 'jan' && a.parameters?.repeat_penalty === 1.12) {\n"
+                 "        delete a.parameters.repeat_penalty\n"
+                 "      }\n"
+                 "    }\n")
     # ...and an assistant.json a Jan build wrote before the rename still says Jan: rename it as
     # it is read, in the store, so an existing data directory shows the same name as a new one.
     store = JAN / 'web-app/src/hooks/useAssistant.ts'
@@ -436,20 +634,41 @@ def brand_text():
 """, """  setAssistants: (assistants) => {
     if (assistants) {
       assistants.forEach((a) => (a.id = a.id?.toString())) // new String("id") !== "id"
-      // strixllama: an assistant written by a Jan build keeps Jan's name on disk
+      // strixllama: the default assistant as a Jan build wrote it keeps Jan's name and wave on disk
       assistants.forEach((a) => {
         if (a.id === 'jan' && a.name === 'Jan') {
           a.name = '""" + NAME + """'
           a.description = '""" + description + """'
         }
+        if (a.id === 'jan' && a.avatar === '👋') {
+          a.avatar = '🦉'
+        }
+        // and the date line Jan's default instructions ended with (see brand_text: it changed the prompt's first
+        // tokens at every midnight, so no conversation's cache survived the day)
+        if (a.id === 'jan' && typeof a.instructions === 'string') {
+          a.instructions = a.instructions.replace(/\\s*Current date: \\{\\{\\s*current_date\\s*\\}\\}\\s*$/, '')
+        }
+        // and Jan's default repeat penalty (see brand_text)
+        if (a.id === 'jan' && a.parameters?.repeat_penalty === 1.12) {
+          delete a.parameters.repeat_penalty
+        }
       })
 """)
 
-    general = JAN / 'web-app/src/routes/settings/general.tsx'
-    # No updater in this build (see brand()), so no "check for updates" either.
-    replace_once(general, "              {!AUTO_UPDATER_DISABLED && (",
-                 "              {/* strixllama: no updater in this build, see brand() in apply.py */}\n"
-                 "              {false && (")
+    # The update prompt's release notes come from GitHub's list of releases: this project's, not Jan's
+    replace_once(JAN / 'web-app/src/hooks/useReleaseNotes.ts', "'https://api.github.com/repos/janhq/jan/releases'",
+                 f"'https://api.github.com/repos/rulith-dev/{SLUG}/releases'")
+    # Installing an update replaces runtime\bin\hip, which the model server holds open: stop it first, through
+    # the manager, so the conversations in memory are written to the disk tier as on any unload. The setup's
+    # pre-install hook stops one that is still running (a manual install over a running app).
+    updater = JAN / 'web-app/src/hooks/useAppUpdater.ts'
+    replace_once(updater, "  const downloadAndInstallUpdate = useCallback(async () => {\n",
+                 "  const downloadAndInstallUpdate = useCallback(async () => {\n"
+                 "    // strixllama: the update replaces the runtime the model server runs from\n"
+                 "    await stopModelServer()\n")
+    replace_once(updater, "import { getServiceHub } from '@/hooks/useServiceHub'\n",
+                 "import { getServiceHub } from '@/hooks/useServiceHub'\n"
+                 "import { stopModelServer } from '@/components/strixllama/status'\n")
     # Telemetry: there is no key, so nothing is collected, and the consent card would be asking
     # on Jan's behalf. Gated on a constant rather than cut, for the same reason as SHOW_PROVIDERS.
     privacy = JAN / 'web-app/src/routes/settings/privacy.tsx'
@@ -582,6 +801,16 @@ def converge_settings():
             setLastUsedModel('llamacpp', firstModel.id)""",
                  """            selectModelProvider(llamacppProvider.provider, firstModel.id)
             setLastUsedModel(llamacppProvider.provider, firstModel.id)""")
+    # A thread keeps the id of the model that answered it, and Jan clears the choice when that model is
+    # gone - but the local server runs one model at a time, so after a switch every older thread opened
+    # on "select a model". A thread of ours goes on with whichever model is loaded now.
+    replace_once(picker, """        if (!checkModelExists(model.provider, model.id)) {
+          selectModelProvider('', '')
+        }""", """        if (!checkModelExists(model.provider, model.id)) {
+          // strixllama: the local server's current model, for a thread it answered with another
+          const loaded = model.provider === 'strixllama' ? getProviderByName('strixllama')?.models[0] : undefined
+          selectModelProvider(loaded ? 'strixllama' : '', loaded?.id ?? '')
+        }""")
     # The gear beside the provider opens Jan's provider page: base URL, API keys, a Delete button
     # that would take the only provider with it. For ours it opens the Configuration page instead.
     replace_once(picker, """                            navigate({
@@ -673,7 +902,7 @@ def drop_nav_entries(nav):
     settings.
     """
     text = nav.read_text(encoding='utf-8')
-    for title in ("common:newAgentChat", "common:projects.new", "common:hub"):
+    for title in ("common:newAgentChat", "common:projects.new", "common:hub", "common:settings"):
         marker = f"    title: '{title}',"
         if marker not in text:
             continue                       # already dropped
@@ -699,7 +928,9 @@ def drop_nav_entries(nav):
             ("import { BlocksIcon, type BlocksIconHandle } from '../animated-icon/blocks'",
              "import { type BlocksIconHandle } from '../animated-icon/blocks'"),
             ("import {\n  BotIcon,\n  type BotIconHandle,\n} from '@/components/animated-icon/bot'",
-             "import { type BotIconHandle } from '@/components/animated-icon/bot'")):
+             "import { type BotIconHandle } from '@/components/animated-icon/bot'"),
+            ("import {\n  SettingsIcon,\n  type SettingsIconHandle,\n} from '@/components/animated-icon/settings'",
+             "import { type SettingsIconHandle } from '@/components/animated-icon/settings'")):
         text = text.replace(old, new, 1)
     for param in ("onNewProject", "onJanClaw"):
         text = text.replace(f"  {param}: () => void,\n", f"  _{param}: () => void,\n", 1)

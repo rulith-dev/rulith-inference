@@ -70,8 +70,10 @@ prefill on identical source), and the SDK version this was measured on comes fro
 with a ~27-day window — so the pin will stop resolving, and that page says what to do about it. The
 model files are a separate download of about 95 GB.
 
-Optional: `integrations/jan/apply.py` overlays three management pages into a
-[Jan](https://github.com/menloresearch/jan) checkout, in English and Chinese.
+Optional: `integrations/jan/apply.py` overlays the model pages (library, configuration, logs), a
+welcome screen in place of Jan's setup screen, the model's state in the sidebar and above the chat,
+and Rulith's design language onto a [Jan](https://github.com/menloresearch/jan) checkout, in English
+and Chinese.
 
 ## What is actually in here
 

@@ -14,6 +14,9 @@ flat shapes is indistinguishable from a real renderer.
 
 Below 24 px the ring is dropped and the eyes grow: at that size the ring is under one pixel wide
 and only muddies the silhouette. Icons are hinted, not scaled.
+
+The colours are Rulith's: the tile in Rulith green, the face in near-black, the pupils cut back to
+the tile. Up to 0.2.4 it was a gold owl on a dark slate tile.
 """
 import math
 import os
@@ -26,9 +29,9 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "icons")
 
-BG = (0x19, 0x1D, 0x23)
-RING = (0x3E, 0x4C, 0x5E)
-GOLD = (0xE8, 0xA3, 0x3D)
+BG = (0x2F, 0xD6, 0x9A)                   # Rulith green (--rl-green on dark)
+RING = (0x1F, 0xA8, 0x77)
+FACE = (0x0F, 0x14, 0x11)
 SS = 4                                    # supersampling factor per axis
 
 
@@ -37,14 +40,14 @@ def shapes(small):
     s = [("rrect", 0, 0, 128, 128, 28, BG)]
     if small:
         # no ring, bigger eyes, heavier beak - the silhouette has to survive 16x16
-        s += [("disc", 44, 57, 21, GOLD), ("disc", 44, 57, 8.5, BG),
-              ("disc", 84, 57, 21, GOLD), ("disc", 84, 57, 8.5, BG),
-              ("tri", (64, 74), (73, 92), (55, 92), GOLD)]
+        s += [("disc", 44, 57, 21, FACE), ("disc", 44, 57, 8.5, BG),
+              ("disc", 84, 57, 21, FACE), ("disc", 84, 57, 8.5, BG),
+              ("tri", (64, 74), (73, 92), (55, 92), FACE)]
     else:
         s += [("ring", 64, 60, 44, 5, RING),
-              ("disc", 46, 58, 17, GOLD), ("disc", 46, 58, 7, BG),
-              ("disc", 82, 58, 17, GOLD), ("disc", 82, 58, 7, BG),
-              ("tri", (64, 72), (71, 85), (57, 85), GOLD)]
+              ("disc", 46, 58, 17, FACE), ("disc", 46, 58, 7, BG),
+              ("disc", 82, 58, 17, FACE), ("disc", 82, 58, 7, BG),
+              ("tri", (64, 72), (71, 85), (57, 85), FACE)]
     return s
 
 
@@ -142,18 +145,22 @@ def icns(images):
     return b"icns" + struct.pack(">I", len(body) + 8) + body
 
 
+def hexc(c):
+    return "#%02X%02X%02X" % c
+
+
 def svg():
     """The source of truth for anyone who wants to redraw it properly."""
     return """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <title>strixllama</title>
   <desc>An owl's face inside a ring: strix, the owl genus and the strix of Strix Halo; the ring is the halo.</desc>
-  <rect width="128" height="128" rx="28" fill="#191D23"/>
-  <circle cx="64" cy="60" r="44" fill="none" stroke="#3E4C5E" stroke-width="5"/>
-  <circle cx="46" cy="58" r="17" fill="#E8A33D"/><circle cx="46" cy="58" r="7" fill="#191D23"/>
-  <circle cx="82" cy="58" r="17" fill="#E8A33D"/><circle cx="82" cy="58" r="7" fill="#191D23"/>
-  <path d="M64 72 L71 85 L57 85 Z" fill="#E8A33D"/>
+  <rect width="128" height="128" rx="28" fill="{bg}"/>
+  <circle cx="64" cy="60" r="44" fill="none" stroke="{ring}" stroke-width="5"/>
+  <circle cx="46" cy="58" r="17" fill="{face}"/><circle cx="46" cy="58" r="7" fill="{bg}"/>
+  <circle cx="82" cy="58" r="17" fill="{face}"/><circle cx="82" cy="58" r="7" fill="{bg}"/>
+  <path d="M64 72 L71 85 L57 85 Z" fill="{face}"/>
 </svg>
-"""
+""".format(bg=hexc(BG), ring=hexc(RING), face=hexc(FACE))
 
 
 # what Tauri's bundle.icon list and the Windows Store tiles expect

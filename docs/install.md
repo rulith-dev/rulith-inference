@@ -5,7 +5,7 @@
 runs — `llama-server` built from the pinned fork, the eight ROCm DLLs it imports plus the gfx1151
 kernel libraries, the Visual C++ and OpenMP runtimes, the manager and an embedded Python. On a
 machine set up as in section 1, with the model files from section 5 already in LM Studio's folder,
-it needs nothing else: install, open, load the model from the Models page. That path, including
+it needs nothing else: install, open, load the model from the welcome screen. That path, including
 exactly which five files to download and where to put them, is written out step by step in
 [getting-started.md](getting-started.md). The bundle is made by
 `tools/make_runtime_bundle.py` from a finished build; `BUNDLE.json` inside it records what went in
@@ -95,7 +95,9 @@ python bootstrap/bootstrap.py --fetch --patch --build
 - `--fetch` clones `pwilkin/llama.cpp` at the pinned revision into `src/llama.cpp`.
   The result of `--fetch --patch` is what the `strixllama` branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/strixllama) holds as a single commit, if you would rather read the delta than replay it.
 - `--patch` overlays `patches/iq3s-kernel/` and runs the scripts in order.
-- `--build` configures and compiles, then copies the runtime into `bin/hip-rocm101/`.
+- `--build` configures and compiles, then copies the runtime into `bin/hip/` (`bin/hip-rocm101/`
+  up to 0.2.4, named after the ROCm 10.1 it was first built with; the manager still runs a tree that
+  has only that folder).
 
 `--build` re-runs cmake every time on purpose: cmake resolves its `*.cu` glob at configure time, so a
 file the patch set adds or renames is invisible to an existing `build.ninja`.
@@ -130,7 +132,7 @@ python tools/make_draft_head.py --base <model directory>/mtp-Qwen3.8-Flash-Next-
 The result is written beside the base as `…-shared-Q4_K_M-head-iq4_xs.gguf` (the target shard holding
 `output.weight` is found in the same directory; `--target` overrides). Keep it there: the
 configuration page only lists drafts found under the registered model directories, so a copy kept
-elsewhere never appears in it. Press *Rescan* on the Models page and the `*-head-*` file is
+elsewhere never appears in it. Press *Rescan* under Model › Library and the `*-head-*` file is
 preferred automatically for every profile that has not chosen a draft by hand.
 
 `--head-only` writes just the quantised tensor instead, `mtp-<family>-head-<type>.gguf` (349 MB):
@@ -178,7 +180,7 @@ is slower below it.
 
 The server's RAM prompt cache (`--cache-ram`, on by default) keeps a short finished conversation's
 tokens, state and recurrent checkpoints so it can be resumed on a later request. `prompt_cache_disk`
-(the *Keep conversation state on disk* switch) adds a disk tier under `config/jan/prompt-cache`, up to
+(the *Keep conversations on disk* switch) adds a disk tier under `config/jan/prompt-cache`, up to
 the size in the profile, oldest first, that survives restarts. It is off by default since 0.1.13:
 nothing is written to the SSD unless you turn it on, and a conversation pushed out of its slot is then
 processed again when it returns.
@@ -202,10 +204,12 @@ but not the checkpoints, and without one a hybrid model re-processes the whole p
 With more than one slot the slots share one KV pool, and by default it is the context: 262144 tokens
 for all of them together, so a second long conversation pushes the first out: processed again when
 it returns (~3 minutes at 173K tokens), or read back from the disk tier in ~1.6 s when that is on.
-`kv_pool` - *KV pool* under Advanced, shown with
-several slots - makes the pool larger while every conversation stays capped at the context: any size,
-one allocation, rounded up to 256 cells. Each token beyond the context costs this model about 39 KB of
-GPU memory and about 24 KB of Windows commit (RAM plus page file).
+`kv_pool` - *Shared context pool* under Model › Configuration › Concurrency, which takes effect
+with several slots - makes the pool larger while every conversation stays capped at the context: any
+size, one allocation, rounded up to 256 cells. Each token beyond the context costs this model about
+39 KB of GPU memory and about 24 KB of Windows commit (RAM plus page file). With a q8_0 cache it is
+about 26 KB of GPU memory: 21 KB of cache, and about 5 KB for the MTP draft, whose attention mask
+spans the whole pool.
 
 On this machine commit is the limit, not the carve. With `kv_pool` 393216, conversations of 173K and
 155K tokens both stay resident and each answers its next question in under a second, with 2.6 GB of
@@ -213,7 +217,11 @@ commit left at the lowest point (0.1.12's disk tier, which gathered a long conve
 buffer, took it to 0.04 GB); 524288 failed with "bad allocation" although the carve had room for it
 (about 86 GiB allocated). On the default pool, swapping the same two through the disk tier keeps
 9.6 GB free. So for long conversations, enlarge the page file first - it costs disk space only. A
-loaded server with less than 8 GiB of commit left gets a warning on the page. Measured in
+loaded server with less than 8 GiB of commit left gets a warning on the page.
+
+With q8_0 the carve is the limit instead. With four slots, a micro-batch of 8192 and MTP, a 512K pool
+loads with 84 of the 96 GB in use; at 768K the MTP draft's compute buffer (3.9 GB, the mask over the
+whole pool) no longer fits. With MTP off there is no draft context, and room for a larger pool. Measured in
 `docs/results/kv-pool-20260924.json` and `docs/results/disk-tier-v3-20260924.json`.
 
 ### KV cache: f16 or q8_0
@@ -392,7 +400,7 @@ registry entry, so it costs nothing and needs no GPU context.
 
 ### Thinking depth
 
-`thinking` takes `off`, `low`, `medium` or `high`, and the Configuration page offers the same four.
+`thinking` takes `off`, `low`, `medium` or `high`, and Model › Configuration offers the same four.
 They are not invented here — this model's chat template implements them, and the manager maps them
 onto what it accepts:
 
@@ -408,8 +416,8 @@ The template accepts **only** `low`, `medium` and `xhigh`, raising on anything e
 a second name for one of these. A single request can still override the profile with
 `chat_template_kwargs`.
 
-Optional — the desktop app: Jan v0.8.4 with the three management pages, our name and no engine
-of its own:
+Optional — the desktop app: Jan v0.8.4 with the model pages (library, configuration, logs), a
+welcome screen in place of Jan's setup, our name and no engine of its own:
 
 ```bash
 python integrations/jan/apply.py <path to a Jan v0.8.4 checkout>

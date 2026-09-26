@@ -26,7 +26,12 @@ Download `Strix-Llama_<version>_x64-setup.exe` from the
 installation: the app, `llama-server` built from our fork, the ROCm libraries it needs, the process
 manager and its own Python are all inside. Nothing else has to be installed.
 
-To upgrade, run the newer installer over the old one. Chats and settings are kept.
+From 0.2.5 on, the app updates itself. It checks this project's GitHub releases when it starts, and when
+there is a newer one it offers it in a prompt, and as **New version** at the foot of the sidebar. The
+setup it downloads is installed only if its signature verifies against the key the app was built
+with. The model is unloaded first, because the update replaces the runtime. Chats and settings are kept.
+To upgrade by hand, or from 0.2.4 or earlier, run the newer installer over the old one; where GitHub
+cannot be reached, download the setup yourself.
 
 ## 2. Download the model files — all into one folder
 
@@ -110,27 +115,33 @@ them into the same folder.
 
 ## 3. Tell the app where the folder is
 
-Open the app. In the sidebar, under **Strix Llama**, open **Models**.
+Open the app. The welcome screen looks for the model files.
 
 - If LM Studio is installed, its download folder is registered automatically and the model is
-  already listed.
-- Otherwise press **Model directories**, enter the parent folder — `D:\models` — one directory per
-  line, and press **Save and scan**. Directories are scanned recursively, so the parent is enough.
+  already found.
+- Otherwise press **Model folders**, add the parent folder — `D:\models` — with **Browse…** or by
+  pasting its path, and press **Save and scan**. Folders are scanned recursively, so the parent is
+  enough.
 
-The model shows up as one row with *3 shards*. *Incomplete files* means a shard is missing. The list
-is cached: after adding or moving files, press **Rescan**. Switch the file-type filter to *MTP
-drafts* or *Vision projectors* to check that files 4 and 5 were seen.
+The same list is under **Model › Library** in the sidebar: the model shows up as one row, *IQ4_XS ·
+93.7 GB · 3 shards*. *Incomplete* means a shard is missing. The list is cached: after adding or
+moving files, press **Rescan**. Switch the file-type filter to *MTP drafts* or *Vision projectors*
+to check that files 4 and 5 were seen.
 
 ## 4. Load it and chat
 
-Press **Configure** on the model's row, then **Load model**. There is nothing to set first: the
-defaults are the configuration every published number was measured with — context 262144, batch
-and ubatch 8192, flash attention, sparse attention, the MTP draft and image input all on, thinking
-depth *medium*. The Developer log shows the load progressing. The first load reads 93.7 GB from
-disk; later ones are faster.
+Press **Load model** on the welcome screen (or on the model's row under **Model › Library**). There
+is nothing to set first: the defaults are the configuration every published number was measured
+with — context 262144, batch and ubatch 8192, flash attention, sparse attention, the MTP draft and
+image input all on, thinking depth *medium*. **Model › Logs** shows the load progressing. The first
+load reads 93.7 GB from disk; later ones are faster.
 
-When the status turns to *Model loaded*, open a chat. The model is already selected — just type. Image
-input works by attaching a picture to the message.
+When it is ready the chat opens by itself, with the model selected — just type. Image input works by
+attaching a picture to the message. The app does not load a model on its own when it starts: press
+**Load model** in the strip above the chat or in the model server panel, or turn on **Model ›
+Configuration › Startup** to have it load the last used model. The strip also says when a model is
+loading. The model server panel at the foot of the sidebar
+shows the same state, with the same button, on every page.
 
 What to expect, measured on the reference machine:
 
@@ -138,14 +149,14 @@ What to expect, measured on the reference machine:
 |---|---|
 | short context | about 41 tok/s |
 | 86K tokens of context | about 33 tok/s; prefill about 1180 t/s |
-| three / four conversations at once | about 56 / 60 tok/s summed, with *Concurrent slots* at 4 (Advanced; image input needs a single slot) |
+| three / four conversations at once | about 54 / 61 tok/s summed, with *Concurrent conversations* at 4 (Model › Configuration › Concurrency; image input needs a single one) |
 
-With *Keep conversation state on disk* on (Configuration page; off by default), a conversation you
+With *Keep conversations on disk* on (Model › Configuration; off by default), a conversation you
 come back to later is not processed again: its state is kept on disk (about 30 KB per token, up to
 16 GB) and read back in about a second.
 
 If the load fails with out of memory, this configuration does not fit: raise the carve in the BIOS,
-lower the context length on the Configuration page, or give Windows a larger page file (RAM plus
+lower the context length under Model › Configuration, or give Windows a larger page file (RAM plus
 page file is the limit that runs out first; see [install.md](install.md)).
 
 The server is also an ordinary OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1` while the
@@ -161,27 +172,27 @@ Unsloth's `shared-*` drafts have no output projection of their own: every draft 
 model's 521 MB one. The projection is a single tensor, so it is shipped on its own —
 `mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`, 349 MB, on the
 [releases page](https://github.com/rulith-dev/strixllama/releases). Download it into the model's
-folder, next to file 4, and press **Rescan** on the Models page. The app writes
+folder, next to file 4, and press **Rescan** under Model › Library. The app writes
 `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf` beside them (a byte-for-byte splice of the
 two files, a few seconds, done once; it is the only file the app ever writes into a model folder),
 reports it in a notice, and every profile that has not chosen a draft by hand uses it from then on.
-The Configuration page's draft list shows all three.
+The draft list under Model › Configuration shows all three.
 
 Building the head yourself instead needs a source checkout with the toolchain:
 [install.md, section 5](install.md#5-model-files).
 
 ## If something goes wrong
 
-- **The Models page is empty.** Check *Model directories*: only `.gguf` files under a registered
-  directory are listed, and a split model is listed by its `-00001-of-` shard. Press *Rescan*.
-- **MTP or image input is off and the Configuration page says it did not find the file.** File 4 or
+- **The model library is empty.** Check *Model folders*: only `.gguf` files under a registered
+  folder are listed, and a split model is listed by its `-00001-of-` shard. Press *Rescan*.
+- **MTP or image input is off and Model › Configuration says it did not find the file.** File 4 or
   5 is not in the model's folder (or is named differently). Add it and *Rescan*; the switch turns
   itself on. A load only refuses to start over these when a saved profile has the switch on by hand
   and the file has since gone.
-- **The load starts, then dies.** Read the Developer log. The usual causes are a GPU other than
+- **The load starts, then dies.** Read Model › Logs. The usual causes are a GPU other than
   gfx1151, or a carve or page file too small for the context length.
 - **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running;
-  the status page adopts it and can unload it. Anything else on that port has to be stopped by hand.
+  the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand.
 - **Where things are.** The app is in `%LOCALAPPDATA%\Strix Llama`; the manager's settings, model
   catalog and last server log are in `runtime\config\jan\` under it; chats are in
   `%APPDATA%\strixllama\data`. Uninstalling removes the app folder including those settings; chats stay.

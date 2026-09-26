@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <title>strixllama</title>
   <desc>An owl's face inside a ring: strix, the owl genus and the strix of Strix Halo; the ring is the halo.</desc>
-  <rect width="128" height="128" rx="28" fill="#191D23"/>
-  <circle cx="64" cy="60" r="44" fill="none" stroke="#3E4C5E" stroke-width="5"/>
-  <circle cx="46" cy="58" r="17" fill="#E8A33D"/><circle cx="46" cy="58" r="7" fill="#191D23"/>
-  <circle cx="82" cy="58" r="17" fill="#E8A33D"/><circle cx="82" cy="58" r="7" fill="#191D23"/>
-  <path d="M64 72 L71 85 L57 85 Z" fill="#E8A33D"/>
+  <rect width="128" height="128" rx="28" fill="#2FD69A"/>
+  <circle cx="64" cy="60" r="44" fill="none" stroke="#1FA877" stroke-width="5"/>
+  <circle cx="46" cy="58" r="17" fill="#0F1411"/><circle cx="46" cy="58" r="7" fill="#2FD69A"/>
+  <circle cx="82" cy="58" r="17" fill="#0F1411"/><circle cx="82" cy="58" r="7" fill="#2FD69A"/>
+  <path d="M64 72 L71 85 L57 85 Z" fill="#0F1411"/>
 </svg>

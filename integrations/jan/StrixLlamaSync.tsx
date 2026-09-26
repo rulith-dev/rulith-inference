@@ -1,9 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import cloneDeep from 'lodash/cloneDeep'
+import { toast } from 'sonner'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { openAIProviderSettings } from '@/constants/providers'
 import { localStorageKey } from '@/constants/localStorage'
-import { ENDPOINT, PROVIDER, useStrixLlamaStatus } from './status'
+import { useTranslation } from '@/i18n/react-i18next-compat'
+import { ENDPOINT, LAST_MODEL_KEY, PROVIDER, autoloadEnabled, request, serverState, useStrixLlamaStatus, type ServerState } from './status'
+// Rulith's palette and type for the whole app, loaded with the root route
+import './rulith-theme.css'
 
 // Mounted once at the root. Polls the manager, and keeps the chat side of Jan pointed at it.
 //
@@ -12,10 +16,18 @@ import { ENDPOINT, PROVIDER, useStrixLlamaStatus } from './status'
 // URL and a key that could only ever be one thing. Its model list follows the running server:
 // what /v1/models reports, shown under the name the catalog has for the file. Nothing here is
 // specific to this machine: the endpoint is the manager's fixed loopback port.
+//
+// It also loads the last model when the app starts (Configuration > Startup), once per app
+// session, and says so wherever the user is when a load finishes or fails.
+let autoloadTried = false
+
 export function StrixLlamaSync() {
+  const { t } = useTranslation()
   const refresh = useStrixLlamaStatus((s) => s.refresh)
   const status = useStrixLlamaStatus((s) => s.status)
   const providers = useModelProvider((s) => s.providers)
+  const previous = useRef<ServerState | undefined>(undefined)
+  const stopped = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let pending = false
@@ -28,6 +40,34 @@ export function StrixLlamaSync() {
     const timer = setInterval(tick, 3000)
     return () => clearInterval(timer)
   }, [refresh])
+
+  useEffect(() => {
+    if (!status || autoloadTried) return
+    autoloadTried = true
+    const last = localStorage.getItem(LAST_MODEL_KEY)
+    // only a clean start: not over a running server, not straight into a load that just failed
+    if (!autoloadEnabled() || !last || status.identity || status.failure || !status.runtime_available) return
+    request('start', { id: last }).then(() => refresh(), () => { /* a model that is gone: the welcome screen shows the choice */ })
+  }, [status, refresh])
+
+  useEffect(() => {
+    const state = serverState(status)
+    if (previous.current === 'loading' && state === 'ready')
+      toast.success(t('strixllama:notice.loaded', { model: status?.model_name ?? '' }))
+    else if (previous.current === 'loading' && state === 'failed')
+      toast.error(t('strixllama:notice.loadFailed'))
+    previous.current = status ? state : previous.current
+  }, [status, t])
+
+  // answers the server stopped because Windows ran out of commit: said wherever you are, since the chat
+  // itself only shows an answer that ends mid-sentence
+  useEffect(() => {
+    if (!status) return
+    const n = status.identity ? status.memory_events?.answers_stopped ?? 0 : 0
+    if (stopped.current !== undefined && n > stopped.current)
+      toast.error(t('strixllama:memory.toast'), { description: t('strixllama:memory.why'), duration: 20000 })
+    stopped.current = n
+  }, [status, t])
 
   useEffect(() => {
     // Wait for Jan's own list before adding to it: the persisted store hydrates over whatever is
