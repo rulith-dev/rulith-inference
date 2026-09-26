@@ -4,7 +4,7 @@
 
 The result is what the installer ships under <install dir>/runtime:
 
-    bin/hip-rocm101/   llama-server and its DLLs, the ROCm DLLs it imports (found by walking the PE
+    bin/hip/           llama-server and its DLLs, the ROCm DLLs it imports (found by walking the PE
                        import tables, not by a list that goes stale), the rocBLAS / hipBLASLt kernel
                        libraries for one GPU, and the Visual C++ and OpenMP runtimes
     tools/manager.py   the manager, unchanged
@@ -29,7 +29,9 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_DIR = ROOT / 'bin' / 'hip-rocm101'
+# bootstrap.py --build installs here (bin/hip-rocm101 up to 0.2.4, which a tree built before still has)
+RUNTIME_DIR = next((d for d in (ROOT / 'bin' / 'hip', ROOT / 'bin' / 'hip-rocm101') if (d / 'llama-server.exe').is_file()),
+                   ROOT / 'bin' / 'hip')
 ROCM_BIN = ROOT / 'toolchain' / 'rocm-venv' / 'Lib' / 'site-packages' / '_rocm_sdk_devel' / 'bin'
 PYTHON_EMBED = ('3.12.10', 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip')
 # what llama-server needs from its own build directory: the server, its implementation, and the
@@ -109,7 +111,7 @@ def main():
     if not (ROCM_BIN / 'amdhip64_7.dll').is_file():
         sys.exit(f'no ROCm SDK at {ROCM_BIN}')
     shutil.rmtree(out, ignore_errors=True)
-    bin_out = out / 'bin' / 'hip-rocm101'
+    bin_out = out / 'bin' / 'hip'
     bin_out.mkdir(parents=True)
     record = dict(built_at=dt.datetime.now().astimezone().isoformat(), gfx=args.gfx, files={})
 
@@ -118,7 +120,7 @@ def main():
         record['files'][str(dest.relative_to(out)).replace('\\', '/')] = {'bytes': src.stat().st_size, 'from': origin}
 
     for name in OWN:
-        take(RUNTIME_DIR / name, bin_out / name, 'bin/hip-rocm101')
+        take(RUNTIME_DIR / name, bin_out / name, 'bin/' + RUNTIME_DIR.name)
     rocm = {p.name.lower(): p for p in ROCM_BIN.iterdir() if p.suffix.lower() == '.dll'}
     own = {n.lower(): RUNTIME_DIR / n for n in OWN}
     for name, path in sorted(closure(list(OWN), {**rocm, **own}).items()):

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -53,7 +54,7 @@ class ManagerTests(unittest.TestCase):
         self.draft=self.file.with_name('mtp-'+m.MODEL_FAMILY+'-shared-Q4_K_M.gguf');gguf(self.draft)
         self.model={'id':'model','path':str(self.file),'architecture':'qwen4exp','context':32768,'role':'model'}
         # a fake runtime, so the suite runs on a machine that has never built one
-        rt=self.root/'bin'/'hip-rocm101';rt.mkdir(parents=True)
+        rt=self.root/'bin'/'hip';rt.mkdir(parents=True)
         for name in ('llama-server.exe','ggml-hip.dll'):(rt/name).write_bytes(b'')
         rocm=self.root/'toolchain'/'rocm';rocm.mkdir(parents=True);(rocm/'amdhip64_7.dll').write_bytes(b'')
         for attr,value in (('RUNTIME',rt/'llama-server.exe'),('ROCM_BIN',rocm)):
@@ -301,9 +302,46 @@ class ManagerTests(unittest.TestCase):
             # a binary at the right path proves nothing about the gates it was started with
             self.assertNotIn('runtime_env',status)
         self.assertFalse(m.managed_runtime(self.root/'some-other-build'/'llama-server.exe'))
+        # the folder was bin/hip-rocm101 up to 0.2.4: a server an older install started there is still ours
+        self.assertTrue(m.managed_runtime(runtime.parent.parent/'hip-rocm101'/'llama-server.exe'))
+    def test_runtime_info_names_the_rocm_release_and_gpu_of_the_bundle(self):
+        (self.root/'BUNDLE.json').write_text(json.dumps({'gfx':'gfx1151','rocm':'rocm_sdk_devel-10.2.0a20260925.dist-info'}),encoding='utf-8')
+        self.assertEqual(m.runtime_info(),{'rocm':'10.2.0a20260925','gfx':'gfx1151'})
+        with patch.object(m,'state',return_value={}):
+            self.assertEqual(m.status()['runtime_info']['rocm'],'10.2.0a20260925')
+    def test_answers_stopped_for_lack_of_memory_are_reported_with_their_time(self):
+        log=self.root/'jan-managed-20260926-132707-dacb1d.log'
+        log.write_text('0.29.818.996 W llama_context: n_ctx_seq (500224) > n_ctx_train (262144)\n'
+                       '6.19.909.169 E srv  update_slots: decode() failed: bad allocation\n'
+                       '6.19.909.251 E srv    send_error: task id = 2742, error: decode() failed: bad allocation\n'
+                       '6.20.035.229 E srv    send_error: task id = 2894, error: decode() failed: bad allocation\n'
+                       '7.07.387.619 W srv  persist_runs:  - disk cache: not enough memory to copy the checkpoints, not saving\n',encoding='utf-8')
+        self.assertEqual(m.memory_events(log),{'answers_stopped':2,'saves_skipped':1,
+                                               'last_stop':'2026-09-26T13:33:27','last_skip':'2026-09-26T13:34:14'})
+        clean=self.root/'jan-managed-20260926-140000-aaaaaa.log'
+        clean.write_text('0.33.207.886 I srv  llama_server: model loaded\n',encoding='utf-8')
+        self.assertIsNone(m.memory_events(clean))
+        self.assertIsNone(m.memory_events(self.root/'missing.log'))
+        self.assertIsNone(m.memory_events(None))
+    def test_slots_reports_each_slots_counters_and_nothing_without_a_server(self):
+        with patch.object(m,'state',return_value={}):
+            self.assertEqual(m.slots(),{'slots':[]})
+        answer=[{'id':0,'is_processing':True,'id_task':12,'n_prompt_tokens':51008,'n_prompt_tokens_processed':15,
+                 'n_prompt_tokens_cache':50993,'next_token':[{'n_decoded':1892,'n_remain':-1}]},
+                {'id':1,'is_processing':False,'n_ctx':262144}]
+        class Res:
+            def __enter__(s): return s
+            def __exit__(s,*a): return False
+            def read(s,*a): return json.dumps(answer).encode()
+        with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',return_value=Res()):
+            got=m.slots()['slots']
+        self.assertEqual(got[0],{'id':0,'active':True,'task':12,'context':51008,'prompt_processed':15,'prompt_cached':50993,'generated':1892})
+        self.assertEqual(got[1],{'id':1,'active':False,'task':None,'context':0,'prompt_processed':0,'prompt_cached':0,'generated':0})
+        with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',side_effect=OSError('busy')):
+            self.assertEqual(m.slots(),{'slots':None})
     def test_a_server_from_another_copy_of_the_manager_is_adopted_and_can_be_unloaded(self):
         # an earlier install's runtime, on our port, started with our flags - not the pinned binary
-        other=str((self.root/'elsewhere'/'hip-rocm101'/'llama-server.exe').resolve())
+        other=str((self.root/'elsewhere'/'hip'/'llama-server.exe').resolve())
         ident={'pid':321,'exe':other,'birth':7}
         entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':'llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080 --load-mode none --lazy-mode on-direct'}
         with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident) as identity:

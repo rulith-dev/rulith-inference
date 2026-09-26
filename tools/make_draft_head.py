@@ -33,7 +33,8 @@ import numpy as np  # noqa: E402
 import gguf  # noqa: E402
 from gguf import GGUFReader, GGUFWriter, GGMLQuantizationType  # noqa: E402
 
-QUANTIZE = os.path.join(ROOT, "bin", "hip-rocm101", "llama-quantize.exe")   # what bootstrap --build installs
+QUANTIZE = next((p for p in (os.path.join(ROOT, "bin", d, "llama-quantize.exe") for d in ("hip", "hip-rocm101"))
+                 if os.path.isfile(p)), os.path.join(ROOT, "bin", "hip", "llama-quantize.exe"))   # what bootstrap --build installs
 
 
 def has_output_weight(path):

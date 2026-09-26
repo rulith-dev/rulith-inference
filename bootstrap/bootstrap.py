@@ -34,7 +34,7 @@ UPSTREAM_REPO = "https://github.com/pwilkin/llama.cpp"
 UPSTREAM_REV = "f5daaa3cfa6358e5dd398911ec741813745a5440"
 TREE = os.path.join(ROOT, "src", "llama.cpp")
 BUILD = os.path.join(TREE, "build")
-BIN = os.path.join(ROOT, "bin", "hip-rocm101")
+BIN = os.path.join(ROOT, "bin", "hip")   # bin/hip-rocm101 up to 0.2.4
 
 # Whole files, laid down before the scripts run. These are the IQ3_S MMB kernel and the sigmoid
 # fusion: too large to express as anchored edits, and the scripts that follow edit ggml-cuda.cu on

@@ -21,8 +21,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'config' / 'jan'
 # The one runtime: the pinned pwilkin llama.cpp branch built against the TheRock ROCm SDK in
-# toolchain/rocm-venv. bootstrap/bootstrap.py produces it.
-RUNTIME = ROOT / 'bin' / 'hip-rocm101' / 'llama-server.exe'
+# toolchain/rocm-venv. bootstrap/bootstrap.py produces it. Its folder was bin/hip-rocm101 up to 0.2.4, named
+# after the ROCm 10.1 it was first built with; a tree that has only that folder still runs from it.
+RUNTIME = next((p for p in (ROOT / 'bin' / d / 'llama-server.exe' for d in ('hip', 'hip-rocm101')) if p.is_file()),
+               ROOT / 'bin' / 'hip' / 'llama-server.exe')
 ROCM_BIN = ROOT / 'toolchain' / 'rocm-venv' / 'Lib' / 'site-packages' / '_rocm_sdk_devel' / 'bin'
 # The author's launcher gates. LLAMA_MMB_HC16 must stay 0: with it on, Windows/TheRock/Clang
 # floods the output with "/" (bisected in pwilkin/llama.cpp#24, reproduced here 2026-09-13).
@@ -619,7 +621,28 @@ def selected_runtime(cfg):
 
 
 def managed_runtime(path):
-    return bool(path) and Path(path).resolve() == RUNTIME.resolve()
+    # a server an install before 0.2.5 started from bin/hip-rocm101 is still this runtime's to adopt and stop
+    legacy = RUNTIME.parent.parent / 'hip-rocm101' / RUNTIME.name
+    return bool(path) and Path(path).resolve() in (RUNTIME.resolve(), legacy.resolve())
+
+
+def runtime_info():
+    """The ROCm release the runtime was built and bundled with, and the GPU target it carries kernels for:
+    from BUNDLE.json in an install (tools/make_runtime_bundle.py), else from the SDK's own package names."""
+    try:
+        bundle = RUNTIME.parents[2] / 'BUNDLE.json'
+        if bundle.is_file():
+            b = json.loads(bundle.read_text(encoding='utf-8'))
+            m = re.search(r'-(\d[\w.]*)\.dist-info$', b.get('rocm') or '')
+            return {'rocm': m.group(1) if m else None, 'gfx': b.get('gfx')}
+        site = ROCM_BIN.parents[1]
+        core = sorted(site.glob('rocm_sdk_core-*.dist-info'))
+        device = sorted(site.glob('rocm_sdk_device_gfx*.dist-info'))
+        gfx = re.match(r'rocm_sdk_device_(gfx\w+?)-', device[-1].name) if device else None
+        return {'rocm': core[-1].name[len('rocm_sdk_core-'):-len('.dist-info')] if core else None,
+                'gfx': gfx.group(1) if gfx else None}
+    except (OSError, ValueError, IndexError):
+        return {}
 
 
 def dedicated_vram_bytes():
@@ -675,6 +698,40 @@ def exit_reason(log):
     if oom: return 'oom', oom
     err = next((l for l in lines if re.search(r'\berror\b|failed|abort|exception|\bE\b', l, re.I)), None)
     return ('error', err) if err else ('exited', '')
+
+
+# When Windows' commit (RAM + page file) runs out under a loaded server, a decode step fails with
+# "bad allocation" and every answer in flight is stopped with an error; an optional copy - checkpoints
+# handed to the disk tier - is skipped instead ("not enough memory"). The chat shows only an answer that ends
+# mid-sentence, so status() reports both from the log, and the pages say what happened and what to change.
+def memory_events(log):
+    """Answers stopped and saves skipped for lack of memory in a server's log, with the wall-clock time of the
+    last of each; None when there were none. Log lines carry minutes.seconds.ms since the launch, which the
+    log's own name records."""
+    try:
+        path = Path(log)
+        data = path.read_bytes()
+    except (OSError, TypeError):
+        return None
+    if b'bad allocation' not in data and b'not enough memory' not in data:
+        return None
+    m = re.search(r'jan-managed-(\d{8}-\d{6})', path.name)
+    start = dt.datetime.strptime(m.group(1), '%Y%m%d-%H%M%S') if m else None
+
+    def when(line):
+        t = re.match(r'(\d+)\.(\d{2})\.(\d{3})', line)
+        if not (start and t): return None
+        return (start + dt.timedelta(minutes=int(t[1]), seconds=int(t[2]), milliseconds=int(t[3]))).isoformat(timespec='seconds')
+
+    out = {'answers_stopped': 0, 'saves_skipped': 0}
+    for line in data.decode('utf-8', 'replace').splitlines():
+        if 'send_error' in line and 'bad allocation' in line:
+            out['answers_stopped'] += 1
+            out['last_stop'] = when(line)
+        elif 'not enough memory' in line:
+            out['saves_skipped'] += 1
+            out['last_skip'] = when(line)
+    return out if out['answers_stopped'] or out['saves_skipped'] else None
 
 
 def runtime_environment(cfg):
@@ -875,7 +932,8 @@ def status():
     s = state()
     result = {**s, 'status':'stopped', 'endpoint':f'http://127.0.0.1:{PORT}/v1',
               'runtime':s.get('identity', {}).get('exe', str(RUNTIME)),
-              'runtime_available': runtime_available(), 'dedicated_vram': dedicated_vram_bytes()}
+              'runtime_available': runtime_available(), 'runtime_info': runtime_info(),
+              'dedicated_vram': dedicated_vram_bytes()}
     e = s.get('exited') or {}
     if e.get('reason') in ('oom', 'error'):
         # a plain exit with nothing in the log is not reported: the app closing takes the server
@@ -898,7 +956,30 @@ def status():
         if commit and result['status'] == 'ready':
             result['commit_limit'], result['commit_available'] = commit
             result['commit_low'] = commit[1] < COMMIT_LOW_BYTES
+        events = memory_events(s.get('log'))
+        if events:
+            result['memory_events'] = events
     return result
+
+
+def slots():
+    """What each of the running server's slots is doing, for the Logs page: from llama-server's /slots, which
+    answers with counters only (no prompt text unless LLAMA_SERVER_SLOTS_DEBUG is set). A server busy with a large
+    batch answers late; None then, and the page keeps what it showed."""
+    if not state().get('identity'):
+        return {'slots': []}
+    try:
+        with HTTP.open(f'http://127.0.0.1:{PORT}/slots', timeout=2) as res:
+            data = json.load(res)
+    except Exception:
+        return {'slots': None}
+    out = []
+    for x in data if isinstance(data, list) else []:
+        nt = (x.get('next_token') or [{}])[0]
+        out.append({'id': x.get('id'), 'active': bool(x.get('is_processing')), 'task': x.get('id_task'),
+                    'context': x.get('n_prompt_tokens', 0), 'prompt_processed': x.get('n_prompt_tokens_processed', 0),
+                    'prompt_cached': x.get('n_prompt_tokens_cache', 0), 'generated': nt.get('n_decoded', 0)})
+    return {'slots': out}
 
 
 def logs(offset=0):
@@ -965,6 +1046,7 @@ def handle(op, data):
     if op=='catalog': return catalog(bool(data.get('refresh')))
     if op=='status': return status()
     if op=='logs': return logs(data.get('offset',0))
+    if op=='slots': return slots()
     if op=='profile':
         m=model_by_id(data['id'])
         # what the companion switches can be turned on with: the page explains an off switch by it
