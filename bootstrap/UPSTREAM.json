@@ -42,24 +42,28 @@
   "ggml/src/ggml-cuda/vecdotq.cuh": "3b879a937d5143902db4cae2530529c32fd464dbfb822a7fe31875aba57707ce",
   "ggml/src/ggml.c": "dc12f87fb6a8fd3d7df18c2e506b941b3714929fffb33261842dae2a11cad4ed",
   "include/llama.h": "6e5018ff2c408dc44cd0f270f3815c923807afad6dcd7ea83bdc3305d4eedb1a",
+  "src/llama-batch.cpp": "c58c8951c48c01606555b7e789814cb8dc4de0b399be4a9a4b7d0f2ce6e26b5b",
+  "src/llama-batch.h": "568cef05377579b3db763404064155e75ddd4a18507208c1d017ae8560ea0261",
   "src/llama-context.cpp": "c855eed0da1e7dc44d2ff8fa88ff6538c20632f3fdbe463d9ab783ce1d131ee7",
-  "src/llama-graph.cpp": "2862f541652c16262328824e9ead786a0f00e70ee0c8cbc5f600a64661738805",
-  "src/llama-graph.h": "c985fff158bdbfe9c599d3620a71b435f2d29e32e231c2373a4167df453b596e",
+  "src/llama-graph.cpp": "d9cde2366fe0b8dbde9a42cf7909895a6b7a0767798bea2d9367f62ecbb632d1",
+  "src/llama-graph.h": "24b5c11705b678bd6708c689e39ab7d9267d523d1305fe6f0ffdda62f29f965b",
   "src/llama-kv-cache.cpp": "eb3239f12108c10d3f9305029a4c5a2f34b2db66eb9fbfe7342aa6e89b9e5a82",
   "src/llama-kv-cache.h": "e3071949215a6315e82929ad4fd885ba5cc798668d2f4272a86a3b1b83eba9ec",
   "src/llama-kv-cells.h": "6cb735c3bee59e564be000c3c8b83e6696974aa106a081790c72d1f4e75db9f4",
   "src/llama-lazy-reader.h": "8c4895b934096f353c7844b156f7a8043710f0bb9f3350efa921440f3a49d925",
-  "src/llama-memory-hybrid-idx.cpp": "4d071f9e390f686048601d04e1872c78584d5c9749514795a56cb14287c80747",
+  "src/llama-memory-hybrid-idx.cpp": "4645d2451ea93712362242226ab91f5a172565d6e55bcc4180af9462e5faf62d",
   "src/llama-memory-hybrid-idx.h": "7da25f88afa132115cacb4b00894b6b814ea7ffc8c8f4a946f8811089c304b6a",
-  "src/llama-memory-recurrent.cpp": "7af20b4a7e09615a5442e66f5acbe5757347ad8d66603a288fdebdf06b046612",
+  "src/llama-memory-recurrent.cpp": "59825bef4274a73e6e02d2a474b6988b94e9703afbd10bacd86b133ee51c6697",
   "src/llama-memory-recurrent.h": "66d0080199b1a66c05f0096e9c50aff0c4e366cf4549a5a76b821fc7a692bb48",
   "src/llama-model.cpp": "204cb7149c79c71426ee746a5e4517db74837df9efde24b7cdc704a3bae05bf8",
   "src/llama-model.h": "934dfaf7862ed94699692cfe4d93f7a1fbd7b646d4577dbd0ba197ee2f953175",
   "src/models/block-graph.inc": "716077d2dd61f3d7edb94945eaf1cd4aa2bb86f452eff22832d9cf279d55ec07",
-  "src/models/qwen4exp.cpp": "9681e3c0b4dd966681047f05c7b3a21f21812da133db66b81b468e0391d8055d",
+  "src/models/delta-net-base.cpp": "bc3ff0fc6e312a0e848cbe19ff1772aac7ea703ee86379d7b094a522490438f9",
+  "src/models/models.h": "c69ff4aa2e817d97be9d6e41cf23ec77143c7fb96982a5d78cb87344ecee4c82",
+  "src/models/qwen4exp.cpp": "e5fbfe68a654cac422bf94cd3314f924f4a3a7d075a133d7051dd8d21037abd3",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "63b40d1aa142a62032da8bab47b53513b688fe8a18b6980ac07300f672c007c0",
-  "tools/server/server-context.cpp": "8d94e81e9b62903368f0841f5c81944ae8da35448edda79101d26b77d396062b",
+  "tools/server/server-context.cpp": "3a74dcb292f39999db61e13a4879ecda8aa42f7b2582f1d243ec0d480c247e33",
   "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
   "tools/server/server-queue.cpp": "7b3176135c6055f18cf8c2575f3b9b2a84ef6e3d971a9c70f022771f4249ca44",
   "tools/server/server-queue.h": "39d958942e30e8b02db6bdd9bfa7687178bb199ebb616e7d3e88881b5565d592",
@@ -198,6 +202,14 @@
    "git_blob": "1a2cad1d0abef7ff8a2476721f500b2b52da0e20",
    "sha256": "9d50261c7dfa0273f7ef70fc9d10ba5f86156ca003398efec0c5a502cb5e64aa"
   },
+  "src/llama-batch.cpp": {
+   "git_blob": "2b98a552f48f73ed7c29c2e3e48383245f5d39ec",
+   "sha256": "484607d92fb08d510727e0c4b01139e27a40137ef03e74e1dbea4aac3965e328"
+  },
+  "src/llama-batch.h": {
+   "git_blob": "a3d1889d4a041be695a91b72a2a7f3badcb46fca",
+   "sha256": "7000dfd8750e06c544642dd7b84c882191702ad46ced1a4d6ad109462d1a1013"
+  },
   "src/llama-context.cpp": {
    "git_blob": "348fbbae1a222bd78fc755d0f337c41d80afee01",
    "sha256": "39518c4c2ec498a4635a5c5958723985d5e45c6fdec51b7f5514dc6462f2df23"
@@ -253,6 +265,14 @@
   "src/models/block-graph.inc": {
    "git_blob": "8f76f52e9ff27de80b5e11ce3d0874f8b1612c2e",
    "sha256": "39a2b9e2e9775f2ee6f26a3ebea6dafdb6ee157562a016c52c4a3a211cb7f350"
+  },
+  "src/models/delta-net-base.cpp": {
+   "git_blob": "ad66126477369412c0b77d13044be9fa909f906c",
+   "sha256": "5e3b318953f854b3825dd7cfe4b483ca7935cd5f6680438a3ece4be9b4d5428f"
+  },
+  "src/models/models.h": {
+   "git_blob": "4eb028f76daa75330cdd3df7955a894ea994bd3d",
+   "sha256": "2859f3a64f14037eff44873b2462f7eacb9fbe8ed92b0e5446829346d26e2250"
   },
   "src/models/qwen4exp.cpp": {
    "git_blob": "eb7fb4df6eb46728a60a345e45b693552357000c",

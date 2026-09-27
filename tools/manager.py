@@ -223,7 +223,11 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # 0.1.x (a dense reserve for mixed-sequence batches) is long gone. They share one pool (-kvu), so one
                 # conversation can still use the whole context while the others are idle, and a single conversation
                 # decodes as it does on one slot. Several at once: 1/3/4 streams = 35.8/53.6/61.4 tok/s (0.2.4).
-                parallel=4,
+                # 8 since 0.2.7: agent tools run a session per sub-agent, and six agents on four slots pushed each
+                # other out - every step processed again from the system prompt, 1.8x the tokens and the time to
+                # first token 12 s instead of ~4 (tmp/ragged/agent_sim.py). A conversation in use also keeps up to
+                # 8 snapshots of its recurrent state in RAM, ~0.9 GB (six agents: server working set 6.3 -> 9.8 GB).
+                parallel=8,
                 # kv_pool: the cells of the one KV pool that several slots share (-kvu), when it should hold more
                 # than one conversation at full length: each conversation stays capped at `context`
                 # (--kv-unified-per-slot) and the pool is one allocation of any size, rounded up to 256 cells.
@@ -567,7 +571,7 @@ def validate_profile(raw, model):
     if isinstance(raw, dict): raw = {k: v for k, v in raw.items() if k not in RETIRED_FIELDS}
     if not isinstance(raw, dict) or set(raw) - set(DEFAULTS): fail('unknown_field')
     cfg = {**profile(model), **raw}
-    bounds = dict(context=(512,262144), gpu_layers=(0,999), threads=(1,32), batch=(32,32768), ubatch=(32,32768), draft_max=(1,8), parallel=(1,8),
+    bounds = dict(context=(512,262144), gpu_layers=(0,999), threads=(1,32), batch=(32,32768), ubatch=(32,32768), draft_max=(1,8), parallel=(1,16),
                   prompt_cache_disk_mib=(1024,262144), kv_pool=(0,KV_POOL_MAX))
     for field, (low, high) in bounds.items():
         if type(cfg[field]) is not int or not low <= cfg[field] <= high: fail('out_of_range', field=field, low=low, high=high)

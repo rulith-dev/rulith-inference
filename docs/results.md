@@ -440,6 +440,51 @@ part of it may be order. Four slots are the default now: 75.77 / 76.21 / 77.09 /
 GPU memory at 1 / 2 / 4 / 8 slots, idle, pool = context, ~0.43 GB a slot. Details:
 `docs/results/prefix-cache-gdn-20260927.json`.
 
+**Several agents at once: slots, ragged batches, a prefill budget (0.2.7, 2026-09-27).**
+`tmp/ragged/agent_sim.py` runs what an agent harness does: an orchestrator and five sub-agents spawned
+together, on one 12.5K-token system prompt, each step a streamed answer, then a tool that runs 0.5-3 s,
+then its 2-8K-character result appended. It records the time to each step's first streamed chunk, the
+gaps between chunks, and the tokens processed against the ideal. On 0.2.6's four slots nearly every step
+went back to the system prompt: 75K tokens processed where ~46K were new, a median of 10.1 s to the
+first chunk, gaps up to 6.2 s. Two causes. Six agents on four slots push each other out whatever the
+choice of slot (a cyclic working set larger than the cache: the same policy at four slots processed
+1.8× the ideal). And upstream's choice by similarity let a new session take another's slot and cut its
+history, because the shared system prompt made every slot look 97% similar (`f_keep` 0.97, above the
+0.75 that sends a prompt to a free slot). `apply_agent_slots_027` takes a slot for what it holds only
+when the prompt continues it: it keeps all that was last asked there, less the 16 tokens a template
+may render differently once the answer is in the history. Anything else goes to a free slot, else the
+least recently used one, and `copy_prefix` brings the shared part. The manager's default is now eight
+slots. At eight, with upstream's choice, the one steal left (the orchestrator's slot, taken by the
+first sub-agent) was an 11.3 s gap.
+
+The rest of the stalls were the passes. The hybrid memory needs every sequence of a ubatch to have the
+same token count, so five sub-agent prompt tails of 292-556 tokens ran as six passes over all the
+weights (~590 t/s), and conversations decoding next to a prompt paid a pass of their own.
+`apply_ragged_ubatch_027` makes one ubatch of sequences of any lengths (`split_ragged`); qwen4exp runs
+its per-sequence parts (the gated delta net's conv and net, the per-layer-embedding conv) once per
+group of one count and the rest once. Then, while conversations generate, a step takes at most 2048
+prompt tokens (`STRIX_PREFILL_BUDGET`). A 19K-token prompt used to hold a streaming conversation for
+6.9-7.3 s at a time; with the budget, it holds it for 2.2 s at a time, and the prompt takes 21 s
+instead of 17. A budget of 1024 kept every pause under 1.3 s but cost the agents 20-30% of their time
+to the first chunk.
+
+| six agents, disk tier off | processed (ideal) | wall | first chunk p50 / p90 | gap p99 / max | gaps > 1 s |
+| --- | --- | --- | --- | --- | --- |
+| 0.2.6, 4 slots (its default) | 75.0K (~46K) | 117 s | 10.13 / 13.81 s | 2961 / 6200 ms | 80 |
+| 0.2.6, 8 slots | 45.2K (46.0K) | 90 s | 3.80 / 8.46 s | 2538 / 5251 ms | 59 |
+| 0.2.7, 8 slots (its default) | 44.8K (46.4K) | 96 s | 3.37 / 7.66 s | 2427 / 2746 ms | 50 |
+
+The 0.2.7 run streamed 20.5 chunks a second against 17.2. Earlier runs of the same two configurations
+spread by ±0.5 s on the p50 (tmp/ragged/results.md). Outputs of prompts batched together stay inside
+the model's sensitivity to batch shape: the same prompt alone at ubatch 512 against 8192 moves its
+first token's logprob by 0.15 on average (0.32 at most, 5 of 8 first tokens the same); prompts
+processed together against alone, 0.16 / 0.36 with the equal split and 0.07 / 0.20 ragged. Several
+conversations decoding without prompts are unchanged (at the same acceptance three 55.9 against 55.8
+tok/s, four 62.8 against 61.6). Keeping more conversations costs RAM as well as GPU memory: each one
+in use holds up to eight snapshots of its recurrent state in host memory, 112.6 MiB each (six agents:
+the server's working set 6.3 GB at four slots, 9.8 GB at eight). Details:
+`docs/results/agent-sessions-20260927.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -474,12 +519,12 @@ gate could not see them:
 
 ## What is still open
 
-- **A generating conversation pauses while another one starts.** A step that mixes decoding
-  conversations with a new prompt's tail runs as several passes of the whole model, because every
-  sequence of a hybrid-memory ubatch must have the same token count, and a new prompt is processed up
-  to 8192 tokens at a time while the others wait: 0.3 s around a copied prefix (measured), a 2K-token
-  tool result's prefill (~1.7 s at 1187 t/s), 1.4 s for a conversation read back from disk (measured). Ubatches of uneven sequences and a
-  per-step prompt budget are the next round's work.
+- **A generating conversation still pauses while another one's prompt runs.** Since 0.2.7 the
+  prompt shares the pass and takes at most 2048 tokens of it, so a pause is ~2.2 s at most for a new
+  prompt, less for the 0.5-2K-token tool results agents send. What is left: a pass over all the
+  weights costs ~0.25 s however few prompt tokens it carries, so smaller steps buy little; the
+  recurrent-state checkpoints go through host memory (19-31 ms each, up to ~0.9 GB of RAM per
+  conversation in use); a conversation read back from the disk tier holds the others for ~1.4 s.
 - With MTP, a long answer after a checkpoint rewind can part from the first pass at a near tie. The
   target's rewind is exact - with MTP off, 400 tokens after rewinding a 93K-token prompt are bitwise
   the first pass - but with it on the two part at token 293 on a -1.615 / -1.628 tie that the draft's

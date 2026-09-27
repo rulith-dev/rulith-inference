@@ -20,7 +20,7 @@ ROOT = HERE.parents[1]
 NAME = 'Strix Llama'
 SLUG = 'strixllama'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.2.6'
+VERSION = '0.2.7'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -669,6 +669,34 @@ def brand_text():
     replace_once(updater, "import { getServiceHub } from '@/hooks/useServiceHub'\n",
                  "import { getServiceHub } from '@/hooks/useServiceHub'\n"
                  "import { stopModelServer } from '@/components/strixllama/status'\n")
+    # The download's state lived in the instance of the hook that started it (the update prompt), so the sidebar's
+    # instance never saw it: the panel stayed on "New version", and the prompt said "Downloading..." with no number
+    # while a 122 MB installer came in at 30 KB/s. Every change now reaches the other instances too (Jan's own
+    # onAppUpdateStateSync), the progress at most four times a second, and the prompt shows the percentage.
+    replace_once(updater, "      let downloaded = 0\n",
+                 "      let downloaded = 0\n"
+                 "      let lastSync = 0\n")
+    replace_once(updater, "        isDownloading: true,\n      }))\n",
+                 "        isDownloading: true,\n      }))\n"
+                 "      syncStateToOtherInstances({ isDownloading: true, downloadProgress: 0, downloadedBytes: 0 })\n")
+    replace_once(updater, "            console.log(`Started downloading ${contentLength} bytes`)\n",
+                 "            console.log(`Started downloading ${contentLength} bytes`)\n"
+                 "            syncStateToOtherInstances({ totalBytes: contentLength })\n")
+    replace_once(updater, "            console.log(`Downloaded ${downloaded} from ${contentLength}`)\n",
+                 "            if (Date.now() - lastSync > 250) {\n"
+                 "              lastSync = Date.now()\n"
+                 "              syncStateToOtherInstances({ isDownloading: true, downloadProgress: progress, downloadedBytes: downloaded })\n"
+                 "            }\n")
+    replace_once(updater, "              isDownloading: false,\n              downloadProgress: 1,\n            }))\n",
+                 "              isDownloading: false,\n              downloadProgress: 1,\n            }))\n"
+                 "            syncStateToOtherInstances({ isDownloading: false, downloadProgress: 1 })\n")
+    replace_once(updater, "        isDownloading: false,\n      }))\n\n      // Emit app update download error event\n",
+                 "        isDownloading: false,\n      }))\n"
+                 "      syncStateToOtherInstances({ isDownloading: false })\n\n      // Emit app update download error event\n")
+    replace_once(JAN / 'web-app/src/containers/dialogs/AppUpdater.tsx',
+                 "                    {updateState.isDownloading\n                      ? t('updater:downloading')\n",
+                 "                    {updateState.isDownloading\n"
+                 "                      ? `${t('updater:downloading')} ${Math.round(updateState.downloadProgress * 100)}%`\n")
     # Telemetry: there is no key, so nothing is collected, and the consent card would be asking
     # on Jan's behalf. Gated on a constant rather than cut, for the same reason as SHOW_PROVIDERS.
     privacy = JAN / 'web-app/src/routes/settings/privacy.tsx'

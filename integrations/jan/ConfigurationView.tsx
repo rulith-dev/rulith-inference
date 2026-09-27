@@ -87,7 +87,7 @@ export default function ConfigurationView() {
 
         <Section label={tr('config.concurrency.title')}>
           <Row title={tr('config.concurrency.parallel')} description={tr('config.concurrency.parallelHelp')} info={tr('config.concurrency.parallelInfo')}
-            control={<NumberField ariaLabel={tr('config.concurrency.parallel')} value={p.parallel} onChange={set('parallel')} min={1} max={8} />} />
+            control={<NumberField ariaLabel={tr('config.concurrency.parallel')} value={p.parallel} onChange={set('parallel')} min={1} max={16} />} />
           {/* the pool is shared by several conversations: with one, the manager ignores it and the pool is the context */}
           <Row title={tr('config.concurrency.kvPool')} info={tr('config.concurrency.kvPoolInfo')} disabled={(p.parallel ?? 1) < 2}
             description={(p.parallel ?? 1) < 2 ? tr('config.concurrency.kvPoolSingle') : tr('config.concurrency.kvPoolHelp')}

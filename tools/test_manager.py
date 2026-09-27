@@ -566,7 +566,7 @@ class ManagerTests(unittest.TestCase):
     def test_image_input_with_several_slots(self):
         # since 0.2.6 the sparse attention ranks an image's cells per sequence, so image input and several slots
         # go together, and four slots are the default: the conversations they hold stay resident
-        self.assertEqual(m.DEFAULTS['parallel'],4)
+        self.assertEqual(m.DEFAULTS['parallel'],8)
         cfg=m.validate_profile({'mtp':False,'parallel':4},self.model)
         self.assertTrue(cfg['vision']);self.assertEqual(cfg['parallel'],4)
         self.assertTrue(m.validate_profile({'mtp':False,'parallel':1},self.model)['vision'])

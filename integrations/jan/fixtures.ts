@@ -19,7 +19,7 @@ const models = [
 
 const saved: Record<string, Record<string, unknown>> = {}
 let tick = 0
-const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 4, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536 }
+const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 8, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536 }
 const profileOf = (id: string) => ({ ...baseProfile, ...(saved[id] || {}) })
 
 const initial = new URLSearchParams(location.search).get('state') || 'ready'
@@ -35,7 +35,7 @@ const status = () => {
     runtime_info: { rocm: '10.2.0a20260925', gfx: 'gfx1151' },
     runtime_env: { LLAMA_QSA_SPARSE: '1', STRIX_SPEC_DRAFT_BY_SLOTS: '3,2,2,2,0' },
     ...(m ? { identity: { pid: 23456 }, model_path: m.path, model_name: m.name, profile: runningProfile,
-      command: `llama-server.exe -m ${m.path} -c ${runningProfile.context} -ngl 999 -fa on -b 8192 -ub 8192 --parallel 4 --model-draft ${DRAFT} --draft-max 3 --draft-p-min 0.6` } : {}),
+      command: `llama-server.exe -m ${m.path} -c ${runningProfile.context} -ngl 999 -fa on -b 8192 -ub 8192 --parallel 8 --model-draft ${DRAFT} --draft-max 3 --draft-p-min 0.6` } : {}),
     ...(state === 'failed' ? { failure: 'The GPU ran out of memory', failure_code: 'oom' } : {}),
     // the server answers under the file's name, so a switch changes the id the chat talks to
     ...(state === 'ready' && m ? { served_models: [{ id: m.filename.replace(/(-\d{5}-of-\d{5})?\.gguf$/, '') }] } : {}),

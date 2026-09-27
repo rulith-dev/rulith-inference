@@ -149,7 +149,7 @@ What to expect, measured on the reference machine:
 |---|---|
 | short context | about 41 tok/s |
 | 86K tokens of context | about 33 tok/s; prefill about 1180 t/s |
-| three / four conversations at once | about 54 / 61 tok/s summed; *Concurrent conversations* is 4 by default (Model › Configuration › Concurrency), and each keeps its conversation resident |
+| three / four conversations at once | about 54 / 61 tok/s summed; *Concurrent conversations* is 8 by default (Model › Configuration › Concurrency), and each keeps its conversation resident. Agent tools need one for each session they run at once |
 
 With *Keep conversations on disk* on (Model › Configuration; off by default), a conversation you
 come back to later is not processed again: its state is kept on disk (about 30 KB per token, up to

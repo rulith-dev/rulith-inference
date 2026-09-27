@@ -1,0 +1,61 @@
+{
+ "question": "0.2.7: can several agent sessions on one long system prompt run at once without pushing each other's conversations out and without long stalls of the ones that are generating",
+ "date": "2026-09-27",
+ "machine": "GTR9 Pro, Ryzen AI Max+ 395, 96 GB GPU carve, Windows 11, TheRock ROCm 10.2.0a20260925",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS + MTP draft (shared Q4_K_M + IQ4_XS head), f16 K/V, sparse attention on",
+ "tool": {
+  "agent_sim": "tmp/ragged/agent_sim.py: one orchestrator and 5 sub-agents spawned together after its first step, on one 12.5K-token system prompt (instructions and a tool list); each step a streamed chat completion (120-320 max tokens, the server's default sampling, a seed per step), then a tool that runs 0.5-3 s, then a tool result of 2-8K characters appended; main 6 steps, sub-agents 4; per request the time to the first streamed chunk (TTFT), the gaps between chunks, and the tokens processed against the ideal (each prompt less its longest common prefix with any earlier prompt); disk tier off",
+  "stall_probe": "tmp/pc/stall_probe.py --scenario new: conversation A streams 1500 tokens while a 19181-token prompt nothing shares arrives; A's longest gap while B's prompt is processed",
+  "batch_consistency": "tmp/ragged/batch_consistency.py: eight prompts of 300-4100 tokens, greedy, MTP off; each alone, then all in one /completion request (queued at once, so they share batches); the first generated token's top logprob and a 24-token text"
+ },
+ "slots": {
+  "cause": "6 agents on 4 slots thrash whatever the policy (a cyclic working set larger than the cache); upstream's choice by similarity also let a new session take another's slot (f_keep 0.97: the shared system prompt was most of the slot) and cut its history",
+  "runs": {
+   "0.2.6, 4 slots": {"processed": 75031, "ideal_est": 46000, "ideal_note": "not computed in this run; the others measured 46.0-46.5K", "wall_s": 117, "ttft_s_p50_p90_max": [10.13, 13.81, 19.98], "gap_ms_p95_p99_max": [978, 2961, 6200], "gaps_over_1s": 80, "stall_share": 0.70},
+   "continues-it policy, 4 slots": {"processed": 81778, "ideal": 46502, "wall_s": 153, "ttft_s_p50_p90_max": [11.47, 18.28, 27.92], "gap_ms_p95_p99_max": [354, 3775, 9555], "gaps_over_1s": 94},
+   "0.2.6, 8 slots": {"processed": 45217, "ideal": 46015, "wall_s": 91, "ttft_s_p50_p90_max": [4.38, 11.80, 13.58], "gap_ms_p95_p99_max": [214, 2501, 11315], "gaps_over_1s": 42},
+   "continues-it policy, 8 slots": {"processed": 44823, "ideal": 46065, "wall_s": 91, "ttft_s_p50_p90_max": [4.63, 9.82, 11.42], "gap_ms_p95_p99_max": [246, 2688, 4124], "gaps_over_1s": 42}
+  },
+  "host_memory_8_vs_4_slots": "six agents, server working set peak 9.76 / 6.27 GiB, private 94.97 / 83.76 GiB (tmp/ragged/ram_watch.py); the equal split at 8 slots 9.83 / 95.05: the difference is the conversations kept, each with up to 8 recurrent-state snapshots of 112.6 MiB in RAM"
+ },
+ "ragged": {
+  "cause": "every sequence of a hybrid-memory ubatch had to have the same token count: five sub-agent prompt tails of 292-556 tokens (2075) took ~3.5 s (~590 t/s) as six passes",
+  "consistency": {
+   "alone, ubatch 512 vs 8192 (noise floor)": {"first_token_same": "5/8", "dlogprob_mean_max": [0.154, 0.324], "common_prefix_of_24": 9.2},
+   "together vs alone, equal split": {"first_token_same": "6/8", "dlogprob_mean_max": [0.160, 0.355], "common_prefix_of_24": 6.9},
+   "together vs alone, ragged": {"first_token_same": "5/8", "dlogprob_mean_max": [0.068, 0.198], "common_prefix_of_24": 4.5},
+   "alone, ragged server vs equal-split server": "texts identical, first-token logprobs identical"
+  },
+  "agent_sim_8_slots": {
+   "equal split": [{"wall_s": 91, "ttft_s_p50_p90": [4.63, 9.82], "ttft_sum_s": 142, "gap_ms_p99_max": [2688, 4124]}, {"wall_s": 112, "ttft_s_p50_p90": [4.99, 31.92], "ttft_sum_s": 260, "gap_ms_p99_max": [2583, 7826]}, {"wall_s": 96, "ttft_s_p50_p90": [4.73, 9.47], "gap_ms_p99_max": [2447, 5924]}],
+   "ragged, no budget": [{"wall_s": 92, "ttft_s_p50_p90": [3.55, 6.15], "ttft_sum_s": 110, "gap_ms_p99_max": [2529, 4779]}, {"wall_s": 86, "ttft_s_p50_p90": [3.34, 8.09], "ttft_sum_s": 111, "gap_ms_p99_max": [1982, 4933]}],
+   "ragged, budget 1024": [{"wall_s": 92, "ttft_s_p50_p90": [5.15, 7.72], "ttft_sum_s": 143, "gap_ms_p99_max": [1505, 1711]}, {"wall_s": 102, "ttft_s_p50_p90": [4.36, 8.86], "ttft_sum_s": 130, "gap_ms_p99_max": [1551, 1750]}],
+   "ragged, budget 2048": [{"wall_s": 86, "ttft_s_p50_p90": [3.31, 7.33], "ttft_sum_s": 110, "gap_ms_p99_max": [2227, 2807]}]
+  }
+ },
+ "prefill_budget": {
+  "new 19K prompt while another conversation streams": {
+   "equal split, no budget": {"prompt_s": 17.0, "longest_gap_s": 6.9},
+   "ragged, no budget": {"prompt_s": 18.1, "longest_gap_s": 7.3},
+   "ragged, budget 2048": {"prompt_s": 21.2, "longest_gap_s": 2.2},
+   "ragged, budget 1024": {"prompt_s": 24.4, "longest_gap_s": 1.3}
+  },
+  "default": 2048
+ },
+ "release_gates": {
+  "runtime": "bin/hip (fork 88b178d7), servers on port 8091",
+  "bitwise_vs_0_2_6": "18.6K prompt, f16, MTP off: text and every top-5 probability identical",
+  "ppl_ctx8192_8chunks_f16": 2.6814,
+  "truncation_79K_mtp": "prompt 77394, 1135 tokens, stop, section 30/30, 33.0 tok/s; draft 713/1195 as 0.2.6",
+  "agent_probe_4_slots_q8_0": "40 turns, 3 conversations: no warnings",
+  "mtp_rewind_60K_chars": "64 / 64 entries identical",
+  "fault_probes": "ckpt:1, decode:3, post:2: retry and next answer, no non-consecutive positions",
+  "vision": "vision_stress at one slot and eight: OK; vision_multi_conv at eight: OK",
+  "long_pair_disk": "B again 14 tokens processed, 155675 cached",
+  "cache_workload_8_slots_disk_off": {"agent": {"processed": 29332, "ideal": 29733, "ratio": 0.99, "prompt_time_s": 50.8}, "edit": {"processed": 19682, "ideal": 19726, "ratio": 1.0, "prompt_time_s": 22.7}},
+  "multi_stream_4_slots_at_equal_acceptance": {"1": [39.0, 39.1], "3": [55.8, 55.9], "4": [61.6, 62.8], "order": "[0.2.6, 0.2.7] tok/s; verify 9 / 12 tokens 97.8 / 116.4 against 97.9 / 116.8 ms"},
+  "agent_sim_8_slots": {"0.2.6": {"wall_s": 90, "chunks_per_s": 17.2, "ttft_s_p50_p90_max": [3.80, 8.46, 11.51], "gap_ms_p99_max": [2538, 5251], "gaps_over_1s": 59, "processed": 45224, "ideal": 46049},
+                        "0.2.7": {"wall_s": 96, "chunks_per_s": 20.5, "ttft_s_p50_p90_max": [3.37, 7.66, 11.56], "gap_ms_p99_max": [2427, 2746], "gaps_over_1s": 50, "processed": 44830, "ideal": 46434}},
+  "new_19K_prompt_while_streaming": {"0.2.6": {"prompt_s": 17.2, "longest_gap_s": 7.0}, "0.2.7": {"prompt_s": 21.4, "longest_gap_s": 2.25}}
+ }
+}

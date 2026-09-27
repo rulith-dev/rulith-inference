@@ -184,7 +184,7 @@
       "title": "Concurrency",
       "parallel": "Concurrent conversations",
       "parallelHelp": "Conversations the server answers at once",
-      "parallelInfo": "Conversations kept at once: each stays in its slot, so going back to it continues where it was instead of processing it again, and several can answer at the same time. The slots share one context pool (a single conversation can still use all of it); each beyond the first costs about 0.4 GB.",
+      "parallelInfo": "Conversations kept at once: each stays in its slot, so going back to it continues where it was instead of processing it again, and several can answer at the same time. Agent tools need one for each session they run at once: with fewer, sessions push each other out and are processed again. The slots share one context pool (a single conversation can still use all of it); each beyond the first costs about 0.4 GB of GPU memory, and a conversation in use keeps up to about 0.9 GB of snapshots in RAM.",
       "kvPool": "Shared context pool",
       "kvPoolHelp": "Tokens the conversations share; 0 means the context length",
       "kvPoolSingle": "Takes effect with two or more concurrent conversations; one conversation’s pool is its context",
