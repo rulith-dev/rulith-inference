@@ -543,7 +543,7 @@ class ManagerTests(unittest.TestCase):
         # 0.11 GB each in system RAM: the last prompt's and one per 32K tokens, not llama-server's 32 per slot
         a=m.argv(self.model,m.validate_profile({'vision':False},self.model))
         self.assertEqual(a[a.index('--ctx-checkpoints')+1],str(m.CTX_CHECKPOINTS));self.assertEqual(m.CTX_CHECKPOINTS,8)
-        self.assertEqual(a[a.index('--checkpoint-min-step')+1],str(m.CHECKPOINT_MIN_STEP));self.assertEqual(m.CHECKPOINT_MIN_STEP,32768)
+        self.assertEqual(a[a.index('--checkpoint-min-step')+1],str(m.CHECKPOINT_MIN_STEP));self.assertEqual(m.CHECKPOINT_MIN_STEP,4096)
     def test_the_disk_prompt_cache_ceiling_is_a_profile_field(self):
         env=m.runtime_environment(m.validate_profile({'prompt_cache_disk':True,'prompt_cache_disk_mib':204800},self.model))
         self.assertEqual(env['STRIX_PROMPT_CACHE_MIB'],'204800')
@@ -561,13 +561,14 @@ class ManagerTests(unittest.TestCase):
         cfg=m.validate_profile({'mtp':False,'vision':False,'context':262144,'parallel':4},big)
         self.assertEqual((cfg['context'],cfg['ubatch'],cfg['parallel']),(262144,8192,4))
         self.assertIn('-kvu',m.argv(big,cfg))
-        self.assertNotIn('-kvu',m.argv(big,m.validate_profile({'mtp':False,'vision':False,'context':262144},big)))
+        self.assertNotIn('-kvu',m.argv(big,m.validate_profile({'mtp':False,'vision':False,'context':262144,'parallel':1},big)))
 
-    def test_image_input_needs_a_single_slot(self):
-        # the sparse attention ranks an image's cells only while the cache holds one sequence
-        with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'mtp':False,'parallel':4},self.model)
-        self.assertEqual(caught.exception.code,'vision_single_slot')
-        self.assertFalse(m.validate_profile({'mtp':False,'parallel':4,'vision':False},self.model)['vision'])
+    def test_image_input_with_several_slots(self):
+        # since 0.2.6 the sparse attention ranks an image's cells per sequence, so image input and several slots
+        # go together, and four slots are the default: the conversations they hold stay resident
+        self.assertEqual(m.DEFAULTS['parallel'],4)
+        cfg=m.validate_profile({'mtp':False,'parallel':4},self.model)
+        self.assertTrue(cfg['vision']);self.assertEqual(cfg['parallel'],4)
         self.assertTrue(m.validate_profile({'mtp':False,'parallel':1},self.model)['vision'])
 
 if __name__=='__main__':unittest.main()

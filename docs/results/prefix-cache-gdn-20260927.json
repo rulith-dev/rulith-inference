@@ -1,0 +1,81 @@
+{
+ "question": "0.2.6: can conversations and agent sessions reuse every prefix the server has already computed - in their own slot, in another slot, or while another slot is still computing it - and can a speculative verify stop writing a recurrent-state snapshot per token without changing a bit of the output",
+ "date": "2026-09-27",
+ "machine": "GTR9 Pro, Ryzen AI Max+ 395, 96 GB GPU carve, Windows 11, TheRock ROCm 10.2.0a20260925",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS + MTP draft (shared Q4_K_M + IQ4_XS head), f16 K/V, sparse attention on",
+ "prefix_cache": {
+  "tool": "tmp/pc/cache_workload.py: chat API (the template decides the prompt), per request prompt / cached / processed tokens and prompt time; 'ideal' = the prompt less its longest common prefix with any earlier prompt of the run",
+  "scenarios": {
+   "agent": "one 10K-token system prompt (tool list) shared by 3 sessions of 5 turns started at the same moment (tool results of 0.5-2K tokens) and 3 sub-agent sessions of 2 turns that start while the others run",
+   "edit": "one conversation of 6 turns, then regenerate the last answer, edit the last question, edit the second question",
+   "chat": "6 conversations of 5 turns taken round-robin, 1.5-3K-token user turns"
+  },
+  "baseline_0_2_5": {
+   "agent, 4 slots, disk tier on": {"processed": 73259, "ideal": 29706, "ratio": 2.47, "prompt_time_s": 172.5},
+   "agent, 1 slot": {"processed": 52758, "ideal": 29820, "ratio": 1.77, "prompt_time_s": 56.4},
+   "edit, 1 slot": {"processed": 22852, "ideal": 19726, "ratio": 1.16, "prompt_time_s": 24.3},
+   "chat, 1 slot, disk tier on": {"processed": 70551, "ideal": 71366, "ratio": 0.99, "prompt_time_s": 73.4},
+   "chat, 1 slot, disk tier off": {"processed": 208690, "ideal": 71421, "ratio": 2.92, "prompt_time_s": 193.0},
+   "chat, 4 slots + 512K pool, disk tier off": {"processed": 208723, "ideal": 71421, "ratio": 2.92, "prompt_time_s": 196.9}
+  },
+  "causes_found": [
+   "checkpoint retention: when the list of 8 was full, every other task's checkpoint within checkpoint_min_step (32768) of the previous one was erased, which left the first prompt's T-8196 checkpoint (2447 here) and the current task's; a second session on the same system prompt went back to 2447 and processed 8.1K of it again, and editing the second message went back to 0",
+   "three sessions started together each computed the same 10.6K prefix: 32K tokens in one batch stream, 34 s for each first answer",
+   "a new session took over the slot sharing the most with it and cut that conversation (f_keep 0.69 >= 0.5: not even saved) while a slot was free; nothing was ever copied between slots",
+   "with more conversations than slots and no disk tier, least-recently-used eviction under a round-robin pattern keeps evicting the conversation needed next"
+  ],
+  "changes": [
+   "anchors: checkpoints at the first user message (kept for good), the last one, the end of each prompt (T-4; T-(4+ubatch) only when the last message starts before it), and turn starts spaced by --checkpoint-min-step (now 4096) and a quarter of the distance to the end; a full list drops the checkpoint minimising (gap before x gap after) / distance from the end",
+   "a prompt whose best-sharing slot holds another conversation (a quarter or more of it would be cut) takes a free slot, still looks in the RAM and disk tiers, and gets the shared prefix copied in: attention rows device to device (llama_strix_kv_copy_rows), the recurrent state from the source slot's checkpoint",
+   "a prompt whose prefix a busy slot is computing waits (deferred) until that slot is past its first or last user message, then copies it; 120 s at most; STRIX_PREFIX_WAIT=0 turns it off",
+   "four slots by default (manager DEFAULTS parallel=4)"
+  ],
+  "results_dev": {
+   "agent, 1 slot, disk tier off": {"processed": 29340, "ideal": 29934, "ratio": 0.98, "prompt_time_s": 38.4},
+   "edit, 1 slot, disk tier off": {"processed": 19682, "ideal": 19726, "ratio": 1.0, "prompt_time_s": 21.2, "edit_second": "4266 -> 1096 tokens processed"},
+   "agent, 4 slots, disk tier on": {"processed": 29338, "ideal": 29801, "ratio": 0.98, "prompt_time_s": 60.0, "first_turns_wall_s": "36.4-41.3 -> 14.7-16.6", "copies": 3},
+   "agent, 4 slots, disk tier off": {"processed": 29440, "ideal": 29799, "ratio": 0.99, "prompt_time_s": 57.2},
+   "chat, 4 slots, disk tier off": {"processed": 208759, "ideal": 71457, "ratio": 2.92, "note": "unchanged: 6 conversations cycling through 4 slots"}
+  },
+  "copy_paths": "9741 positions: device to device 44 ms, through the host 100 ms; the answer that follows and its top-3 logprobs identical over 64 tokens (tmp/pc/copy_ab.py, STRIX_COPY_ROWS_HOST=1)",
+  "stall_of_a_generating_stream": {
+   "tool": "tmp/pc/stall_probe.py: stream A decodes (~63 ms a step) while a second request makes the server do cache work",
+   "copy of a 9.7K shared prefix": "max step 299-335 ms; checkpoints 10-30 ms each (restore 10 ms, create 19-31 ms for 112.6 MiB); the rest is the prompt tail running as extra passes of the whole model, because the hybrid memory needs every sequence of a ubatch to have the same token count: {A:4, B:14} ran as {A:4,B:4} + {B:10}",
+   "restore of a 47K conversation from the disk tier": "max step 1420 ms (1.42 GiB read in 521 ms, then the rows set)"
+  }
+ },
+ "gdn_deferred_rollback": {
+  "cost_measured_first": "every snapshot written twice into scratch (STRIX_GDN_SNAP_DUP, outputs unchanged): +0.65-0.75 ms per 108 MB (one sequence-token over 36 layers); verify at 4 / 6 / 9 / 12 tokens +2.6 / +3.8 / +6.8 / +8.9 ms",
+  "change": "ggml_gated_delta_net_lazy: the state is read from its row, the records the rollback kept are replayed in registers, the state is written back, and each token records its delta [128 x 48], key [128 x 16] and gate [48] (33 KB) instead of a 3 MB snapshot; ggml_gated_delta_net_replay brings the states up to date before a longer batch; state_write replays on the host with the same fmaf",
+  "exactness": "the plain kernel's g*s + k*d compiled to fmaf(g, s, k*d); written as fmaf(k, d, g*s) the outputs changed. With fmaf(g, s, k*d) everywhere: single-stream greedy text identical to 0.2.5 with lazy on and off",
+  "verify_ms_greedy_same_binary": {"n=4": [54.23, 54.1], "n=6": [72.88, 72.0], "n=9": [98.85, 96.05], "n=12": [119.4, 114.6], "order": "[STRIX_GDN_LAZY=0, 1], two runs each"},
+  "sampled_tok_s_varied_seeds": {"1 stream": [36.1, 37.0], "3 streams": [53.1, 55.5], "4 streams": [56.8, 61.0], "note": "noisy: acceptance differs by a few points between runs"},
+  "not_done": "one state row per cell (324 MiB a slot less): a rollback right after a batch longer than a verify (a prompt tail with its first drafts) then has no snapshot to go back to, and the server aborted; reverted"
+ },
+ "images_in_several_conversations": {
+  "before": "llama-memory-hybrid-idx.cpp: GGML_ASSERT(group_members[slot]<0 || group_members[slot]==j) - with two conversations resident the image's repeated M-RoPE positions were not ranked (ranking required one sequence in the cache); in 0.2.5 as well",
+  "after": "each sequence of the ubatch ranked among its own cells; tmp/pc/vision_multi_conv.py (A text, B image, A image, C text, B and A text, A and B images at the same moment, C text): all answered correctly; tools/vision_stress.py OK at one and four slots",
+  "slot_memory_gb_dedicated": {"1": 75.77, "2": 76.21, "4": 77.09, "8": 78.73, "note": "bin/hip, pool = context, idle; ~0.43 GB a slot"}
+ },
+ "release_gates": {
+  "runtime": "bin/hip (fork a4c8802b)",
+  "bitwise_vs_0_2_5": "18.6K prompt, f16, MTP off: text and every top-5 probability identical (tmp/fusion_equiv_probe.py)",
+  "ppl_ctx8192_8chunks_f16": 2.6814,
+  "truncation_79K_mtp": "prompt 77394, 1135 tokens, stop, section 30/30, 31.5 tok/s; the repeat from the cache the same",
+  "agent_probe_4_slots_q8_0": "40 turns, 3 conversations: no warnings",
+  "mtp_rewind_60K_chars": "64 / 64 entries, tokens and top-3 identical",
+  "fault_probes": "ckpt:1, decode:3, post:2: the retry and the next request answer, no non-consecutive positions",
+  "vision": "tools/vision_stress.py at one slot and four: OK; tmp/pc/vision_multi_conv.py: OK",
+  "long_pair_disk": "two long conversations in a 393216 pool: B again 14 tokens processed, 155675 cached",
+  "cache_workload_4_slots_disk_off": {"agent": {"processed": 29337, "ideal": 29879, "ratio": 0.98, "prompt_time_s": 52.2}, "edit": {"processed": 19682, "ideal": 19726, "ratio": 1.0, "prompt_time_s": 22.6}},
+  "multi_stream_ab": {
+   "protocol": "tmp/gdn/sweep_streams.py 1,3,4 --rounds 6 --n 256 --chars 14500 --vary-seeds, 4 slots, STRIX_SPEC_TIMING=1; one pass per build, 0.2.6 first",
+   "mean_tok_s": {"0.2.5": {"1": 37.9, "3": 53.8, "4": 59.4}, "0.2.6": {"1": 39.3, "3": 56.4, "4": 62.6}},
+   "mean_acceptance_pct": {"0.2.5": {"1": 64.0, "3": 65.0, "4": 65.3}, "0.2.6": {"1": 64.0, "3": 64.7, "4": 68.2}},
+   "at_equal_acceptance": {"3": [53.7, 56.4], "4": [60.0, 61.9], "note": "pooled least-squares slope 0.51 / 0.46 tok/s a point; one conversation sampled the same six texts on both builds"},
+   "verify_decode_ms": {"0.2.5": {"4": 56.4, "6": 75.95, "9": 102.1, "12": 122.4}, "0.2.6": {"4": 54.4, "6": 75.3, "9": 97.7, "12": 116.7}},
+   "caveat": "more than the same-binary A/B (-2.8% / -4.0% at 9 / 12 tokens); the builds ran one after the other"
+  },
+  "harness_note": "the first one-slot vision run failed to come up: tmp/smoke_install.py ran at the same time, and the setup's pre-install hook ran the bundled manager's stop, which adopts any llama-server on 127.0.0.1:8080 started with --lazy-mode on-direct; rerun alone: OK"
+ }
+}

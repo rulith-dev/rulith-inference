@@ -99,10 +99,12 @@ PROMPT_CACHE_BLOCK_TOKENS = 4096
 # RAM while the conversation is resident. The last prompt's are the ones used - a regenerate, and the next turn of a
 # template that drops the thinking, go back to just before its end; older ones only serve a deeper rewind (an edited
 # earlier message, an agent trimming old tool output), which without one is processed again from further back.
-# llama-server keeps up to 32 at least 8192 tokens apart, 3.5 GB a slot; this keeps the last prompt's and one per
-# 32K tokens before them, at most 0.9 GB a slot, and a deep rewind replays at most ~32K tokens (~35 s)
+# llama-server keeps up to 32 at least 8192 tokens apart, 3.5 GB a slot. This keeps 8, at most 0.9 GB a slot, chosen by
+# the runtime (0.2.6): the end of the system prompt (the first user message: every conversation that starts with it
+# comes back to it), the last prompt's, and turn starts spaced by at least CHECKPOINT_MIN_STEP and a quarter of the
+# distance to the end, dropped by what their loss would cost when the list is full
 CTX_CHECKPOINTS = 8
-CHECKPOINT_MIN_STEP = 32768
+CHECKPOINT_MIN_STEP = 4096
 # the largest KV pool a profile may ask for (kv_pool): four full-length conversations. What actually fits is the
 # GPU carve and the commit limit's business; this only stops a typo from asking for terabytes
 KV_POOL_MAX = 1048576
@@ -157,7 +159,6 @@ ERRORS = {
     'draft_path': 'The draft model path is invalid',
     'mmproj_path': 'The vision projector path is invalid',
     'mmproj_missing': 'No vision projector ({name}) beside the model: add it, pick a file, or turn image input off',
-    'vision_single_slot': 'Image input needs a single slot: set parallel to 1 or turn image input off',
     'qsa_architecture': 'Sparse attention (QSA) applies to Qwen3.8 Flash Next (qwen4exp) only',
     'qsa_needs_fa': 'Sparse attention (QSA) needs Flash Attention on',
     'mtp_architecture': 'MTP is enabled for qwen4exp models only',
@@ -215,13 +216,14 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # the draft's cache stay f16 either way. The disk tier keeps only entries of the type in use.
                 ngram_spec=False, kv='f16', flash_attention='on', thinking='off',
                 qsa=False,
-                # parallel: server slots. More than one costs ~12 GB of compute buffers on this model
-                # (measured 13.1 GB of shared GPU memory at 4 slots against 1.1 GB at one): the worst-case
-                # graph reserve uses a mixed-sequence ubatch, which fails QSA's single-sequence visibility
-                # test, so the dense per-block bias and the dense KQ mask get reserved instead of the
-                # compact metadata. Raise it only when concurrent requests are worth that memory; the
-                # throughput is real (1/2/4 streams = 19.0/30.6/47.1 tok/s, tools/decode_concurrency.py).
-                parallel=1,
+                # parallel: server slots, which are also the conversations that stay resident: talking to A, then B,
+                # then A again finds A where it was, not processed again (with the disk tier off, every conversation
+                # beyond the slots is). Each slot beyond the first costs ~0.43 GB of GPU memory (its recurrent state
+                # rows; measured 75.8 / 76.2 / 77.1 / 78.7 GB at 1 / 2 / 4 / 8 slots, 2026-09-27) - the ~12 GB of
+                # 0.1.x (a dense reserve for mixed-sequence batches) is long gone. They share one pool (-kvu), so one
+                # conversation can still use the whole context while the others are idle, and a single conversation
+                # decodes as it does on one slot. Several at once: 1/3/4 streams = 35.8/53.6/61.4 tok/s (0.2.4).
+                parallel=4,
                 # kv_pool: the cells of the one KV pool that several slots share (-kvu), when it should hold more
                 # than one conversation at full length: each conversation stays capped at `context`
                 # (--kv-unified-per-slot) and the pool is one allocation of any size, rounded up to 256 cells.
@@ -583,11 +585,6 @@ def validate_profile(raw, model):
     if not isinstance(cfg['draft'], str): fail('draft_path')
     if not isinstance(cfg['mmproj'], str): fail('mmproj_path')
     if cfg['vision']:
-        # An image's cells repeat one position (M-RoPE) and run ahead of their cells, so the sparse
-        # attention's block enumeration has to rank them, and it can only do that while the cache holds
-        # one sequence: with two conversations resident an image aborts the server in set_input_qsa
-        # (`oor`). Several slots therefore exclude image input until that path exists.
-        if cfg.get('parallel', 1) > 1: fail('vision_single_slot')
         # a path the user picked goes through the full check (it must sit in a registered model root);
         # the automatic one ships beside the model, so only its existence matters
         if cfg['mmproj']: checked_file(cfg['mmproj'])

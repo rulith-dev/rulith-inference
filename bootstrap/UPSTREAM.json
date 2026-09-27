@@ -6,14 +6,18 @@
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cuh"
  ],
  "produces": {
+  "common/chat.h": "b575be7cf92bc36d8af7711ff7e94bd767c7c3b3589c7660907e2e4c7235e88a",
   "common/speculative.cpp": "df82986564c58ede74652baf5d192ccc245fc981d54f621a73c16c5acc9eb99a",
+  "ggml/include/ggml.h": "ae54776045f191d614b71869c06a1dfa526cb5c0dcf0bf641bd47bdf718403b8",
   "ggml/src/ggml-alloc.c": "6a4b269c56f03c37f74f78419aa9e77463ee8e58a82e1f1e7be6e850a550974c",
+  "ggml/src/ggml-cpu/ggml-cpu.c": "b1bc2b55c1f747a4334fa2255387ae03e99dd4a094db4f39a7089adae46fb8ce",
+  "ggml/src/ggml-cpu/ops.cpp": "48267ec6cf55ad47915ff755b53fc2a90118cc8c1912c0b0671644e8827894e4",
   "ggml/src/ggml-cuda/concat.cu": "e055ceb67e104305084dde17b21794c8ff5999d389174ef81a4ba87fbcb6a4bc",
   "ggml/src/ggml-cuda/cpy.cu": "e3b2d6e5eb2182be9c105d716b48abaf5c10f9de0567bfc783e73c7b532502f1",
-  "ggml/src/ggml-cuda/gated_delta_net.cu": "f57534fef01c43143936cff59a8cdd5fb7a783d7473c3c49ec28b8b9c7fe1822",
+  "ggml/src/ggml-cuda/gated_delta_net.cu": "12ed30235a50a0461977cf1e327ee73221160ccb7308edb18a013e8be29e9ad5",
   "ggml/src/ggml-cuda/gated_delta_net.cuh": "1883dcc8240f3125b62cf4910fb2006be0821fc99c0d4d3819ebff26bdd7a4a5",
   "ggml/src/ggml-cuda/gdn-conv.cu": "eced61710a178ba5bc07985775e64711f82c9173cb57d05d3054c46ddaa759bb",
-  "ggml/src/ggml-cuda/ggml-cuda.cu": "f71e8c9c79e5b8c18dfaf182df94217642c74f44e1b7d9897282d92e3985fd5b",
+  "ggml/src/ggml-cuda/ggml-cuda.cu": "30761b6f26c1af742480330c95cbb83d235f63a9b60b1cee21c010345c9b10b0",
   "ggml/src/ggml-cuda/hc-cn.cu": "6d4170eaefdcdca7575f32c24a2474d6ff88f9abfb23716c1599d7cd7046d926",
   "ggml/src/ggml-cuda/hc-cn.cuh": "a53b3f583bc0783ccfe8b924177bcfa24097b9021c7c1b681376fdd3860de6d0",
   "ggml/src/ggml-cuda/idx-relu-sum.cu": "7a93d811c6d1ebaa0d1072d7755b2b0384396164bed602fe9162d54665edc97b",
@@ -22,7 +26,7 @@
   "ggml/src/ggml-cuda/mmb.cuh": "e39d737aab747c797f836c340798cdbc368c8c2147d5b0990fbabedaa6d5f8f7",
   "ggml/src/ggml-cuda/mmid.cu": "81a71f35f96d2cbd19afafb8de89884010e4eef1c986a20991f177355d3b3924",
   "ggml/src/ggml-cuda/mmq-load-tiles.cuh": "0a43a30415c57c7d14d5f1cb03789fbd12850fa00cee9f7fb841d952b84c1484",
-  "ggml/src/ggml-cuda/mmq.cu": "14f93d7dd97f811c0a3bbe679597ed29392c0f35d0ff8b3213bb8d47ce02e0d2",
+  "ggml/src/ggml-cuda/mmq.cu": "afa9ca158fc00b2eddf386677950640796d0a6288f2a7e6b4770d377a5a52874",
   "ggml/src/ggml-cuda/mmq.cuh": "fc09981f738c1c8458bc1e0298b49d4adf19386cfd45e893587b218d4db1e4c3",
   "ggml/src/ggml-cuda/mmvq.cu": "29ecfbe9feabd762c8781af0a9074c8484b1356a6359dc2e42152c56bc36a101",
   "ggml/src/ggml-cuda/ple-conv.cu": "c885af63df027b0390de9915bbf51073c6205414045c35937c6c42f3eb980958",
@@ -36,40 +40,59 @@
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cuh": "ed9f51c30db922f743196cca350a1554067fd0fa021f404910ea6bea91d753dc",
   "ggml/src/ggml-cuda/top-k.cu": "331c59f715fe514f9b422ef03c4725d3649944a50474282ffba49bafc4e06dc0",
   "ggml/src/ggml-cuda/vecdotq.cuh": "3b879a937d5143902db4cae2530529c32fd464dbfb822a7fe31875aba57707ce",
-  "include/llama.h": "646aed8696541c2a6dc0b034600fd06a50599d87e13db10448a5f5472b0f2a30",
-  "src/llama-context.cpp": "14d0dced1e69aab56d2cd6d00a55cc3688029c2f8739664285813e063cd0a3a9",
-  "src/llama-graph.cpp": "ee47da90b6ee28f7403b23b6bd482f3eb77ca08567fb1ef65d1e4372a6ac67f3",
-  "src/llama-graph.h": "b5868bd6adc991a54319d1462bdf80bae3f3ce30dad039e7fba7a0747dd8f0fb",
-  "src/llama-kv-cache.cpp": "17a46c4f2131b421c6d3a29aac7a82f2e5766024f75c02a0326cc29c8728a675",
-  "src/llama-kv-cache.h": "e3c9ab7ffac6a8267e3dafe945fe8f196216353580a06c86e70e732857b4cfa7",
+  "ggml/src/ggml.c": "dc12f87fb6a8fd3d7df18c2e506b941b3714929fffb33261842dae2a11cad4ed",
+  "include/llama.h": "6e5018ff2c408dc44cd0f270f3815c923807afad6dcd7ea83bdc3305d4eedb1a",
+  "src/llama-context.cpp": "c855eed0da1e7dc44d2ff8fa88ff6538c20632f3fdbe463d9ab783ce1d131ee7",
+  "src/llama-graph.cpp": "2862f541652c16262328824e9ead786a0f00e70ee0c8cbc5f600a64661738805",
+  "src/llama-graph.h": "c985fff158bdbfe9c599d3620a71b435f2d29e32e231c2373a4167df453b596e",
+  "src/llama-kv-cache.cpp": "eb3239f12108c10d3f9305029a4c5a2f34b2db66eb9fbfe7342aa6e89b9e5a82",
+  "src/llama-kv-cache.h": "e3071949215a6315e82929ad4fd885ba5cc798668d2f4272a86a3b1b83eba9ec",
   "src/llama-kv-cells.h": "6cb735c3bee59e564be000c3c8b83e6696974aa106a081790c72d1f4e75db9f4",
   "src/llama-lazy-reader.h": "8c4895b934096f353c7844b156f7a8043710f0bb9f3350efa921440f3a49d925",
-  "src/llama-memory-hybrid-idx.cpp": "4d3eedccd3742f4845e61df3aa0b489c42c873f5d69427b84d49dfa083114a24",
-  "src/llama-memory-hybrid-idx.h": "feb72dd4dbc54e6d771a2e2a83490d32c1294c2869bf9f47e34296f016a6ad2b",
-  "src/llama-memory-recurrent.cpp": "14281fa23edc0b190dcc9b76a8b3165ad9da32866751aa35dea1451fac1c87f8",
-  "src/llama-memory-recurrent.h": "d78009b7a82952ac2f760cd335b86c6a5b6ecf26ed36321d3b56400a8a24ea53",
+  "src/llama-memory-hybrid-idx.cpp": "4d071f9e390f686048601d04e1872c78584d5c9749514795a56cb14287c80747",
+  "src/llama-memory-hybrid-idx.h": "7da25f88afa132115cacb4b00894b6b814ea7ffc8c8f4a946f8811089c304b6a",
+  "src/llama-memory-recurrent.cpp": "7af20b4a7e09615a5442e66f5acbe5757347ad8d66603a288fdebdf06b046612",
+  "src/llama-memory-recurrent.h": "66d0080199b1a66c05f0096e9c50aff0c4e366cf4549a5a76b821fc7a692bb48",
   "src/llama-model.cpp": "204cb7149c79c71426ee746a5e4517db74837df9efde24b7cdc704a3bae05bf8",
   "src/llama-model.h": "934dfaf7862ed94699692cfe4d93f7a1fbd7b646d4577dbd0ba197ee2f953175",
   "src/models/block-graph.inc": "716077d2dd61f3d7edb94945eaf1cd4aa2bb86f452eff22832d9cf279d55ec07",
-  "src/models/qwen4exp.cpp": "7695d4687a2c593e8785030dc440c1e3731f16a34dfc294b48b55ccd47f18f97",
+  "src/models/qwen4exp.cpp": "9681e3c0b4dd966681047f05c7b3a21f21812da133db66b81b468e0391d8055d",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "63b40d1aa142a62032da8bab47b53513b688fe8a18b6980ac07300f672c007c0",
-  "tools/server/server-context.cpp": "553e4a09002dce306ee8ad41ce550e97b1a67121126c1025ce663f66e74639f8",
+  "tools/server/server-context.cpp": "8d94e81e9b62903368f0841f5c81944ae8da35448edda79101d26b77d396062b",
   "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
+  "tools/server/server-queue.cpp": "7b3176135c6055f18cf8c2575f3b9b2a84ef6e3d971a9c70f022771f4249ca44",
+  "tools/server/server-queue.h": "39d958942e30e8b02db6bdd9bfa7687178bb199ebb616e7d3e88881b5565d592",
   "tools/server/server-task.cpp": "ffd6df6d7135c3f56309d42132d155a2b54eaa43c3c3701a146393301a379d6a",
-  "tools/server/server-task.h": "9ff480cad8053af04747aca4c2304b672f6148c4d2c192b8ef6fe2529a98a5b3",
+  "tools/server/server-task.h": "f7450713e6596eaac6e44f5b09bcc258582adc38d0c043d595e06dc92c58591d",
   "tools/server/server.cpp": "5e2e8284457fac873a7871bb0201e0e17494025213b0be50cfeb02be2f377daa"
  },
  "repo": "https://github.com/pwilkin/llama.cpp",
  "revision": "f5daaa3cfa6358e5dd398911ec741813745a5440",
  "upstream": {
+  "common/chat.h": {
+   "git_blob": "cb39e3458f445f7c35e0259b8adfe1578c7722a9",
+   "sha256": "2e9d19421fde1deeaebba9f9cdc18097b41e3a9974a89bbb9061792faabf2ea3"
+  },
   "common/speculative.cpp": {
    "git_blob": "8c3208af5fabc32ea0aae6f73cfbc96558036258",
    "sha256": "4db665a495adde2268731668cb1387e434cf7f071da84b2f67f0f9bcf87cc477"
   },
+  "ggml/include/ggml.h": {
+   "git_blob": "85a1ae7ae20880c782fe25ad80ba7f9f98f3515b",
+   "sha256": "9ac7ee3d3a957e5f7b21b104d3e3dc50b1b106f808f9d6735ead950450bfeec6"
+  },
   "ggml/src/ggml-alloc.c": {
    "git_blob": "5fd670fd0c43c289058c8fcbebbdcc5287bee6c1",
    "sha256": "0bb4cfea6de1458e72b33e4e2d7c086b04cc102e02259574968a7829526d2f39"
+  },
+  "ggml/src/ggml-cpu/ggml-cpu.c": {
+   "git_blob": "87a329f269752bd398380a12ab91d4b0c116018b",
+   "sha256": "839197aab9a2fb3c509221699e2810a4c4f3f3043416f55e653c380a46ed74cf"
+  },
+  "ggml/src/ggml-cpu/ops.cpp": {
+   "git_blob": "266261c5e5a4e0501c6ecb43573f46a2c42ef3c9",
+   "sha256": "dbffc3df9816cc3f7e5428f9fb9afa13db4ac2979899605a057121bb031ba136"
   },
   "ggml/src/ggml-cuda/concat.cu": {
    "git_blob": "eca86ed9b6b2c0c025aea26b14343d0b1c300ddb",
@@ -167,6 +190,10 @@
    "git_blob": "f2a6f2009c9ac907b6002667a49dcb6c2e75be56",
    "sha256": "a7fd4281ad9f0a6d9373c776325411d2522e0b62ffae2c16e91e667a1af251fe"
   },
+  "ggml/src/ggml.c": {
+   "git_blob": "a66941eed459e4f6967548b070f84dee324f54bf",
+   "sha256": "df3a8fa9b1bcd0f5a0ad96544ec41f00655e5f2a2dedac95fbdbef6e336371c2"
+  },
   "include/llama.h": {
    "git_blob": "1a2cad1d0abef7ff8a2476721f500b2b52da0e20",
    "sha256": "9d50261c7dfa0273f7ef70fc9d10ba5f86156ca003398efec0c5a502cb5e64aa"
@@ -246,6 +273,14 @@
   "tools/server/server-context.h": {
    "git_blob": "0acbbffa9e103b8c4ef8fbb8b041a0966277cdb7",
    "sha256": "8885184dc08bd35f7b96cdbec92efa440b0b4d4e2bd5fc81ab8cf0c408430b73"
+  },
+  "tools/server/server-queue.cpp": {
+   "git_blob": "78169e9a5d86cdd44afc004790303ec048cee73d",
+   "sha256": "0e196113d16f130230d2cc0b232915e1f5b4f1dda184790afbfdc4986dd1fd58"
+  },
+  "tools/server/server-queue.h": {
+   "git_blob": "e17733a743f68d2e4c8cf78416850a053667cbf1",
+   "sha256": "03589a5d4feaec7910f2d11a87cf86edb932cf04ff97b1bb26a2c6b8593156b3"
   },
   "tools/server/server-task.cpp": {
    "git_blob": "0d3beb313ceabbb903de57d185140a8e5a079e4b",

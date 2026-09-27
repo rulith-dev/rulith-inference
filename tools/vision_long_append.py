@@ -5,8 +5,7 @@ Reported on 0.2.4 (github.com/rulith-dev/strixllama/issues/2): about 58K tokens 
 1920x1080 over seven turns with the whole history kept (~114K tokens), a short text turn, then ~14K more
 tokens of text. With batch = ubatch = 8192 the last request killed the server with "ROCm error: unspecified
 launch failure"; at 1024 it completed, and so did the same lengths without images. This walks the same
-shape with generated records and images, so it needs nothing but a running server with a projector loaded
-and a single slot (image input needs one):
+shape with generated records and images, so it needs nothing but a running server with a projector loaded:
 
     python tools/vision_long_append.py                   # the reported sizes
     python tools/vision_long_append.py --images 8 --head 20000 --append 6000   # a quicker smaller variant

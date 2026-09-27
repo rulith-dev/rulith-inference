@@ -383,6 +383,63 @@ conversations; the host leaves the GPU ~3 ms before each verify step. Three meas
 round - per-dispatch times from graph event nodes, op benches whose weight stays in the MALL, and leaving
 ops out, which changed the MoE routing - are in `docs/results/verify-small-products-20260926.json`.
 
+**Agents and several conversations: a prefix cache across slots, rollback without snapshots (0.2.6,
+2026-09-27).** Agent harnesses run many sessions and sub-agents on one long system prompt, with tool
+calls in between. `tmp/pc/cache_workload.py` replays three kinds of traffic through the chat API
+and counts, per request, the prompt tokens the server processed against the ideal: the prompt less its
+longest common prefix with any earlier prompt of the run. The recurrent state can be resumed only where
+a checkpoint of it was kept, and upstream's retention (eight checkpoints; when full, every other task's
+checkpoint within `--checkpoint-min-step`, 32768, of the previous one erased) left the first prompt's
+T-8196 checkpoint and the current task's after a few turns. So a second agent session on the same 10K
+system prompt went back to 2.4K and processed 8.1K of it again, and editing the second message went back
+to 0. Three sessions started together each computed the same 10.6K prefix, 34 s for each first answer.
+And a new session took over the slot that shared the most with it, cutting that conversation, while a
+slot was free. `apply_prefix_cache_026` keeps checkpoints where later prompts branch (the first user
+message, kept for good; the last one; the end of each prompt; turn starts spaced by
+`--checkpoint-min-step`, now 4096, and a quarter of the distance to the end). A full list drops the
+checkpoint whose loss costs least: gap before × gap after / distance from the end. A new session copies
+a shared prefix from another slot instead of computing it: attention rows device to device, 44 ms for
+9.7K positions (100 ms through the host, same answer and top-3 logprobs over 64 tokens), and the
+recurrent state from the source's checkpoint. A session whose prefix another slot is computing waits for
+that slot's anchor, then copies it.
+
+| workload (`cache_workload.py`) | 0.2.5 | 0.2.6 |
+| --- | --- | --- |
+| agent: 10K system prompt, three sessions of five turns started together, three sub-agents, 4 slots | 73.3K processed (2.47× ideal), prompt time 172.5 s | 29.3K (0.98×), 52.2-60.0 s |
+| edit: six turns, then regenerate, edit the last message, edit the second, 1 slot | 22.9K (1.16×), 24.3 s; the second-message edit 4266 tokens | 19.7K (1.00×), 21.2-22.6 s; 1096 tokens |
+| chat: six conversations round-robin, 4 slots, disk tier off | 208.7K (2.92×) | unchanged: more conversations than slots |
+
+In the agent workload the three first answers came after 15-17 s instead of 36-41 s. What a generating
+stream still feels (`tmp/pc/stall_probe.py`, a stream decoding at ~63 ms a step): its longest step was
+299-335 ms while another request copied a 9.7K prefix, and 1420 ms while a 47K conversation came back
+from the disk tier (1.42 GiB read in 521 ms, then the rows set). A checkpoint costs 10-30 ms (restore
+10 ms, create 19-31 ms for 112.6 MiB). The rest of such a step is the new prompt's tail run as extra
+passes of the whole model, because the hybrid memory needs every sequence of a ubatch to have the same
+token count: {A:4, B:14} runs as {A:4, B:4} + {B:10}.
+
+The speculative verify wrote the whole recurrent state after every token of every sequence, 3 MB a
+layer, so that a rejected draft could be rolled back. Writing every snapshot twice
+(`STRIX_GDN_SNAP_DUP`, output unchanged) cost +0.65-0.75 ms per 108 MB, +6.8 / +8.9 ms on a 9 / 12-token
+step. `apply_gdn_deferred_rollback` leaves the state where the batch found it and records per token what
+a replay needs: delta [128 × 48], key [128 × 16] and gate [48], 33 KB. The next batch replays in
+registers the records its rollback kept, then writes the state back. A replay op brings states up to
+date before a longer batch, and a saved state is replayed on the host. The plain kernel's `g*s + k*d`
+compiles to `fmaf(g, s, k*d)`; written as `fmaf(k, d, g*s)` the outputs changed, and with the same fmaf
+everywhere they are 0.2.5's bit for bit. Verify step, same binary, greedy, `STRIX_GDN_LAZY=0` against 1,
+two runs each: 9 tokens 98.85 → 96.05 ms (-2.8%), 12 tokens 119.4 → 114.6 (-4.0%), 4 tokens 54.2 →
+54.1. Keeping one state row per cell instead of two (324 MiB a slot less) failed: a rollback right after
+a batch longer than a verify had no state to go back to.
+
+Release A/B, 0.2.5 against 0.2.6, one pass each (0.2.6 first), ~4K tokens a conversation, 256 tokens a
+stream, six rounds, the server's default sampling with a new seed every round (the same seeds for both
+builds). Read at the same acceptance (pooled slope 0.4-0.5 tok/s a point): three conversations 53.7 →
+56.4 tok/s summed, four 60.0 → 61.9. One conversation sampled the same six texts on both builds at 37.9
+→ 39.3 tok/s. The server's verify step: 9 tokens 102.1 → 97.7 ms, 12 tokens 122.4 → 116.7, 4 tokens
+56.4 → 54.4. That is more than the same-binary A/B above, and the builds ran one after the other, so
+part of it may be order. Four slots are the default now: 75.77 / 76.21 / 77.09 / 78.73 GB of dedicated
+GPU memory at 1 / 2 / 4 / 8 slots, idle, pool = context, ~0.43 GB a slot. Details:
+`docs/results/prefix-cache-gdn-20260927.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -408,8 +465,21 @@ gate could not see them:
   against any change near sparse attention, M-RoPE or the KV cache; it generates its own image, so
   it needs nothing but a server with a projector loaded.
 
+  A fourth (0.2.6): the sparse attention ranks an image's cells, which share one position, and it
+  ranked them only while the cache held one sequence, so an image in a second loaded conversation
+  asserted in `set_input_qsa`. The app required one slot for image input, which hid it. Each sequence
+  of a ubatch is now ranked among its own cells (`apply_image_rank_per_seq`), and
+  `tmp/pc/vision_multi_conv.py` sends images to several loaded conversations, one at a time and at
+  the same moment.
+
 ## What is still open
 
+- **A generating conversation pauses while another one starts.** A step that mixes decoding
+  conversations with a new prompt's tail runs as several passes of the whole model, because every
+  sequence of a hybrid-memory ubatch must have the same token count, and a new prompt is processed up
+  to 8192 tokens at a time while the others wait: 0.3 s around a copied prefix (measured), a 2K-token
+  tool result's prefill (~1.7 s at 1187 t/s), 1.4 s for a conversation read back from disk (measured). Ubatches of uneven sequences and a
+  per-step prompt budget are the next round's work.
 - With MTP, a long answer after a checkpoint rewind can part from the first pass at a near tie. The
   target's rewind is exact - with MTP off, 400 tokens after rewinding a 93K-token prompt are bitwise
   the first pass - but with it on the two part at token 293 on a -1.615 / -1.628 tie that the draft's
@@ -440,7 +510,7 @@ gate could not see them:
   longer switches the block-key cache off for good. The mixed reserve graph lost its dense mask with
   it: four slots at 262144 × 8192 load and cost 1.3 GB over one slot (4096 used to cost 9 GB and
   8192 did not load), so the default `-np 1` is only about the ~1 GB and the slower prefill of a
-  shared pool. Image input needs a single slot.
+  shared pool. Since 0.2.6 four slots are the default, and image input works with several.
 - **What the prompt cache cost in system RAM.** `--cache-ram` defaults to 8192 MiB and the manager never
   set it, so the server held ~8 GB of system memory for cached conversation state on a machine whose GPU
   carve leaves 31.6 GB for the whole desktop — the KV cache is in the carve, this was the RAM tier above
