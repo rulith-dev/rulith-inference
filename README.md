@@ -9,17 +9,17 @@ Target: **Ryzen AI Max+ 395** (Radeon 8060S, gfx1151, 128 GB unified memory) run
 
 ## Where it stands
 
-Measured on the target machine with 0.2.3 (2026-09-26; several conversations with 0.2.4), speculative
-decoding on: prefill over 95.6K tokens of real text; 400 tokens decoded after 86K tokens of that text,
-and after a one-line question; several conversations of ~4K tokens each decoding together, with a new
-sampling seed every round:
+Measured on the target machine with 0.3.0 (2026-09-28), speculative decoding on, at the app's default
+settings (eight conversation slots, MTP, images on): prefill over 95.6K tokens of real text; 400 tokens
+decoded after 86K tokens of that text, and after a one-line question; and at four slots, several
+conversations of ~4K tokens each decoding together, with a new sampling seed every round:
 
 | | |
 | --- | --- |
-| prefill | **1183 t/s** |
-| decode, 86K context | **30.7 ms/token** (32.6 tok/s at 63% draft acceptance) |
-| decode, short context | **24.4 ms/token** (41.0 tok/s at 66% acceptance) |
-| decode, 3 / 4 conversations at once | **53.6 / 61.4 tok/s** summed (1.50× / 1.71× one conversation measured the same way) |
+| prefill | **1217 t/s** |
+| decode, 86K context | **28.0 ms/token** (35.8 tok/s at 63% draft acceptance) |
+| decode, short context | **22.3 ms/token** (44.9 tok/s at 67% acceptance) |
+| decode, 3 / 4 conversations at once | **58.8 / 62.6 tok/s** summed (1.44× / 1.53× one conversation measured the same way, 40.9) |
 | image input | supported (Qwen3-VL projector) |
 
 Every number in this repository comes with the command that produced it, in

@@ -108,6 +108,8 @@ CHECKPOINT_MIN_STEP = 4096
 # the largest KV pool a profile may ask for (kv_pool): four full-length conversations. What actually fits is the
 # GPU carve and the commit limit's business; this only stops a typo from asking for terabytes
 KV_POOL_MAX = 1048576
+# the largest KV pool the MTP draft keeps its full 2048-token ubatch for (see draft_ubatch)
+DRAFT_UBATCH_FULL_POOL = 524288
 # profile fields an earlier version had: a page or a saved profile that still sends one is not refused for it.
 # shared_vram forced GGML_HIP_ENABLE_UNIFIED_MEMORY, which nothing reads (see runtime_environment).
 RETIRED_FIELDS = ('shared_vram',)
@@ -670,6 +672,15 @@ def dedicated_vram_bytes():
     return best
 
 
+def draft_ubatch(pool):
+    """The MTP draft's ubatch for a KV pool of `pool` cells: HIP_GATES' 2048 up to 512K cells, then smaller in
+    proportion, in steps of 256, never under 512."""
+    base = int(HIP_GATES['STRIX_SPEC_DRAFT_UBATCH'])
+    if pool <= DRAFT_UBATCH_FULL_POOL:
+        return base
+    return max(512, base * DRAFT_UBATCH_FULL_POOL // pool // 256 * 256)
+
+
 def kv_pool_cells(cfg):
     """The cells of the KV pool a load allocates: the context, or with several slots the kv_pool setting when it
     is larger, rounded up to the 256 cells llama.cpp pads the pool to."""
@@ -773,6 +784,12 @@ def runtime_environment(cfg):
     # where the limit stays upstream's and the results stay those of earlier versions.
     if cfg.get('parallel', 1) > 1:
         env['STRIX_MOE_VEC_MAX'] = '6'
+    # The draft context reserves a dense mask over the whole KV pool for its ubatch, ~4.8 KiB a cell at the 2048 above:
+    # 2.4 GB at 512K cells, and at 768K the load died on the draft's 3.9 GB compute buffer with the target already in
+    # (a user's log, 2026-09-26). Past 512K cells the draft takes a smaller ubatch, so its reserve stays at the 512K
+    # figure; only the draft's share of a prefill (its one layer) runs in more, smaller passes.
+    if cfg.get('mtp'):
+        env['STRIX_SPEC_DRAFT_UBATCH'] = str(draft_ubatch(kv_pool_cells(cfg)))
     if not bundled_rocm():
         env['PATH'] = str(ROCM_BIN) + os.pathsep + os.environ.get('PATH', '')
     return env

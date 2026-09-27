@@ -200,7 +200,9 @@ def main():
                 return 2
             label = args.name or cfg_name
             print("== %s" % label)
-            call("stop", {})
+            # only the production port is the app's server to stop; on a test port nothing of the user's is touched
+            if args.port == 8080:
+                call("stop", {})
             if not wait_vram_free():
                 print("  VRAM never freed; something else is holding the carve")
                 return 1
@@ -216,6 +218,9 @@ def main():
             cmd = manager.argv(m, cfg)
             if args.runtime:
                 cmd[0] = str((ROOT / args.runtime / "llama-server.exe").resolve())
+            # the server listens where the probe looks: manager.argv names the production port
+            if "--port" in cmd:
+                cmd[cmd.index("--port") + 1] = str(args.port)
             cmd += shlex.split(args.argv_add)
             env = manager.runtime_environment(cfg)
             env.update(CONFIGS[cfg_name])

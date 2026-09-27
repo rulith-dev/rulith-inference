@@ -512,6 +512,13 @@ class ManagerTests(unittest.TestCase):
             self.assertNotIn('--kv-unified-per-slot',args)
         with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'parallel':4,'vision':False,'kv_pool':1000},self.model)
         self.assertEqual(caught.exception.code,'kv_pool_below_context')
+    def test_the_draft_ubatch_shrinks_with_a_kv_pool_past_512k_cells(self):
+        # the draft reserves a dense mask over the whole pool for its ubatch; past 512K cells a smaller one keeps it there
+        self.assertEqual([m.draft_ubatch(p) for p in (131072,524288,786432,1048576)],[2048,2048,1280,1024])
+        cfg=dict(m.profile(self.model),parallel=4,mtp=True,kv_pool=786432)
+        self.assertEqual(m.runtime_environment(cfg)['STRIX_SPEC_DRAFT_UBATCH'],'1280')
+        cfg['kv_pool']=0
+        self.assertEqual(m.runtime_environment(cfg)['STRIX_SPEC_DRAFT_UBATCH'],'2048')
     def test_disk_prompt_cache_is_a_switch_that_sets_the_server_environment(self):
         # off unless asked for: nothing goes to the SSD by default
         self.assertIs(m.validate_profile({'mtp':False},self.model)['prompt_cache_disk'],False)

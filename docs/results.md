@@ -23,17 +23,32 @@ the driver pages during decode: prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/t
 
 ## Headline
 
-Measured 2026-09-26 on 0.2.3, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
+Measured 2026-09-28 on 0.3.0, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
 **on a freshly started server** (see the image note below — that qualifier is load-bearing), with the
-model files of [the README's list](../README.md#model-files):
+model files of [the README's list](../README.md#model-files) and the app's default settings (eight
+slots, MTP with three drafts, images on, f16 K/V):
 
 | | | |
 |---|---|---|
-| prefill, 95.6K tokens of real text | **1183 t/s** | 1191.2 / 1167.4 / 1182.8 over 3 runs |
-| decode, 86K context | **30.7 ms/token** (32.6 tok/s) | 32.14 / 30.65 / 29.81, draft acceptance 63%, 2.84 tokens per pass |
-| decode, short context | **24.4 ms/token** (41.0 tok/s) | 25.31 / 24.38 / 24.27, acceptance 66%, 2.90 tokens per pass |
-| decode, 3 / 4 conversations at once | **53.6 / 61.4 tok/s** summed | 0.2.4, ~4K tokens each, default sampling with a new seed every round, nine rounds each |
+| prefill, 95.6K tokens of real text | **1217 t/s** | 1215.8 / 1217.3 / 1221.4 over 3 runs |
+| decode, 86K context | **28.0 ms/token** (35.8 tok/s) | 28.04 / 27.95 / 27.80, draft acceptance 63%, 2.84 tokens per pass |
+| decode, short context | **22.3 ms/token** (44.9 tok/s) | 22.29 / 23.36 / 22.23, acceptance 67%, 2.94 tokens per pass |
+| decode, 3 / 4 conversations at once | **58.8 / 62.6 tok/s** summed | four slots, ~4K tokens each, default sampling with a new seed every round, nine rounds each; one conversation 40.9 |
 | image input | works | Qwen3-VL projector, 904 MB |
+
+Against 0.2.3 on the same protocol (2026-09-26, the rows below): prefill 1183 -> 1217 t/s, decode at 86K
+30.7 -> 28.0 ms/token and at short context 24.4 -> 22.3 at the same acceptance and tokens a pass - the
+0.2.5-0.2.9 rounds (the prefix cache, GDN rollback without snapshots, ragged ubatches, the GDN and norm
+kernels). Several conversations: 53.6 / 61.4 -> 58.8 / 62.6 summed, while one conversation measured the
+same way went 35.8 -> 40.9, so the ratios read 1.44× / 1.53× instead of 1.50× / 1.71×. Details:
+`docs/results/stable-030-20260928.json`. The 2026-09-26 table:
+
+| | | |
+|---|---|---|
+| prefill, 95.6K tokens of real text | 1183 t/s | 1191.2 / 1167.4 / 1182.8 over 3 runs |
+| decode, 86K context | 30.7 ms/token (32.6 tok/s) | 32.14 / 30.65 / 29.81, draft acceptance 63%, 2.84 tokens per pass |
+| decode, short context | 24.4 ms/token (41.0 tok/s) | 25.31 / 24.38 / 24.27, acceptance 66%, 2.90 tokens per pass |
+| decode, 3 / 4 conversations at once | 53.6 / 61.4 tok/s summed | 0.2.4, ~4K tokens each, default sampling with a new seed every round, nine rounds each |
 
 The first run of each decode group is a warm-up: 32.14 against 30.2 for the other two, 25.31 against
 24.3. The prefill figures need no such caveat — runs land within 1-3% of each other.
@@ -44,6 +59,9 @@ it are 95,582 tokens, 302,000 are ~86K:
 - prefill: `tools/decode_lab.py --config dectime --words 700 --n 4 --gen 16 --gen-prefix <text> --gen-prefix-chars 340000`
 - decode at 86K: `tools/decode_lab.py --config base --words 700 --n 4 --gen 400 --gen-prefix <text> --gen-prefix-chars 302000`
 - decode at short context: the same without `--gen-prefix`, so the prompt is the lab's one-line question
+- 0.3.0 ran each with `--runtime <build> --port 8091 --model ba09dd01dc9c5fd1df9d`: the lab's default model is
+  the catalog's first, which on this machine now sorts to another model, and until 0.3.0 it launched on the
+  production port (8080) and stopped the app's server whatever `--port` said
 
 Earlier prefill on the same text: 0.2.0 1187.4 / 1183.7 / 1200.6 (2026-09-25), 0.1.17 999.1 / 965.5 /
 992.4, 0.1.9 982.1 / 979.6 / 988.7 (2026-09-23), 0.1.8 888.3 / 892.9 / 889.7, and the 2026-09-19 build
@@ -556,6 +574,41 @@ probability identical to 0.2.8, PPL 2.6814, and the user's-case probe's first-to
 A 95.6K-token real-text prefill, alternating on fresh servers: 0.2.8 1226 / 1231 t/s, 0.2.9 1242 /
 1245. Details: `docs/results/qsa-between-20260927.json`.
 
+**The stable release: large KV pools with MTP, one pass over the cells' membership, and a soak (0.3.0,
+2026-09-28).** With MTP on, a KV pool above ~512K cells failed to load: the draft context reserves a
+dense mask over the whole pool for its ubatch, ~4.8 KiB a cell at the 2048 the manager gives it - 3.9 GB
+at 768K, which a user's log showed failing after the target and its K/V had loaded. The manager now
+shrinks the draft's ubatch past 512K cells in proportion (`draft_ubatch`: 1536 at 640K, 1280 at 768K,
+1024 from 896K, never under 512), so the reserve stays where a 512K pool put it; only the draft's share
+of a prefill, its one layer, runs in more passes. Loads at four slots with MTP, dedicated / shared GPU
+memory after an 8K prompt: q8_0 512K 83.5 / 1.5 GB, 640K 87.5 / 1.4, 768K 91.5 / 1.4 (it did not load),
+896K 92.0 / 4.9, 1M 92.1 / 8.8; f16 512K 87.7 / 1.5, 640K 92.3 / 1.9, 768K 92.1 / 7.3. The carve's
+dedicated part tops out near 92 GB, and past it the display driver places the rest in shared memory,
+slower but loaded, as the manager's defaults already assume. The user's-case probe (three long answers, a
+new chat, a conversation back from disk with a tail) at a 768K q8_0 pool with MTP runs as at 512K
+without it.
+
+`apply_kq_mask_seq_bits_030`: each sequence's first KQ-mask row tested every cell's membership bitset
+(256 bits, 32 bytes a cell), so a step of several conversations read the window's bitsets once per
+conversation. The bits of the step's sequences are now gathered in one pass, two bytes a cell, and the
+rows test those; the test and the cells are the same. `STRIX_KQ_MASK_CHECK=1` fills every mask the
+upstream way as well and compares the two byte for byte: over several conversations of ~28K tokens,
+images in several conversations and eight agents, 900+ masks, none different. Four conversations over
+~112K cells: a step's inputs 2.33 -> 1.75 ms (median of 74-76 steps).
+
+Checked for the release: the full gate set of 0.2.9 (an 18.6K-token prompt's text and top-5
+probabilities identical to 0.2.9's, PPL 2.6814, 40 chunks at ctx 8192 identical chunk by chunk, 2.8134);
+a prompt past the context is refused with HTTP 400 and `exceed_context_size_error` and the server stays
+healthy; an answer that runs into the end of a 16K context with MTP drafting stops with `stop_type`
+`limit` after 1112 tokens and the server answers the next request; a 254,723-token prompt prefills at 1127 t/s from an empty cache. And a soak (`tmp/qsa/soak.py`, 150 minutes, the app's default profile with images and the disk tier on):
+rounds of six agents, the prefix cache's agent scenario, images in several conversations, four
+conversations decoding together and a 34-50K-token prompt - 29 rounds, 145 steps, none failed, the server
+up throughout. Its idle memory after each round: 85.50 GB dedicated GPU memory in every round, 5.83 GB
+shared from the eighth on, 675 handles; private bytes rose from 95.2 to ~98 GB over the first nine rounds
+as the slots filled with conversations and their checkpoints, then averaged 97.72 GB over rounds 10-19 and
+97.82 over 20-29, within 96.7-98.4 throughout.
+Details: `docs/results/stable-030-20260928.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -619,7 +672,9 @@ gate could not see them:
   (`rewind` in `docs/results/disk-tier-v3-20260924.json`).
 - Graph reuse on speculative decodes is ~45%: the draft context alternates between two batch shapes
   against one cached graph result. More than one live result needs scheduler surgery.
-- `set_input_kq_mask` scans all 85K cells once per decode (~0.9 ms).
+- `set_input_kq_mask` scans a conversation's whole window once per decode (~0.9 ms at 85K cells). Since 0.3.0 a
+  step of several conversations reads the cells' membership bits once for all of them instead of once each
+  (four conversations over ~112K cells: the step's inputs 2.33 -> 1.75 ms); the scan itself stays.
 - About 43 ms of the 85K pass is weight bandwidth and does not move without changing the file.
 - Decode has roughly 2.5× of unused machine *with speculation off*: 1 stream 19.0 tok/s aggregate,
   2 streams 30.6, 4 streams 47.1, because the weight bytes are read once per batch regardless of

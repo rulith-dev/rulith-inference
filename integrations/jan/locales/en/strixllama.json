@@ -188,7 +188,7 @@
       "kvPool": "Shared context pool",
       "kvPoolHelp": "Tokens the conversations share; 0 means the context length",
       "kvPoolSingle": "Takes effect with two or more concurrent conversations; one conversation’s pool is its context",
-      "kvPoolInfo": "The context memory the concurrent conversations share, when it should hold more than one of them at full length; each conversation is still limited to the context length. 0 = the context. Every token of the pool costs GPU memory: for Qwen3.8-Flash-Next about 33 KB with an f16 KV cache and 21 KB with q8_0, plus about 5 KB for the MTP draft’s mask. The K/V part also counts against Windows commit (RAM + page file). Measured on a 96 GB carve with q8_0, 4 conversations and MTP: 512K fits (84 GB in use), 768K runs out of GPU memory. Applies on the next load."
+      "kvPoolInfo": "The context memory the concurrent conversations share, when it should hold more than one of them at full length; each conversation is still limited to the context length. 0 = the context. Every token of the pool costs GPU memory: for Qwen3.8-Flash-Next about 33 KB with an f16 KV cache and 21 KB with q8_0, plus about 5 KB for the MTP draft’s mask up to 512K (beyond it the draft works in smaller steps and that part stops growing). The K/V part also counts against Windows commit (RAM + page file). Measured on a 96 GB carve with q8_0, 4 conversations and MTP: 768K fits (about 91.5 GB in use); larger pools put part of it in shared GPU memory, which works but is slower. Applies on the next load."
     },
     "speculative": {
       "title": "Speculative decoding",

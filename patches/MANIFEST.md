@@ -558,3 +558,11 @@ Four files join the delta (68: 64 modified, 4 added): `fattn.cu`, `norm.cu`, `no
 | `apply_qsa_between_029` | `qwen4exp.cpp`, `fattn.cu` | a ubatch of 33-127 queries a sequence sits between the decode gather (at most `LLAMA_QSA_DECODE_GATHER_MAX_T` = 32) and the qsa3 prefill kernel (at least 128): its block selection went to the generic flash attention with the plain causal mask, which ignores the selection, so tool results and short follow-ups at depth attended densely to every visible cell. Such ubatches take the top-k and the top-k mask. `fattn.cu` aborts when a maskless op with selected indices would reach a generic kernel: 0.2.7's wide-window bug, and this one, would have failed loudly |
 | `apply_gdn_r16_lds_029` | `gated_delta_net.cu` | the r16 recurrence loads each tile from global memory straight into LDS; staged through per-thread register arrays it kept them in scratch (10 `scratch_store_b128` and 10 `scratch_load_b128` a tile). GDN in a 64K-token prefill 3006 -> 2582 ms, bitwise |
 | `apply_norm_rows_plain_029` | `norm-gated.cu`, `norm-gated.cuh`, `norm.cu` | `rms_rows_f32` (a wave a row, 8 rows a block) takes a variant without weights, and `rms_norm_f32_cuda` hands it rows of at most 256 floats when there are at least 4096 of them: the per-head q/k norms of a 64K-token prefill 449 -> 352 ms, bitwise |
+
+## Addendum 2026-09-28: 0.3.0
+
+No file joins the delta (68: 64 modified, 4 added); 71 patches.
+
+| patch | files | what |
+|---|---|---|
+| `apply_kq_mask_seq_bits_030` | `llama-kv-cache.cpp` | each sequence's first KQ-mask row tested every cell's membership bitset (256 bits, 32 bytes a cell), so a ubatch of several conversations read the window's bitsets once per conversation; the bits of a ubatch's sequences (2-16 of them, one cell array, windows of at least 4096 cells) are gathered in one pass, two bytes a cell, and the rows test those - the same test on the same cells. Four conversations over ~112K cells: a step's inputs 2.33 -> 1.75 ms. `STRIX_KQ_MASK_CHECK=1` fills every mask the upstream way as well and compares the two byte for byte |
