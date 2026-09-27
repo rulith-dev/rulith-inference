@@ -537,6 +537,25 @@ at p50 / p90 against 3.37 / 7.66; with the cost rule two runs gave 111 and 114 s
 4.57 / 7.78 s, and the longest pause 2.7 and 2.6 s against 2.7. Details:
 `docs/results/prompt-alone-20260927.json`.
 
+**Sparse attention between the two kernels, and two prefill kernels without scratch (0.2.9,
+2026-09-27).** A ubatch of 33-127 queries a sequence sat between the two kernels that read the sparse
+selection: the decode gather takes at most 32 (`LLAMA_QSA_DECODE_GATHER_MAX_T`) and the qsa3 prefill
+kernel at least 128. Its block selection went to the generic flash attention with the plain causal mask,
+which ignores the selection, so the queries attended densely to every visible cell - tool results and
+short follow-up messages at depth, what agents send. `apply_qsa_between_029` gives such ubatches the
+plain top-k and the top-k mask (the selection's -1 sentinels are for the kernels; the mask's `set_rows`
+cannot take them), and `fattn.cu` now aborts when a maskless op with selected indices reaches a generic
+kernel, so 0.2.7's wide-window bug and this one would have stopped the server instead of attending
+densely. The GDN's r16 kernel staged each tile through per-thread register arrays that the compiler kept
+in scratch (10 `scratch_store_b128` and 10 `scratch_load_b128` a tile, a private segment of 112-272
+bytes a lane; `tmp/qsa/scratch_scan.py` lists every kernel's); loaded straight into LDS it needs none,
+and a 64K-token prefill's GDN time goes 3006 -> 2582 ms. The per-head q/k norms (rows of 128 floats)
+ran the generic kernel, a block a row; the gated norm's kernel, a wave a row, takes a variant without
+weights: 449 -> 352 ms. Both are bitwise: an 18.6K-token prompt and 48 tokens with every top-5
+probability identical to 0.2.8, PPL 2.6814, and the user's-case probe's first-token logprobs the same.
+A 95.6K-token real-text prefill, alternating on fresh servers: 0.2.8 1226 / 1231 t/s, 0.2.9 1242 /
+1245. Details: `docs/results/qsa-between-20260927.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -576,6 +595,13 @@ gate could not see them:
   span all of their cells, so four long conversations crossed it: ~20 ms a token and a different
   answer. No gate saw it: they load one or two conversations, and at half the sizes the window stays
   under the limit. `tmp/ragged/multi_deep_probe.py --evict --restore` fills a 512K pool (0.2.8 above).
+- **Pieces of 33-127 tokens attended densely (0.2.9).** Between the decode gather (at most 32 queries)
+  and the qsa3 kernel (at least 128), the block selection went to a generic kernel that ignores it, with
+  the plain causal mask: dense attention over the whole visible context instead of the model's sparse
+  attention, for exactly the tool results and short messages agents send at depth. Such ubatches take
+  the top-k mask now, and a maskless op with selected indices that reaches a generic kernel stops the
+  server. Perplexity could not tell the two apart (8 chunks move 1-2% between benign variants of this
+  model); the kernel map could.
 
 ## What is still open
 

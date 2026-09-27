@@ -1,0 +1,96 @@
+{
+ "question": "Do ubatches of 33-127 queries a sequence read the sparse selection, and what do the GDN r16 scratch removal and the narrow-row norms give?",
+ "date": "2026-09-27",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS",
+ "between_kernels": {
+  "what": "qwen4exp_qsa_between_kernels(n_tps): more queries than the decode gather takes (LLAMA_QSA_DECODE_GATHER_MAX_T, 32), fewer than qsa3's 128. Block selection and direct indices are off for such ubatches, so they take the plain top-k and the top-k mask",
+  "before": "the block selection's indices went to the generic flash attention with the plain causal mask (the kernel ignores src[5]): dense attention over every visible cell",
+  "ppl_note": "ctx 8192, ubatch 64, 8 chunks: 2.6494 with the top-k mask against 2.6560 before - inside the 1-2% that 8 chunks move between benign variants of this model, so not evidence either way"
+ },
+ "guard": "fattn.cu: dst->src[5] set and dst->src[3] null (maskless with selected indices) past the qsa3 dispatch aborts with the shapes",
+ "gdn_r16_lds": {
+  "what": "the r16 recurrence loads each tile straight into LDS instead of staging it through per-thread register arrays that spilled to scratch",
+  "scratch_before": "10 scratch_store_b128 + 10 scratch_load_b128 a tile, private segment 112-272 bytes a lane",
+  "scratch_after": 0,
+  "gdn_ms_64k_prefill": [
+   3005.8,
+   2582.4
+  ],
+  "bitwise": true
+ },
+ "norm_rows_plain": {
+  "what": "rms_rows_f32<false, false>: plain RMS norm, a wave a row, for rows of <= 256 floats when there are >= 4096 of them",
+  "qk_norm_ms_64k_prefill": [
+   449,
+   352
+  ],
+  "bitwise": true
+ },
+ "prefill_95k": {
+  "protocol": "tmp/qsa/profile_client.py --text tmp/realtext.txt --chars 340000 --n 4, fresh server each run, parallel 1, MTP off, alternating",
+  "0.2.8": [
+   1226,
+   1231
+  ],
+  "0.2.9": [
+   1242,
+   1245
+  ]
+ },
+ "release_gates": {
+  "runtime": "src/llama.cpp/build/bin (the source of fork commit 0.2.9)",
+  "bitwise_vs_0_2_8": "18.6K prompt, f16, MTP off: text and every top-5 probability identical (tmp/fusion_equiv_probe.py rel29f16 vs rel28f16)",
+  "ppl_ctx8192_8chunks_f16_ub8192": 2.6814,
+  "truncation_79K_mtp": "prompt 77394, 1135 tokens, stop, section 30/30, 33.3 tok/s; from the cache the same at 33.8",
+  "agent_probe_4_slots_q8_0": "40 turns, 3 conversations: no warnings",
+  "mtp_rewind_60K_chars": "64 / 64 entries, tokens and top-3 identical",
+  "fault_probes": "ckpt:1, decode:3, post:2: the retry and the next request answer, no non-consecutive positions",
+  "vision": "tools/vision_stress.py at eight slots: OK; tmp/pc/vision_multi_conv.py: OK",
+  "long_pair_disk": "two long conversations in a 393216 pool: B again 14 tokens processed, 155675 cached; private peak 84.99 GB",
+  "cache_workload_8_slots_disk_off": {
+   "agent": {
+    "ratio": 0.99,
+    "prompt_time_s": 50.1
+   },
+   "edit": {
+    "ratio": 1.0,
+    "prompt_time_s": 22.5
+   }
+  },
+  "several_conversations_4K_each_vary_seeds": {
+   "0.2.8": {
+    "1": [
+     39.9,
+     64.0
+    ],
+    "3": [
+     58.0,
+     66.7
+    ],
+    "4": [
+     63.5,
+     67.7
+    ]
+   },
+   "0.2.9": {
+    "1": [
+     39.1,
+     64.0
+    ],
+    "3": [
+     58.6,
+     67.8
+    ],
+    "4": [
+     62.8,
+     66.5
+    ]
+   },
+   "unit": "mean tok/s summed over six rounds, mean acceptance %; decode takes no changed kernel (r16 starts at 16 tokens)"
+  },
+  "agent_sim_8_slots": "26 requests, processed 0.97x ideal, prompt time 90.3 s, ttft p50/p90 3.37/7.60 s, longest gap 2.76 s",
+  "stall_probe_19K": "B 19181 tokens in 21.05 s, longest gap of the streaming conversation 2.26 s",
+  "users_case_multi_deep": "D 2386 tokens 3.3 s, E + 3.9K tail from disk 4.3 s (others paused 2.9 s), F 837 tokens 1.5 s; first-token logprobs as 0.2.8's"
+ }
+}
