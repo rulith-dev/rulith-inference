@@ -1,0 +1,210 @@
+{
+ "question": "Why did prompts on 0.2.7 run at 42-46 t/s (and 415-750 t/s for long ones) while other conversations answered, freezing them for 19-79 s, and is running a prompt in a pass of its own faster?",
+ "date": "2026-09-27",
+ "machine": "GTR9 Pro, Ryzen AI Max+ 395, 96 GB GPU carve, Windows 11, TheRock ROCm 10.2.0a20260925",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, f16 K/V, sparse attention on",
+ "tool": "tmp/ragged/multi_deep_probe.py --evict --restore (4 slots, kv_pool 512000, MTP off, disk tier on): E ~60K answered and left idle; A 88K, B 49K, C 74K streamed, each starting once the previous one streams; D a new 2.4K-token chat taking E's slot; E again with a 3.9K-token tail read back from the disk tier; F a new 837-token chat",
+ "root_cause": {
+  "kernel_limit": "qsa3 (ggml_cuda_flash_attn_ext_qsa_supported) declined k->ne[1] > 262140: its union list held 16-bit block numbers (65535 blocks of 4 cells)",
+  "fallback": "the generic flash-attention kernels ignore the selected indices (src[5]); the prompt-sized graph was maskless (n_tps >= 128), so every query attended densely to every cell of the window",
+  "why_0_2_7": "ragged ubatches put a 2048-token prompt chunk with the answering conversations' tokens; the window of a ubatch of several sequences spans all of their cells (298752 cells for A+B+C+E)",
+  "node_timing_E_tail_ubatch": "40.0 s: 12 x FLASH_ATTN_EXT [256,24,2051] 36.6 s; index scoring and visibility over 68480 blocks ~1.2 s",
+  "half_size_run": "136K cells in all: under the limit, no stall (E tail 709 t/s)"
+ },
+ "scenario": {
+  "columns": [
+   "B prefill t/s",
+   "B first token s",
+   "C prefill t/s",
+   "C first token s",
+   "D prompt s",
+   "E tail prompt s",
+   "others' longest pause during E tail s",
+   "F prompt s"
+  ],
+  "0.2.7": [
+   793,
+   61.9,
+   695,
+   106.5,
+   4.8,
+   76.6,
+   41.3,
+   2.0
+  ],
+  "0.2.7 STRIX_RAGGED=0": [
+   1012,
+   48.6,
+   988,
+   75.1,
+   3.4,
+   4.4,
+   3.0,
+   1.6
+  ],
+  "32-bit blocks, STRIX_MIX_MAX=0": [
+   805,
+   61.0,
+   685,
+   108.2,
+   4.8,
+   6.8,
+   4.4,
+   2.0
+  ],
+  "0.2.8": [
+   1035,
+   47.5,
+   1006,
+   73.7,
+   3.3,
+   4.3,
+   3.0,
+   1.5
+  ],
+  "0.2.6 (no prompt budget)": {
+   "B prefill t/s": 1223,
+   "B first token s": 40.3,
+   "C first token s": 61.7,
+   "D prompt s": 3.1
+  }
+ },
+ "correctness_chat_E_tail": {
+  "question": "What is the last part of the text above about? Answer in one sentence. (E and E+tail as chat messages)",
+  "0.2.8 alone": {
+   "answer": "The last part of the text is a table listing various sampling parameters and their explanations, which appears to be cut off mid-sentence.",
+   "first_token_logprobs": {
+    "The": -0.0069,
+    "Based": -5.2102,
+    " The": -8.2918
+   },
+   "prompt_s": 10.2
+  },
+  "0.2.8 next to A, B, C": {
+   "answer": "same",
+   "first_token_logprobs": {
+    "The": -0.0064,
+    "Based": -5.3074,
+    " The": -8.535
+   },
+   "prompt_s": 12.7
+  },
+  "0.2.7 next to A, B, C": {
+   "answer": "The last part of the text is a truncated reference table listing command-line arguments for sampling parameters in the `llama.cpp` examples.",
+   "first_token_logprobs": {
+    "The": -0.0093,
+    "Based": -5.5184,
+    " The": -6.2959
+   },
+   "prompt_s": 233.4
+  },
+  "noise_floor": "batch shape alone moves a first token's logprob by 0.15 on average, 0.32 at most (0.2.7 measurement)"
+ },
+ "memory_gb_dedicated": {
+  "4 slots, 131072 cells, MTP and images on, batch 4096": {
+   "0.2.7": [
+    71.78,
+    72.49
+   ],
+   "0.2.8": [
+    71.78,
+    72.49
+   ]
+  },
+  "4 slots, kv_pool 512000, MTP off": {
+   "0.2.7": [
+    78.89,
+    79.8
+   ],
+   "0.2.8": [
+    78.89,
+    79.8
+   ]
+  },
+  "order": "[after load, after an 8K-token prompt]"
+ },
+ "mix_rule": {
+  "short": "sequences with at most STRIX_MIX_MAX = 32 tokens left share a ubatch, at most STRIX_MIX_TOTAL = 32 tokens in all",
+  "long": "a prompt chunk joins while rem*sum(ctx of others) + ctx*sum(rem of others) + 0.5*rem*ctx (+ the first member's bounds) <= STRIX_MIX_CELLS = 6e7 query-cells",
+  "agent_sim_8_slots": {
+   "0.2.7": {
+    "prompt_time_s": 106.3,
+    "ttft_s_p50_p90_max": [
+     3.37,
+     7.66,
+     11.56
+    ],
+    "gap_ms_p99_max": [
+     2427,
+     2746
+    ],
+    "gaps_over_1s": 50
+   },
+   "every chunk alone": {
+    "prompt_time_s": 125.1,
+    "ttft_s_p50_p90_max": [
+     4.21,
+     11.16,
+     11.78
+    ],
+    "gap_ms_p99_max": [
+     1763,
+     3017
+    ],
+    "gaps_over_1s": 34
+   },
+   "0.2.8 run 1": {
+    "prompt_time_s": 111.1,
+    "ttft_s_p50_p90_max": [
+     3.6,
+     8.63,
+     11.51
+    ],
+    "gap_ms_p99_max": [
+     2186,
+     2713
+    ],
+    "gaps_over_1s": 47
+   },
+   "0.2.8 run 2": {
+    "prompt_time_s": 114.0,
+    "ttft_s_p50_p90_max": [
+     4.57,
+     7.78,
+     11.36
+    ],
+    "gap_ms_p99_max": [
+     2124,
+     2646
+    ],
+    "gaps_over_1s": 40
+   }
+  }
+ },
+ "release_gates": {
+  "runtime": "src/llama.cpp/build/bin = bin/hip (same llama.dll / ggml-hip.dll), servers on port 8091",
+  "bitwise_vs_0_2_7": "18.6K prompt, f16, MTP off: text and every top-5 probability identical (both builds of 0.2.8)",
+  "ppl_ctx8192_8chunks_f16": 2.6814,
+  "truncation_79K_mtp": "prompt 77394, 1135 tokens, stop, section 30/30, 33.2 tok/s; draft 713/1195",
+  "agent_probe_4_slots_q8_0": "40 turns, 3 conversations: no warnings",
+  "mtp_rewind_60K_chars": "64 / 64 entries identical",
+  "fault_probes": "ckpt:1, decode:3, post:2: retry and next answer as 0.2.7, no non-consecutive positions",
+  "vision": "vision_stress at eight slots: OK; vision_multi_conv at eight: OK (both builds)",
+  "long_pair_disk": "B again 14 tokens processed, 155675 cached",
+  "cache_workload_8_slots_disk_off": {
+   "agent": {
+    "processed": 29338,
+    "ideal": 29846,
+    "prompt_time_s": 49.9
+   },
+   "edit": {
+    "processed": 19682,
+    "ideal": 19726,
+    "prompt_time_s": 21.9
+   }
+  },
+  "multi_stream_4_slots": "pass times at 4 / 9 / 12 tokens 66.9 / 113.4 / 135.1 ms against 67.7 / 114.3 / 136.4; single-stream texts of six sampled rounds identical to 0.2.7",
+  "stall_new_19K": "prompt 20.9 s, a streaming conversation's longest pause 2.2 s (0.2.7: 21.4 s, 2.25 s)",
+  "disk_store_migration": "a store written by 0.2.7: '1 entries of a format before version 4 removed'; a version 4 entry restores (6 of 23475 tokens processed)"
+ }
+}

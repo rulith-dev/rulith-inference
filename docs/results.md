@@ -485,6 +485,58 @@ in use holds up to eight snapshots of its recurrent state in host memory, 112.6 
 the server's working set 6.3 GB at four slots, 9.8 GB at eight). Details:
 `docs/results/agent-sessions-20260927.json`.
 
+**A window the sparse kernel refused, and prompts that share a pass only when it pays (0.2.8,
+2026-09-27).** A user's log on 0.2.7 (four slots, a 512K-cell pool, MTP off, conversations of 45-115K
+tokens) showed prompts of 44-56K tokens arriving while another conversation answered at 415-750 t/s
+against ~1250 alone, and prompts of 890-3348 tokens - a new chat, a conversation read back from the
+disk tier with a short tail - at 42-46 t/s, ~22 ms a token, the other conversations standing still for
+19-79 s. `tmp/ragged/multi_deep_probe.py --evict --restore` reproduces both at full size: a ~60K-token
+conversation E answered and left idle; three conversations of 88K, 49K and 74K tokens (A, B, C), each
+starting once the previous one streams; a new 2.4K-token chat D that takes E's slot; E again with a
+3.9K-token tail, read back from the disk tier into the slot D leaves; a new 837-token chat F.
+
+Both were 0.2.7's ragged ubatches: a 2048-token prompt chunk and the answering conversations' tokens in
+one ubatch. The sparse attention scores its index over every block of the ubatch's sequences, not only
+the query's own (~3 ns a query and cell of the others' contexts: `MUL_MAT [68480, 2048]` and the
+visibility ops cost ~1.2 s of a 2051-token ubatch next to three conversations), and a ubatch of several
+sequences loses the causal score bounds of a single one. The stalls were worse than slow. The window of
+a ubatch of several sequences spans all of their cells, and the qsa3 kernel numbered blocks of 4 cells
+in 16 bits: past 262140 cells it declined. The generic flash-attention kernels that ran instead ignore
+the selected indices, and the graph had left the mask out (every prompt-sized ubatch is maskless), so
+each query attended densely to every cell of the window, the other conversations' and later positions'
+included. `STRIX_NODE_TIMING` on the tail of E: 36.6 of its ubatch's 40.0 s in the 12 `FLASH_ATTN_EXT`,
+2051 queries over 298752 cells. Half the sizes (136K cells in all) stayed under the limit and never
+showed it. The result was wrong, and the disk tier stored it: asked about the tail of E as a chat, 0.2.8
+alone and 0.2.8 next to the three answers gave the same sentence (first-token logprobs -0.0069 / -5.21 /
+-8.29 against -0.0064 / -5.31 / -8.54), 0.2.7 next to them a different one (-0.0093 / -5.52 / -6.30,
+two nats off where batch shape moves them by 0.15-0.3), after 233 s instead of 13.
+
+`apply_qsa3_wide_window_028` gives the kernel's union list 32-bit block numbers, so it takes a window of
+any size; below 262141 cells it computes what it did (an 18.6K-token prompt: 48 tokens and their top-5
+probabilities identical to 0.2.7; PPL 2.6814; the single-stream texts of six sampled rounds identical).
+`apply_prompt_alone_028` puts the short sequences of a batch together (decode tokens, MTP verify drafts,
+a prompt of a few tokens; at most 32 tokens in all, what the sparse attention's decode gather takes), and
+a prompt chunk joins them only while the query-cells it adds - its queries over the others' contexts,
+theirs over its own, the lost score bounds - stay under 6e7 (`STRIX_MIX_CELLS`, ~0.2 s, about a pass);
+otherwise it runs alone next. Next to long conversations a chunk always runs alone; short tails next to
+small conversations still share. `apply_disk_store_v4_028` renumbers the disk tier's layout, so a store
+written by 0.2.7 or before is emptied once at startup. GPU memory is the same as 0.2.7's (71.78 GB
+loaded at the default 4 slots, 131072 cells, MTP and images on; 78.89 GB at a 512K pool without MTP).
+
+| four slots, 512K pool, MTP off | B 49K prompt | C 74K prompt | D 2.4K chat | E + 3.9K tail (from disk) | F 837-token chat |
+| --- | --- | --- | --- | --- | --- |
+| 0.2.7 | 793 t/s, first token 61.9 s | 695 t/s, 106.5 s | 4.8 s | 76.6 s, others paused 41.3 s | 2.0 s |
+| 0.2.7 with the equal-length split (`STRIX_RAGGED=0`) | 1012 t/s, 48.6 s | 988 t/s, 75.1 s | 3.4 s | 4.4 s, 3.0 s | 1.6 s |
+| 32-bit blocks, every chunk shares (`STRIX_MIX_MAX=0`) | 805 t/s, 61.0 s | 685 t/s, 108.2 s | 4.8 s | 6.8 s, 4.4 s | 2.0 s |
+| 0.2.8 | 1035 t/s, 47.5 s | 1006 t/s, 73.7 s | 3.3 s | 4.3 s, 3.0 s | 1.5 s |
+
+0.2.6, which had no prompt budget, took B at 1223 t/s (first token 40.3 s) and C in 61.7 s, but held the
+answering conversations for each 8192-token step. Letting no chunk share at all cost the six agents of
+`agent_sim.py` a fifth more prompt time (125 s against 106), the time to the first chunk 4.21 / 11.16 s
+at p50 / p90 against 3.37 / 7.66; with the cost rule two runs gave 111 and 114 s, 3.60 / 8.63 and
+4.57 / 7.78 s, and the longest pause 2.7 and 2.6 s against 2.7. Details:
+`docs/results/prompt-alone-20260927.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -517,11 +569,20 @@ gate could not see them:
   `tmp/pc/vision_multi_conv.py` sends images to several loaded conversations, one at a time and at
   the same moment.
 
+- **A prompt next to other conversations attended to all of them (0.2.7).** The sparse prefill kernel
+  numbered blocks in 16 bits and declined a window past 262140 cells; the generic kernels that ran
+  instead ignore the selection, and the prompt-sized graph had no mask, so every query attended to
+  every cell of the window. 0.2.7's ragged ubatches, a prompt chunk next to answering conversations,
+  span all of their cells, so four long conversations crossed it: ~20 ms a token and a different
+  answer. No gate saw it: they load one or two conversations, and at half the sizes the window stays
+  under the limit. `tmp/ragged/multi_deep_probe.py --evict --restore` fills a 512K pool (0.2.8 above).
+
 ## What is still open
 
-- **A generating conversation still pauses while another one's prompt runs.** Since 0.2.7 the
-  prompt shares the pass and takes at most 2048 tokens of it, so a pause is ~2.2 s at most for a new
-  prompt, less for the 0.5-2K-token tool results agents send. What is left: a pass over all the
+- **A generating conversation still pauses while another one's prompt runs.** Since 0.2.7 a step
+  takes at most 2048 prompt tokens while conversations generate, and since 0.2.8 a chunk next to long
+  conversations runs in a pass of its own, so a pause is ~2.2 s for a new prompt next to one answer,
+  ~3 s next to three long ones, less for the 0.5-2K-token tool results agents send. What is left: a pass over all the
   weights costs ~0.25 s however few prompt tokens it carries, so smaller steps buy little; the
   recurrent-state checkpoints go through host memory (19-31 ms each, up to ~0.9 GB of RAM per
   conversation in use); a conversation read back from the disk tier holds the others for ~1.4 s.

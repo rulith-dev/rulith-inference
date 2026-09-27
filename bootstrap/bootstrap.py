@@ -79,6 +79,7 @@ PATCH_ORDER = [
     "apply_image_dense_bound",
     "apply_prefix_cache_026", "apply_gdn_deferred_rollback", "apply_image_rank_per_seq",
     "apply_agent_slots_027", "apply_ragged_ubatch_027",
+    "apply_qsa3_wide_window_028", "apply_prompt_alone_028", "apply_disk_store_v4_028",
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
