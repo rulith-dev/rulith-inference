@@ -38,14 +38,17 @@ HIP_GATES = dict(
     # target ubatch: at ctx 262144 / ubatch 8192 it asks for 3488 MiB and the load dies with
     # "cudaMalloc failed: out of memory". Capping the draft alone keeps both (patches/apply_spec_draft_ubatch.py).
     STRIX_SPEC_DRAFT_UBATCH=2048,
-    # Sparse attention for the MTP draft head. qwen4exp.cpp gates it on n_tokens >= 128, so only the
-    # draft's prefill takes it and the 1-3 query draft steps stay dense - which is what we want: the
-    # draft head has no QSA of its own, so feeding a long prompt into it was quadratic, and its
-    # 2048-query prefill chunks were dominated by a single dense FLASH_ATTN_EXT. It cannot change
-    # what gets drafted, because the K/V a prefill stores are projections of the layer input, not of
-    # the attention output. Measured on an 85K prompt: prefill 817.8 -> 856.5 t/s, decode 33.98 ->
-    # 34.12 tok/s (noise), identical 203/288 draft counts, byte-identical generated text.
-    # Does nothing unless the profile has MTP on.
+    # IndexShare for the MTP draft (patches/apply_mtp_index_share_031.py): once the draft's view of a
+    # conversation passes 32K cells, a draft step attends to the sparse selection a catch-up kept -
+    # refreshed every 32 positions - plus the cells since, instead of reading the whole cache. Per
+    # speculative pass: -3.6% at 86K, -6.5% at 212K, same acceptance; below 32K nothing changes.
+    LLAMA_MTP_INDEX_SHARE=1,
+    # The MTP draft head's indexer cache (the draft context becomes a QSA memory). A ubatch of the
+    # draft without outputs - a prompt, the catch-up after a verify - stores K, V and the indexer keys
+    # and attends to nothing (its attention output reaches no output row), so the draft's prefill is no
+    # longer quadratic; IndexShare above reads the selections. It cannot change what gets drafted
+    # without IndexShare: the K/V stored are projections of the layer input, not of the attention
+    # output. Does nothing unless the profile has MTP on.
     LLAMA_MTP_QSA=1)
 # The sparse-attention gates, driven by the per-model QSA switch. LLAMA_QSA_BLOCK_SELECTION and
 # LLAMA_QSA_DIRECT_INDICES together admit the block-selection path; LLAMA_QSA_SPARSE decides whether

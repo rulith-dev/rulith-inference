@@ -1,0 +1,56 @@
+{
+ "question": "0.3.1: does a new conversation in a used slot score its first blocks with its own keys, and does IndexShare make the MTP draft cheaper at depth without costing short contexts?",
+ "date": "2026-09-28",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP draft head IQ4_XS",
+ "block_key_pending": {
+  "bug": "the QSA block-key cache refreshed a block's key only in a graph that runs the indexer; a view of <= indexer_top_k + ratio - 1 = 2051 cells takes the dense shortcut (build_qsa_store_k), which writes indexer keys without refreshing block keys, and nothing marked them stale: a new conversation in a used slot whose first prompt was under ~2K tokens kept the previous conversation's keys for those cells. Present since the cache (2026-09-18)",
+  "probe": "tmp/qsa/kb_stale_probe.py via tmp/qsa/kb_stale.sh: one slot, MTP off, greedy chat; 'fresh' = B1 (1521 tokens) then B2 (+~8.5K tokens, 10019 new) on a new server; 'ab' = the same after a 3246-token A in the slot",
+  "0.3.0": "the released runtime (tmp/hip-030): B1 identical, B2 different: first-token top-5 logprobs apart by 2.91, up to 9.42 over 48 tokens",
+  "0.3.0_block_key_cache_off": "B1 and B2 bitwise identical (LLAMA_QSA_BLOCK_KEY_CACHE=0)",
+  "0.3.1": "B1 and B2 bitwise identical, and bitwise equal to 0.3.0's fresh run",
+  "fix": "patches/apply_kb_pending_031.py: a graph that writes indexer keys without the indexer leaves its sequences pending from its first position (kb_from); the next indexer graph adds those blocks to its dirty list (up to kb_pending_max = 64 positions besides its own tokens) or rebuilds the sequence in full"
+ },
+ "index_share": {
+  "what": "patches/apply_mtp_index_share_031.py (LLAMA_MTP_INDEX_SHARE=1, set by the manager): a draft step of the QSA MTP layer gathers the sparse selection a catch-up kept for its sequence plus the cells of every position since, instead of attending densely to the draft's whole cache. A catch-up runs the layer's indexer only when the latest kept selection is > 32 positions behind (LLAMA_MTP_INDEX_SHARE_REFRESH), on views >= 32768 cells (LLAMA_MTP_INDEX_SHARE_MIN_KV); a draft loop reuses a selection at most 48 positions old; every reused cell is clamped to the graph's view. A draft ubatch without outputs stores K, V and the indexer keys only (LLAMA_MTP_STORE_ONLY=0 restores the attention)",
+  "per_speculative_pass_ms": {
+   "tool": "tools/decode_lab.py --config base --words 700 --n 4 --gen 400 --gen-prefix <text>, STRIX_SPEC_TIMING=1, median of the 4-token passes (tmp/qsa/st_parts.py)",
+   "86K": {"off": 79.75, "on": 76.9, "draft_accepted": "259/413 off, 258/412 on", "runs": "is2_d, is2_s32"},
+   "212K": {"off": 93.7, "on": 87.6, "0.3.0": "94.5-97.9", "draft_accepted": "239/446 off, 237/455 on", "runs": "is2_ld, is2_ls32"},
+   "30K_min_kv_16384": {"off": [71.0, 71.6], "on": [71.1, 70.6], "text": "identical", "runs": "is2_md, is2_md2, is2_ms32, is2_ms32b"},
+   "store_only_catch_up_alone_2.3K": {"full_catch_up": 66.2, "store_only": 65.0, "text": "byte-identical", "runs": "so_sh_0, so_sh_1"}
+  },
+  "first_design": "the reference's way (every catch-up runs the indexer): 86K 78.6 ms a pass (draft -2.65 ms, catch-up +1.6 ms: the indexer's O(cells) host input scan, ~1.0 ms at 86K, and a bigger catch-up graph rebuilt every pass), ~4% slower at ~4K; replaced by the refresh distance and the 32K floor",
+  "one_stream_4K_ab": "alternating 0.3.0 (bin/hip) and 0.3.1 on the same machine state, 6 rounds each, pass median: 0.3.0 67.7 / 67.0 ms, 0.3.1 67.0 / 66.65 ms"
+ },
+ "headline_decode_lab": {
+  "settings": "the app's saved default profile: 8 slots, MTP draft 3, images on, f16 K/V; --runtime bin/hip --port 8091 --model ba09dd01dc9c5fd1df9d",
+  "prefill_95_6K_t_s": [1227.6, 1229.5, 1221.1],
+  "decode_86K_ms_per_token": [28.65, 27.19, 27.25],
+  "decode_86K_acceptance": "258/412 = 63%, 2.82 tokens a pass",
+  "decode_short_ms_per_token": [22.5, 22.46, 23.42],
+  "decode_short_acceptance": "264/392 = 67%, 2.94 tokens a pass",
+  "several_conversations_tok_s": {"1": 39.7, "3": 55.4, "4": 62.5, "rounds": 9, "acceptance": "64-65% mean"},
+  "several_conversations_per_pass": "gate sweep, pass median by tokens a step: 0.3.0 n=4 66.1 / n=9 111.4 / n=12 134.0 ms, 0.3.1 65.9 / 111.7 / 133.0 - the same; the summed rate moves by +-10% with the sampled rounds' acceptance"
+ },
+ "release_gates": {
+  "runtime": "bin/hip (0.3.0 + apply_kb_pending_031 + apply_mtp_index_share_031); log tmp/qsa/gates_031.log",
+  "bitwise_vs_0_3_0": "18.6K prompt, f16, MTP off: text and every top-5 probability identical",
+  "ppl_ctx8192_8chunks": 2.6814,
+  "ppl_ctx8192_40chunks": "2.8134, every chunk identical to 0.3.0 (paired dNLL 0.0000)",
+  "truncation_79K_mtp": "30/30 sections, 1117 tokens, both reps identical",
+  "agent_probe_4_slots_q8_0": "40 turns, no warnings",
+  "mtp_rewind": "60K and 150K chars (the second with IndexShare on): 64/64 tokens and every top-3 identical",
+  "fault_probes": "ckpt / decode / post: 500 then retry and next request clean, as 0.3.0",
+  "images": "vision_stress 8 slots OK, several conversations with images OK",
+  "disk_pair": "B again from disk: 14 tokens processed, 155675 cached",
+  "prefix_cache": "agent 0.99x ideal, edit 1.00x",
+  "agent_sim_8_slots": "0.97x ideal; ttft p50 / p90 / max 3.25 / 6.65 / 10.99 s (0.3.0 3.27 / 8.36 / 11.17)",
+  "users_case_512K": "as 0.3.0",
+  "context_edges": "an answer into the end of a 16K context stops with stop_type limit after 1112 tokens; the server answers the next request",
+  "pool_768K_q8_0_mtp": "loads, user's case runs; draft ubatch capped 8192 -> 1280",
+  "block_key_probe": "B1 and B2 bitwise identical",
+  "asserts_or_aborts": "none in the server logs",
+  "replay": "71 / 71 reproduced from clean upstream, 73 patches"
+ }
+}

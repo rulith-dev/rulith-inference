@@ -23,18 +23,24 @@ the driver pages during decode: prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/t
 
 ## Headline
 
-Measured 2026-09-28 on 0.3.0, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
+Measured 2026-09-28 on 0.3.1, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
 **on a freshly started server** (see the image note below — that qualifier is load-bearing), with the
 model files of [the README's list](../README.md#model-files) and the app's default settings (eight
 slots, MTP with three drafts, images on, f16 K/V):
 
 | | | |
 |---|---|---|
-| prefill, 95.6K tokens of real text | **1217 t/s** | 1215.8 / 1217.3 / 1221.4 over 3 runs |
-| decode, 86K context | **28.0 ms/token** (35.8 tok/s) | 28.04 / 27.95 / 27.80, draft acceptance 63%, 2.84 tokens per pass |
-| decode, short context | **22.3 ms/token** (44.9 tok/s) | 22.29 / 23.36 / 22.23, acceptance 67%, 2.94 tokens per pass |
-| decode, 3 / 4 conversations at once | **58.8 / 62.6 tok/s** summed | four slots, ~4K tokens each, default sampling with a new seed every round, nine rounds each; one conversation 40.9 |
+| prefill, 95.6K tokens of real text | **1228 t/s** | 1227.6 / 1229.5 / 1221.1 over 3 runs |
+| decode, 86K context | **27.3 ms/token** (36.7 tok/s) | 28.65 / 27.19 / 27.25, draft acceptance 63%, 2.82 tokens per pass |
+| decode, short context | **22.5 ms/token** (44.4 tok/s) | 22.50 / 22.46 / 23.42, acceptance 67%, 2.94 tokens per pass |
+| decode, 3 / 4 conversations at once | **55.4 / 62.5 tok/s** summed | four slots, ~4K tokens each, default sampling with a new seed every round, nine rounds each; one conversation 39.7 |
 | image input | works | Qwen3-VL projector, 904 MB |
+
+Against 0.3.0 (the same day, same protocol): prefill 1217 -> 1228 t/s, decode at 86K 28.0 -> 27.3 ms/token at the
+same acceptance (IndexShare, below), short context 22.3 -> 22.5 (within its spread). Several conversations 58.8 / 62.6
+-> 55.4 / 62.5 with one at 40.9 -> 39.7: a step takes the same time as in 0.3.0 at every batch size (the gate sweep's
+pass medians at 4 / 9 / 12 tokens a step: 66.1 / 111.4 / 134.0 ms against 65.9 / 111.7 / 133.0), and nine sampled
+rounds move the sum by ±10% with their acceptance. Details: `docs/results/indexshare-031-20260928.json`.
 
 Against 0.2.3 on the same protocol (2026-09-26, the rows below): prefill 1183 -> 1217 t/s, decode at 86K
 30.7 -> 28.0 ms/token and at short context 24.4 -> 22.3 at the same acceptance and tokens a pass - the
@@ -609,6 +615,40 @@ as the slots filled with conversations and their checkpoints, then averaged 97.7
 97.82 over 20-29, within 96.7-98.4 throughout.
 Details: `docs/results/stable-030-20260928.json`.
 
+**A used slot's block keys, and IndexShare for the MTP draft (0.3.1, 2026-09-28).** The QSA block-key
+cache (0.1.x) keeps each finished block's pooled indexer key and refreshes it only in a graph that runs the
+indexer. A view of at most `indexer_top_k + ratio - 1` = 2051 cells takes the dense shortcut instead, which
+writes the indexer keys but refreshes no block key, and nothing marked the blocks stale - so a new
+conversation in a used slot whose first prompt was under ~2K tokens kept the previous conversation's keys
+for the cells it reused, and once it grew past 2K the sparse selection scored its first blocks (the system
+prompt, the first message) with the wrong keys. `tmp/qsa/kb_stale_probe.py` shows it on one slot, MTP off,
+greedy: B1 (1.5K tokens), then B2 (+9K tokens) on a fresh server, against the same after a 3K-token A in the
+slot: B1's answers identical, B2's different (first-token top-5 logprobs apart by up to 2.9); with the cache
+off both are bitwise identical. Every release since the cache had it. `apply_kb_pending_031` makes a graph
+that writes indexer keys without the indexer leave its sequences pending from its first position; the next
+indexer graph puts the pending blocks in its dirty list (up to 64 positions besides its own tokens) or
+rebuilds the sequence in full. With it the used slot's B2 is bitwise identical to the fresh server's, and
+the fresh server's is bitwise the same as before.
+
+The MTP draft's one layer read the draft's whole cache densely at each of its three draft steps: 0.9 ms
+a step at 86K, 2.5 ms at 212K. `apply_mtp_index_share_031` does what SGLang and TRT-LLM do for
+DeepSeek-V3.2's MTP layer: a catch-up runs the layer's indexer and keeps each position's selection (a ring
+of rows per sequence, absolute cells, so a moving view does not matter), and a draft step gathers the
+latest kept selection plus the cells of every position since through the decode gather. Run as the
+reference runs it - the indexer in every catch-up - it saved 2.65 ms a pass in the draft at 86K and gave
+1.6 back in the catch-up: the indexer's input scan is O(cells) on the host (1.0 ms at 86K) and the
+catch-up's graph grew, rebuilt every pass because the draft alternates shapes; at ~4K it cost 4%. So a
+catch-up runs the indexer only when the latest kept selection is more than 32 positions behind (the
+extra columns hold 64 cells, free inside the gather's padding to 2304), and only on views of 32K cells or
+more; a draft loop reuses a selection at most 48 positions old, and every reused cell is checked against
+the graph's view. And a draft ubatch without outputs - a prompt, the catch-up after a verify - now stores
+K, V and the indexer keys and builds no query, attention or output projection: nothing read them. A
+speculative pass (median of 130-150, STRIX_SPEC_TIMING): 86K 79.75 -> 76.90 ms, 212K 93.70 -> 87.60 ms
+(0.3.0: 94.5-97.9), 30K 71.3 -> 70.9, at the same acceptance; the store-only catch-up alone at 2.3K
+66.2 -> 65.0 ms with byte-identical text, and one conversation at ~4K alternating with 0.3.0 on the same
+machine 67.7 / 67.0 -> 67.0 / 66.65 ms.
+Details: `docs/results/indexshare-031-20260928.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
@@ -655,6 +695,14 @@ gate could not see them:
   the top-k mask now, and a maskless op with selected indices that reaches a generic kernel stops the
   server. Perplexity could not tell the two apart (8 chunks move 1-2% between benign variants of this
   model); the kernel map could.
+- **A used slot's block keys (0.3.1).** The block-key cache refreshed a block's pooled indexer key only in
+  a graph that runs the indexer, and a view of at most 2051 cells takes the dense shortcut, which writes
+  the keys without refreshing them. A new conversation in a used slot whose first prompt was under ~2K
+  tokens therefore kept the previous conversation's block keys for the cells it reused, and once it grew
+  past 2K its first blocks - the system prompt, the first message - were scored with the wrong keys.
+  Every gate started from a fresh server, where a sequence stays marked stale until its first indexer
+  graph rebuilds every key; `tmp/qsa/kb_stale_probe.py` runs the same conversation on a fresh server
+  and after another one in the slot, and compares the answers token for token.
 
 ## What is still open
 
