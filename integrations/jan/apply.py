@@ -20,7 +20,7 @@ ROOT = HERE.parents[1]
 NAME = 'Strix Llama'
 SLUG = 'strixllama'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'

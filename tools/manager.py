@@ -99,8 +99,10 @@ PROMPT_CACHE_RAM_MIB = 1024
 # as the switch that lets idle slots hand over the runs they filled while busy
 PROMPT_CACHE_BLOCK_TOKENS = 4096
 # context checkpoints: the recurrent state at a point of a conversation, 0.11 GB each on this model, kept in system
-# RAM while the conversation is resident. The last prompt's are the ones used - a regenerate, and the next turn of a
-# template that drops the thinking, go back to just before its end; older ones only serve a deeper rewind (an edited
+# RAM while the conversation is resident. The ones used most sit at the last answer's edges (0.3.2), taken where the
+# state already stands, without an extra pass: where it started - a regenerate is sampled again there from the logits
+# kept with it, and the next turn of a client that drops the reasoning or re-renders a tool call goes back there - and
+# where the answer before it ended, for an edit of the last message. Older ones only serve a deeper rewind (an edited
 # earlier message, an agent trimming old tool output), which without one is processed again from further back.
 # llama-server keeps up to 32 at least 8192 tokens apart, 3.5 GB a slot. This keeps 8, at most 0.9 GB a slot, chosen by
 # the runtime (0.2.6): the end of the system prompt (the first user message: every conversation that starts with it

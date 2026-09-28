@@ -7,6 +7,10 @@
  ],
  "produces": {
   "common/chat.h": "b575be7cf92bc36d8af7711ff7e94bd767c7c3b3589c7660907e2e4c7235e88a",
+  "common/common.cpp": "eb8755df4b79449339cb860e3ba929c5821c1dc32e7c07f9bd4f7e35cac5ddac",
+  "common/common.h": "8f6972940e6677ef3b1b2a5f5f84dad93ce3c51269a961a2cce139725b39d475",
+  "common/sampling.cpp": "efc21ff844b71fd2e63a57fc04cbfe48c155f136e65affb01b9bc22e11f088d0",
+  "common/sampling.h": "5e50517ed1a0be07ba10a307b6da6714c4fd313be8c80ee192349c47a01b2922",
   "common/speculative.cpp": "82af15204df2b6fa4bd9d46d6be2e31c565e8db7d46a4749e6aa52482c357b84",
   "ggml/include/ggml.h": "ae54776045f191d614b71869c06a1dfa526cb5c0dcf0bf641bd47bdf718403b8",
   "ggml/src/ggml-alloc.c": "6a4b269c56f03c37f74f78419aa9e77463ee8e58a82e1f1e7be6e850a550974c",
@@ -70,7 +74,9 @@
   "src/models/qwen4exp.cpp": "758dd542a06e51d4fe22e0d54a21fadc83c7224bd719cb9c4c6ccc7683b45c91",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "63b40d1aa142a62032da8bab47b53513b688fe8a18b6980ac07300f672c007c0",
-  "tools/server/server-context.cpp": "264738b453acd0a99bfc9b262a189f2fa07c0cd1998d13ee39d7e8e7165ca5ee",
+  "tools/server/server-common.cpp": "e2a5ae4ade6846cfc872c1d4a8f60415ada01b8d659ba70bc481ded9640ad890",
+  "tools/server/server-common.h": "ce3d4154d51f7d44fcd57e9cb5228f72f240fc4094366562b4e9ab5a7e94e813",
+  "tools/server/server-context.cpp": "0e74999db309be2935ed4bc8b0a7af4e6b2898cb4bfa23e056ff79abf5d14e2c",
   "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
   "tools/server/server-queue.cpp": "7b3176135c6055f18cf8c2575f3b9b2a84ef6e3d971a9c70f022771f4249ca44",
   "tools/server/server-queue.h": "39d958942e30e8b02db6bdd9bfa7687178bb199ebb616e7d3e88881b5565d592",
@@ -84,6 +90,22 @@
   "common/chat.h": {
    "git_blob": "cb39e3458f445f7c35e0259b8adfe1578c7722a9",
    "sha256": "2e9d19421fde1deeaebba9f9cdc18097b41e3a9974a89bbb9061792faabf2ea3"
+  },
+  "common/common.cpp": {
+   "git_blob": "d162a38800e0a4c00397b94d98f15317d424fbe1",
+   "sha256": "9d0819ee984f36cab9c35eb0fb374c9e73bfd0af0fe6a5b912cdf1ccce7d51a3"
+  },
+  "common/common.h": {
+   "git_blob": "63d0badd0f7465b804b62128b64c5cc8dd115862",
+   "sha256": "7cfcc6a57122702ea35d04ed20861aef162bd94f55cfbbf9fd23ee3127fe6cb4"
+  },
+  "common/sampling.cpp": {
+   "git_blob": "06dea1e1ccea368f685fdcd1fcb57774aea9ff24",
+   "sha256": "f23f8d663932bfd73abac1bd5e99055fc6efb07e21ef27dd7e25af2f2da40bff"
+  },
+  "common/sampling.h": {
+   "git_blob": "ced3c8364b32a17df296bcc08a4bf48cf6cf3af2",
+   "sha256": "92a10833fc729a5a8eff065d269a88ceb21b81d77c2eba5942a3450fe1a0d2d1"
   },
   "common/speculative.cpp": {
    "git_blob": "8c3208af5fabc32ea0aae6f73cfbc96558036258",
@@ -320,6 +342,14 @@
   "tests/test-backend-ops.cpp": {
    "git_blob": "a1ca8d4a3b6b093f6555c1c85e47d0133806db70",
    "sha256": "8fe648f1486c34c1c8188562f7d03ab3311f78ba564531a1f8141ee86dd543a5"
+  },
+  "tools/server/server-common.cpp": {
+   "git_blob": "eade7db212569fc7a0d11f63b3f59019cdcd6add",
+   "sha256": "8e48dd897d85af9769819b54e589b318aec5912aa2131c1c59174d6bb6250b3d"
+  },
+  "tools/server/server-common.h": {
+   "git_blob": "9894f5f06fb050fa6e1e278a01509be35e00733e",
+   "sha256": "635a7e37085dee6a1a3767bed21793bf1879828372e359350cae2c75fb167b17"
   },
   "tools/server/server-context.cpp": {
    "git_blob": "b6835e43459e3e9f1ea951e9f96f9ade22074cba",

@@ -1,0 +1,49 @@
+{
+ "question": "0.3.2: can the recurrent-state checkpoints sit at an answer's edges instead of prompt batches cut short, without losing any rewind, and can the disk tier write only a conversation's main line?",
+ "date": "2026-09-28",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP draft head IQ4_XS",
+ "what": "patches/apply_ckpt_edges_032.py: checkpoints where an answer starts (the prompt's end, taken as its first token is sampled, with that token's logits) and where the answer before it ended (the slot's state as a continuing request arrives); no cut 4 or 4 + n_ubatch tokens before a prompt's end, none at the last user message when the answer-end checkpoint covers it; a regenerate sampled from the stored logits; a thinking prompt's last token alone; prompts in arrival order; disk writes limited to the main line, the client's handling of answers learnt from a hash of the answer's first tokens kept in memory across trips to the store. STRIX_CKPT_EDGES=0, STRIX_PROMPT_ORDER=slot, STRIX_DISK_MAINLINE=0 restore 0.3.1",
+ "why_the_cuts": "the next prompt re-renders the last answer; for this template: thinking off, or thinking on with the reasoning sent back, comes back verbatim; reasoning dropped forks where the answer started (one token earlier for a thinking prompt: '<think>\\n' then '\\n\\n' is one token); a re-serialized tool call or an answer cut by Stop forks inside it; a regenerate forks at its start. The 0.3.1 gate's agent probe: 8 of 34 turns forked 2-73 tokens before the cache end",
+ "edges_probe": {
+  "tool": "tmp/rel032/edges_probe.py, one slot, disk tier off",
+  "regenerate": "processed 0 tokens (0.3.1: 4); first token's top-5 logprobs identical to the first request's",
+  "thinking_reasoning_dropped": "turn 2 cached 4629 of turn 1's 4630 prompt tokens and processed 63",
+  "edit": "the edited message restored where the answer before it ended: 3301 tokens cached"
+ },
+ "agent_harness_same_state": {
+  "tool": "tmp/ragged/agent_sim.py (main + 5 sub-agents, 26 requests), 8 slots, disk tier off; 0.3.2 at 12:40, 0.3.1 (tmp/hip-031) at 12:42",
+  "ttft_p50_s": {"0.3.1": 5.61, "0.3.2": 2.95},
+  "ttft_p90_s": {"0.3.1": 9.61, "0.3.2": 8.33},
+  "ttft_max_s": {"0.3.1": 11.04, "0.3.2": 10.97, "note": "the main agent's first 12.5K-token prompt, cold"},
+  "prompt_time_s": {"0.3.1": 138.6, "0.3.2": 86.7},
+  "chunks_streamed": {"0.3.1": 1410, "0.3.2": 1680},
+  "gaps_over_0_5_s": {"0.3.1": 47, "0.3.2": 61},
+  "note": "the slowest remaining requests are the five sub-agents' second steps arriving together (1.2-2.5K new tokens each): bound by prefill work, not by cuts"
+ },
+ "disk_main_line": {
+  "tool": "tmp/rel032/mainline_disk.sh: cache_workload chat (6 conversations x 5 turns round-robin), 2 slots, thinking high, max 400 tokens, the client sends back the answer's content only, disk tier on",
+  "0.3.1": "written 10.79 GiB (runs 2.10 + 79 checkpoints 8.69), writer 4.0 s, 28 end states, processed 72058 (1.00x ideal)",
+  "0.3.2_first_try": "10.32 GiB: a conversation loaded back comes only as far as the new prompt shares it, so the dropped answer never returned to the slot and the client's handling was never learnt",
+  "0.3.2": "written 8.26 GiB (runs 1.99 + 57 checkpoints 6.27), writer 3.0 s, 6 end states (each conversation's first departure), processed 72034 (1.00x ideal)"
+ },
+ "release_gates": {
+  "runtime": "bin/hip (0.3.1 + apply_ckpt_edges_032); log tmp/rel032/gates_032.log",
+  "bitwise_vs_0_3_1": "with STRIX_CKPT_EDGES=0: text and every top-5 probability identical. Default: the last prompt tokens run in the prompt's own batch, the first token's top-5 moves (top 0.925 -> 0.971); control: 0.3.1 alone at ubatch 4096 swaps the top two (0.46 / 0.54)",
+  "ppl_ctx8192_8chunks": 2.6814,
+  "ppl_ctx8192_40chunks": "2.8134, every chunk identical to 0.3.1",
+  "truncation_79K_mtp": "30/30 sections, 1144 tokens, both reps identical",
+  "agent_probe_4_slots_q8_0": "40 turns (regenerates, aborts, trims, edits), no warnings",
+  "mtp_rewind": "60K and 150K chars: 64/64 tokens and every top-3 identical",
+  "fault_probes": "ckpt / decode / post: 500 then retry and next request clean, as 0.3.1",
+  "images": "vision_stress 8 slots OK, several conversations with images OK",
+  "disk_pair": "B again from disk: 14 tokens processed, 155675 cached",
+  "prefix_cache": "agent 0.98x ideal, edit 1.00x, chat 0.99x (8 slots, disk tier off)",
+  "several_conversations_per_pass": "pass median at 4 / 9 / 12 tokens a step: 67.7 / 111.9 / 131.7 ms (0.3.1 65.9 / 111.7 / 133.0)",
+  "users_case_512K_and_768K_q8_0_mtp": "as 0.3.1",
+  "context_edges": "an answer into the end of a 16K context stops with stop_type limit after 1114 tokens; the server answers the next request",
+  "block_key_probe": "B1 and B2 bitwise identical",
+  "asserts_or_aborts": "none in the server logs",
+  "replay": "77 / 77 reproduced from clean upstream, 74 patches"
+ }
+}

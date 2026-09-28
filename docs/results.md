@@ -649,6 +649,39 @@ speculative pass (median of 130-150, STRIX_SPEC_TIMING): 86K 79.75 -> 76.90 ms, 
 machine 67.7 / 67.0 -> 67.0 / 66.65 ms.
 Details: `docs/results/indexshare-031-20260928.json`.
 
+**Checkpoints at an answer's edges, and the disk tier's main line (0.3.2, 2026-09-28).** The model's recurrent state
+cannot be rewound, so the server checkpoints it where a later request may fork. Upstream's way, kept until 0.3.1, cut
+the prompt into extra batches - 4 tokens before its end (and 4 + n_ubatch before it), and at its last user message -
+because a checkpoint can only be taken before a batch runs. Each cut is a pass, and with several agents sending work a
+pass carries their prompt chunks: the last 4 tokens of a prompt waited 2-3 s on their own. What the cuts served is a
+fork at or inside the last answer (a regenerate; a client that drops the reasoning, which this template renders as
+`<think>
+
+</think>`; a re-serialized tool call; an answer cut by Stop - 8 of 34 agent-probe turns forked 2-73 tokens
+before the cache end) or at the last message (an edit). `apply_ckpt_edges_032` takes the two states the server passes
+anyway: where the answer starts, as its first token is sampled, with that token's logits, and where the answer before it
+ended, as a continuing request arrives. A regenerate is sampled again from the stored logits and processes nothing; a
+thinking prompt runs its last token alone, because the dropped reasoning's `
+
+` is one token and forks one earlier.
+Prompts are batched in the order their requests arrived. The same agent harness (a main agent and five sub-agents,
+eight slots) on 0.3.1 and 0.3.2 back to back: time to first token p50 5.61 -> 2.95 s, p90 9.61 -> 8.33 s, max
+11.04 -> 10.97 s (the main agent's cold 12.5K-token prompt), prompt time 138.6 -> 86.7 s, streamed chunks 1410 -> 1680;
+the slowest remaining requests are the five sub-agents' second steps arriving together, bound by prefill work.
+
+The disk tier now writes a conversation's main line only: its prompts, and an answer once the next request continues
+it. An answer still unconfirmed goes as the conversation leaves unless its client is known to drop answers - known from
+a hash of the answer's first tokens, kept in memory across the conversation's trips to the store (a conversation loaded
+back comes only as far as the new prompt shares it, so a dropped answer never returns to the slot to compare). Six
+conversations with thinking on, taking turns in two slots, their client sending back only the answers' content: written
+10.79 -> 8.26 GiB, checkpoints 79 -> 57, end states 28 -> 6, the same 72K tokens processed (1.00x ideal).
+
+With `STRIX_CKPT_EDGES=0` the output is bitwise 0.3.1's. By default the last prompt tokens run in the prompt's own
+batch instead of a 4-token batch of their own, which moves the first answer token's top-5 (0.925 -> 0.971 for the top
+token of the 18.6K-token probe); 0.3.1 alone at ubatch 4096 instead of 8192 swaps its top two (0.46 / 0.54). 40-chunk
+PPL identical chunk by chunk (2.8134), and the full gate set as for 0.3.1. Details:
+`docs/results/ckpt-edges-032-20260928.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
