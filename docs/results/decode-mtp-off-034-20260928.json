@@ -1,0 +1,67 @@
+{
+ "question": "0.3.4: with MTP off - the setting that lets a 512K-cell q8_0 pool fit beside the Q4_K_XL model - how much of a decode step is host work and passes that grow with the context and the number of conversations, and can it go without changing a bit of the output? And can the RAM the server holds for checkpoints stop growing with every turn?",
+ "date": "2026-09-28",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP off unless stated",
+ "why": "a user runs eight conversations at once with MTP off to fit a 512K q8_0 pool (MTP's draft KV and its pool-wide mask cost 4-5 GB there), saw ~10 GB of RAM in llama-server, and one conversation's decode fell from 26 to 20 tok/s between a short context and 110K",
+ "what": {
+  "apply_idx_score_dec_034": "the lightning indexer's decode block scores (12 layers) as one kernel reading each block key once from the F16 block-key cache, instead of GET_ROWS -> MUL_MAT -> RELU -> head sum -> visibility (-> membership product with several conversations), ~20 passes; bit for bit the chain's output: each dot product in mul_mat_vec_f's K = 128 order (64 threads a row, ggml_cuda_mad from zero, a butterfly in each wave of 32, the two waves reduced again with zeros), two threads a key. Also: a graph the scheduler did not split again (same cgraph, same uid) keeps its HIP graph key and compatibility check (~0.28 ms of host time a step)",
+  "apply_qsa_runs_034": "llama_kv_cells tracks which sequences are one run (consecutive cells, consecutive positions, text only); for a ubatch whose sequences are each one run sharing no cell, set_input_qsa derives every input (block lists, limits, tails, block-key refresh lists, membership) from the runs' first cells and positions instead of testing every cell of the window against a bitset; qsa_scalar_visibility's window scan skipped the same way",
+  "apply_ckpt_budget_034": "the context checkpoints of every slot share one budget in RAM (STRIX_CKPT_BUDGET, 24 by default, ~2.7 GB): over it, the slot holding the most (of equals the least recently used) gives up its least valuable by the per-slot eviction's measure, never its first, this task's last; disk-held checkpoints do not count"
+ },
+ "switches": "STRIX_IDX_SCORE_DEC=0 / STRIX_QSA_RUN=0 / STRIX_CKPT_BUDGET=0 restore 0.3.3's way; STRIX_IDX_SCORE_DEC=2 and STRIX_QSA_RUN=2 run both ways and abort on any difference (with GGML_CUDA_DISABLE_GRAPHS=1); STRIX_INPUT_TIMING=1 logs each graph input's host time",
+ "host_input_time": {
+  "tool": "STRIX_INPUT_TIMING=1, set_input of llm_graph_input_qsa per step",
+  "one_conversation_110K": "1.6-1.8 ms a step with the scan (the run path's own time at this depth was not logged; the decode figures below include it)",
+  "eight_conversations_40K_each": "10.3-13.9 ms -> 1.7-1.8 ms (the window spans all eight conversations' cells)"
+ },
+ "bitwise": {
+  "probe": "tmp/fusion_equiv_probe.py: an 18.6K-token prompt, greedy, top-5 probabilities per token",
+  "f16_mtp_off": "text and every top-5 probability identical to 0.3.3 (dev build and bin/hip)",
+  "f16_mtp_on": "identical to 0.3.3",
+  "q8_0_8_slots_512K_mtp_off": "identical to 0.3.3"
+ },
+ "check_modes": {
+  "env": "STRIX_IDX_SCORE_DEC=2 STRIX_QSA_RUN=2 GGML_CUDA_DISABLE_GRAPHS=1 (tmp/dec034/final_verify.log)",
+  "score_strips_compared_equal": {"8 conversations, 512K q8_0": 640, "truncation test 40K, MTP": 11008, "4 streams, MTP": 1152, "agent harness, 8 slots": 2304, "pool probe, 64K pool": 5248, "total": 20352},
+  "ubatch_inputs_compared_equal": {"8 conversations": 64, "truncation test": 992, "4 streams": 256, "agent harness": 320, "pool probe": 224, "total": 1856},
+  "failures": 0,
+  "images": "vision_stress passes; neither new path applies to a conversation with an image (its repeated positions need the full mask, so the compact visibility the fused kernel matches is not built, and it is not a run)"
+ },
+ "decode_one_conversation": {
+  "tool": "tools/decode_lab.py --config base, MTP off, 4 slots, f16, 256 tokens a depth; 0.3.3 = bin/hip before the build, 0.3.4 = the dev build the patches reproduce, same session",
+  "ms_per_token_0_3_3": {"3001": 38.50, "49754": 40.69, "109724": 46.23},
+  "ms_per_token_0_3_4": {"3001": 37.81, "49754": 39.30, "109724": 40.67},
+  "tok_s_at_110K": "21.63 -> 24.59",
+  "slope_ms_per_1000_tokens": "0.072 -> 0.027"
+ },
+ "decode_eight_conversations": {
+  "tool": "tmp/dec034/multi_probe.py --n 8 --words 12000 --gen 384: eight distinct ~40K-token prompts prefilled one at a time, then decoded together; 8 slots, kv q8_0, kv_pool 524288, MTP off, disk tier off",
+  "ms_per_step_0_3_3": 136.21,
+  "ms_per_step_0_3_4": 105.83,
+  "tok_s_total": "58.8 -> 75.7",
+  "by_patch_dev_steps": "run-based inputs 10-14 -> 1.8 ms of host time a step; the fused score, measured after it: 131.2 -> 107.5 ms a step"
+ },
+ "ram_eight_conversations": {
+  "tool": "tmp/dec034/mem_probe.py 8 3: eight conversations, a distinct ~30K-character system prompt each, three turns of a 200-token answer plus a ~12K-character tool result, all eight at once; 8 slots, kv q8_0, kv_pool 524288, MTP off, disk tier on; the server process's working set after each turn",
+  "budget_off": "1.84 -> 4.80 / 6.53 / 8.33 GiB",
+  "budget_24": "1.84 -> 4.79 / 4.80 / 4.81 GiB, 32 checkpoints given up",
+  "agent_harness": "tmp/ragged/agent_sim.py, main agent + 5 sub-agents, 8 slots, disk tier off: processed 44821 of ideal 45984 (0.97x, as 0.3.3's 0.97x) with 29 checkpoints given up"
+ },
+ "release_checks": {
+  "log": "tmp/dec034/gates_034.log (bin/hip built by bootstrap --build from the 78 patches)",
+  "bitwise_0_3_3": "f16 MTP off, f16 MTP on, q8_0 8 slots 512K MTP off: text and top-5 identical",
+  "ppl_40_chunks_ctx_8192": "2.8134, every chunk's NLL identical to 0.3.2",
+  "truncation_79K_mtp": "30/30 sections, 34.5 / 34.9 tok/s (0.3.3: 32.7 / 33.6)",
+  "agent_probe_4_slots_q8_0": "no desync warnings, 38 checkpoints given up for the budget; with STRIX_CKPT_BUDGET=4, no warnings",
+  "mtp_rewind_60K_150K_chars": "tokens and top-3 identical",
+  "prefix_cache_agent_edit_chat": "0.98x / 1.00x / 0.99x of ideal (0.3.3 the same), 13 / 0 / 36 checkpoints given up",
+  "agent_harness_ab": {
+   "note": "the harness samples, so its order and TTFT percentiles move run to run; 0.3.3 (tmp/hip-033) and 0.3.4 alternated in one session (tmp/dec034/sim_ab.log)",
+   "ttft_p50_p90_max_0_3_3": ["2.99 / 5.01 / 10.92", "3.05 / 5.82 / 11.02"],
+   "ttft_p50_p90_max_0_3_4": ["3.00 / 7.33 / 10.90", "2.85 / 5.62 / 11.06"],
+   "processed_vs_ideal": "0.97x in all four"
+  },
+  "also": "fault probes (checkpoint, decode, post-decode), vision_stress and several conversations with images, a long pair read back from disk, the pool guard burst (8 of 8 answered, 3 waited), the user's case at 512K MTP off and 768K q8_0 MTP on, the context's edges, a used slot's block keys, the answer edges (regenerate processed 0 tokens): as 0.3.3; no asserts"
+ }
+}

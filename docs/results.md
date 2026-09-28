@@ -701,6 +701,35 @@ started last ended early; no error. With a pool that has room the guard does not
 probe, the agent harness waited for nothing, prefix cache 0.98x / 1.00x / 0.99x as before. Details:
 `docs/results/pool-guard-033-20260928.json`.
 
+**Decode with MTP off: the indexer's scores in one kernel, the sparse-attention inputs from runs, one checkpoint budget
+(0.3.4, 2026-09-28).** With MTP off a 512K-cell q8_0 pool fits beside the Q4_K_XL model, so for many conversations at
+once MTP off is the better setting, and its decode had host and GPU work that grew with the context and with the number
+of conversations. First, the lightning indexer's block scores at decode, in each of the 12 sparse-attention layers, ran
+as about 20 passes: every block key of the window gathered out of the block-key cache into an F32 copy, multiplied by
+the step's queries (with several conversations, the vector kernel re-read each key per column chunk), then RELU, the
+head sum and the visibility, and with several conversations a 0/1 membership product. `apply_idx_score_dec_034` reads
+each key once and computes the same scores bit for bit, each dot product in the order `mul_mat_vec_f` sums it. Second,
+`set_input_qsa` tested every cell of the graph's window, on the host with the GPU idle, every step: 1.6 ms for one
+conversation at 110K, 10-14 ms for eight at 40K each, whose window spans them all. A conversation of text is one run of
+cells with consecutive positions, which the cell store now tracks, and `apply_qsa_runs_034` derives every input from the
+runs' first cells and positions (1.8 ms for the eight). Conversations with an image keep the old path for both: their
+repeated positions need the full mask. Each change has a check mode that runs the old way beside the new and stops on any
+difference (`STRIX_IDX_SCORE_DEC=2`, `STRIX_QSA_RUN=2`); across eight conversations, MTP, four streams, the agent
+harness and the pool probe, 20352 score strips and 1856 ubatches' inputs compared equal. Against 0.3.3 on the same
+machine, MTP off: one conversation 38.50 / 40.69 / 46.23 -> 37.81 / 39.30 / 40.67 ms a token at 3K / 50K / 110K
+(21.6 -> 24.6 tok/s at 110K; the slope with depth 0.072 -> 0.027 ms per 1000 tokens); eight conversations of ~40K tokens
+decoding together in a 512K q8_0 pool, 136.2 -> 105.8 ms a step, 58.8 -> 75.7 tok/s in total. MTP's passes shed the
+same work: the truncation test at 79K, 32.7 / 33.6 -> 34.5 / 34.9 tok/s. Text and top-5 probabilities identical to 0.3.3
+on the 18.6K-token probe with f16 and MTP off, f16 and MTP on, and q8_0 in the 512K pool; 40-chunk PPL identical chunk
+by chunk.
+
+Third, each slot kept up to eight recurrent-state checkpoints of ~113 MiB in RAM, so eight conversations grew by ~2 GB a
+turn. `apply_ckpt_budget_034` gives all slots one budget of 24 (`STRIX_CKPT_BUDGET`): past it, the slot holding the most
+gives up its least valuable one, never the first. Eight conversations (a ~7.5K-token system prompt each, then ~3K-token
+tool results) taking three turns in the 512K pool: working set 4.80 / 6.53 / 8.33 GiB after each turn without the budget,
+4.79 / 4.80 / 4.81 GiB with it. The agent harness (a main agent and five sub-agents, eight slots) processed 0.97x the
+ideal as before, with 29 checkpoints given up. Details: `docs/results/decode-mtp-off-034-20260928.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
