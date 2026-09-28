@@ -1,0 +1,36 @@
+{
+ "question": "0.3.3: can conversations that together need more KV cells than the unified pool holds wait for room instead of failing every request of the step, without changing anything when the pool has room?",
+ "date": "2026-09-28",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP draft head IQ4_XS",
+ "why": "a user's eight agents held ~870K tokens in a 680K-cell q8_0 pool (8 slots); upstream halves a batch that does not fit down to one token, then fails every request running at that moment with 'Context size has been exceeded' and clears their caches: seven failed at once",
+ "what": "patches/apply_pool_guard_033.py: a prompt starts only when it fits beside what the busy conversations will hold - their whole prompts and a reserve for each answer (8192 tokens, less when the request allows less) - once idle conversations are on disk or purged; until then it waits in the queue holding no slot, and one that has waited a minute holds back those behind it. A prompt's next piece and an answer's next tokens take only the cells there are, idle slots purged first, else wait. When every busy conversation waits three steps in a row, the one that arrived last gives way: a prompt holding cells with a 503, else an answer ending with stop_type limit. /slots answers with X-Strix-Waiting; the app's Logs page shows the requests waiting. STRIX_POOL_GUARD=0 restores 0.3.2",
+ "probe": "tmp/rel033/pool_probe.py (thinking off, temperature 0.7, distinct text per conversation, nothing shared)",
+ "burst_8x12K_in_64K_pool": {
+  "setup": "8 slots, context 32768, kv_pool 65536, MTP on, disk tier on; eight new conversations of 10.7-14.6K tokens sent 0.2 s apart, max 200 tokens",
+  "guard_off_0_3_2": "8 of 8 failed with 'Context size has been exceeded' at 67 s, including the five already answering (first tokens at 14-62 s); the server log: 10 'exceeded', 53 retries at a smaller batch",
+  "guard_on": "8 of 8 answered, finish stop, in 109 s; three waited in the queue for room, six idle conversations went to disk to make it; first tokens at 14-105 s as the prompts were processed in arrival order",
+  "runs": "dev build (tmp/rel033/dev_pool.log) and bin/hip (tmp/rel033/gates_033.log): the same timings to 0.2 s"
+ },
+ "agents_8x3_turns_in_64K_pool": {
+  "setup": "8 slots, context 32768, kv_pool 65536; eight agents, each a distinct ~6K-token system prompt, then three turns adding the answer and a ~3K-token tool result (final conversations ~13K, together ~100K)",
+  "disk_tier_on": "24 requests, no error, 186 s; 11 waited for room (up to 25 s), 26 idle conversations went to disk and came back (the second and third turns cached their conversation up to the last answer's start)",
+  "disk_tier_off": "24 requests, no error, 282 s; 12 waited, 28 idle conversations purged and processed again when their agent came back"
+ },
+ "long_answers_outgrow_8K_pool": {
+  "setup": "4 slots, context 8192 (the pool), four ~1K-token prompts, max 2500 tokens, answer reserve 256 (STRIX_POOL_ANSWER_ROOM) so the answers outgrow what they were admitted with",
+  "result": "no error; the answers paused 7 times as the pool filled; twice, with every answer paused, the one that started last ended with finish length (981 and 1780 tokens) and went to disk; the other two ran to 2500"
+ },
+ "release_gates": {
+  "runtime": "bin/hip (0.3.2 + apply_pool_guard_033); log tmp/rel033/gates_033.log",
+  "bitwise_vs_0_3_2": "18.6K-token prompt, f16, MTP off: text and every top-5 probability identical",
+  "agent_harness": "main + 5 sub-agents, 8 slots, disk tier off: 26 requests, none waited for room; TTFT p50 / p90 / max 3.15 / 6.33 / 11.38 s (0.3.2: 2.95 / 8.33 / 10.97), processed 0.97x ideal",
+  "prefix_cache": "agent 0.98x, edit 1.00x, chat 0.99x ideal (as 0.3.2)",
+  "fault_probe_decode": "500 then retry and the next request clean, as 0.3.2",
+  "images": "vision_stress 8 slots OK",
+  "truncation_79K_mtp": "30/30 sections, 1144 tokens, both reps identical",
+  "users_case_768K_q8_0_mtp": "4 slots, the user's case (multi_deep_probe --evict --restore): E 51.2 s, A / B / C first token 75.6 / 50.8 / 79.3 s, D 3.5 s, E+tail 4.4 s, F 1.5 s (0.3.2: 50.2, 74.0 / 50.1 / 78.6, 3.8, 4.5, 1.5)",
+  "asserts_or_aborts": "none in the server logs",
+  "replay": "77 / 77 reproduced from clean upstream, 75 patches"
+ }
+}

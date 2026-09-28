@@ -682,6 +682,25 @@ token of the 18.6K-token probe); 0.3.1 alone at ubatch 4096 instead of 8192 swap
 PPL identical chunk by chunk (2.8134), and the full gate set as for 0.3.1. Details:
 `docs/results/ckpt-edges-032-20260928.json`.
 
+**The pool guard (0.3.3, 2026-09-28).** With several slots the KV cache is one pool the conversations share, and
+nothing stopped them from needing more of it together than it holds: a user's eight agents held ~870K tokens in a
+680K-cell pool. Upstream's answer to a step that does not fit is to halve the batch down to one token, then fail every
+request running at that moment with "Context size has been exceeded" and clear their caches - seven of the eight failed
+at once. `apply_pool_guard_033` starts a prompt only when it fits beside what the busy conversations will hold (their
+whole prompts, and a reserve for each answer: 8192 tokens, less when the request allows less), once idle conversations
+have gone to disk or been purged; until then the request waits in the queue, holding no slot, and one that has waited a
+minute holds back the ones behind it. Within a step, a prompt's next piece and an answer's next tokens take only the
+cells there are, and otherwise wait for another conversation to finish. Only when every busy conversation waits does the
+one that arrived last give way: a prompt with a 503 a client can retry, else an answer, ending as if its context were
+full. Eight new ~12K-token conversations at once in a 64K-cell pool, eight slots: with `STRIX_POOL_GUARD=0` (0.3.2) all
+eight failed at 67 s, the five already answering among them; with the guard all eight answered in 109 s, three after
+waiting. Eight agents taking three turns each in the same pool: 24 requests without an error, 11 waiting up to 25 s
+(disk tier on; off, 12 waited and purged conversations were processed again). Four long answers outgrowing an 8K pool
+(their reserve set to 256 to force it): they paused as the pool filled, and twice, with all four paused, the one that
+started last ended early; no error. With a pool that has room the guard does nothing: bitwise 0.3.2 on the 18.6K-token
+probe, the agent harness waited for nothing, prefix cache 0.98x / 1.00x / 0.99x as before. Details:
+`docs/results/pool-guard-033-20260928.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

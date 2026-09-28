@@ -987,13 +987,15 @@ def status():
 
 def slots():
     """What each of the running server's slots is doing, for the Logs page: from llama-server's /slots, which
-    answers with counters only (no prompt text unless LLAMA_SERVER_SLOTS_DEBUG is set). A server busy with a large
-    batch answers late; None then, and the page keeps what it showed."""
+    answers with counters only (no prompt text unless LLAMA_SERVER_SLOTS_DEBUG is set), and the requests waiting in its
+    queue. A server busy with a large batch answers late; None then, and the page keeps what it showed."""
     if not state().get('identity'):
         return {'slots': []}
     try:
         with HTTP.open(f'http://127.0.0.1:{PORT}/slots', timeout=2) as res:
             data = json.load(res)
+            # requests waiting for a slot or for room in the KV pool (since 0.3.3; older runtimes do not say)
+            waiting = int(res.headers.get('X-Strix-Waiting') or 0)
     except Exception:
         return {'slots': None}
     out = []
@@ -1002,7 +1004,7 @@ def slots():
         out.append({'id': x.get('id'), 'active': bool(x.get('is_processing')), 'task': x.get('id_task'),
                     'context': x.get('n_prompt_tokens', 0), 'prompt_processed': x.get('n_prompt_tokens_processed', 0),
                     'prompt_cached': x.get('n_prompt_tokens_cache', 0), 'generated': nt.get('n_decoded', 0)})
-    return {'slots': out}
+    return {'slots': out, 'waiting': waiting}
 
 
 def logs(offset=0):

@@ -59,15 +59,26 @@ export default function LogsView() {
   // what each conversation slot is doing, while a server runs: generating (tokens so far), reading a prompt, or idle
   // with its conversation still in the cache. A busy server can answer late; the last answer stays on screen then.
   const running = !!status?.identity
+  // the server's throughput summed over its conversations, from the same polls (see Throughput)
+  const meter = useRef(new Throughput())
+  const [rate, setRate] = useState<{ answers: number; prompts: number } | null>(null)
+  // requests the server holds in its queue: no free slot, or no room in the KV pool yet (0.3.3 runtimes say)
+  const [queued, setQueued] = useState(0)
   useEffect(() => {
+    meter.current = new Throughput()
+    setRate(null)
     if (!running) { setSlots([]); return }
     let disposed = false, pending = false
     const poll = async () => {
       if (pending) return
       pending = true
       try {
-        const r = await request<{ slots: SlotInfo[] | null }>('slots')
-        if (!disposed && r.slots) setSlots(r.slots)
+        const r = await request<{ slots: SlotInfo[] | null; waiting?: number }>('slots')
+        if (!disposed && r.slots) {
+          setSlots(r.slots)
+          setQueued(r.waiting ?? 0)
+          setRate(meter.current.add(r.slots, performance.now()))
+        }
       } catch { /* the next poll tries again */ } finally { pending = false }
     }
     void poll()
@@ -120,8 +131,16 @@ export default function LogsView() {
         </div>
         {slots.length > 0 && (
           <div className="mt-3 border-t border-border/40 pt-3">
-            <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--rl-label)]">
-              {tr('logs.conversations', { active: slots.filter(x => x.active).length, total: slots.length })}
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <div className="text-[11px] uppercase tracking-[0.06em] text-[var(--rl-label)]">
+                {tr('logs.conversations', { active: slots.filter(x => x.active).length, total: slots.length })}
+                {queued > 0 && <span title={tr('logs.queuedTitle')}> · {tr('logs.queued', { count: queued })}</span>}
+              </div>
+              {rate && (
+                <div className="font-mono text-xs text-muted-foreground" title={tr('logs.throughputTitle', { seconds: THROUGHPUT_WINDOW_MS / 1000 })}>
+                  {tr('logs.throughput', { answers: perSecond(rate.answers), prompts: perSecond(rate.prompts) })}
+                </div>
+              )}
             </div>
             <div className="mt-2 flex flex-wrap gap-2">{slots.map(x => <SlotChip key={x.id} slot={x} />)}</div>
           </div>
@@ -185,6 +204,38 @@ export default function LogsView() {
 const WRAP_KEY = 'strixllama-log-wrap'
 
 const kTokens = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n))
+
+const THROUGHPUT_WINDOW_MS = 10000
+
+const perSecond = (n: number) => (n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString())
+
+// Answer and prompt tokens a second, summed over the server's conversations, over the last THROUGHPUT_WINDOW_MS. A slot's
+// counters (llama-server's /slots: n_decoded, n_prompt_tokens_processed) grow while one task runs and start over with the
+// next, so each poll adds what they grew by since the last one - all of a new task's, none of a slot seen the first time.
+// Tokens a task makes between the last poll and its end are missed: at most one poll interval's worth.
+export class Throughput {
+  private last = new Map<number, { task: number | null | undefined; answers: number; prompts: number }>()
+  private total = { answers: 0, prompts: 0 }
+  private history: { t: number; answers: number; prompts: number }[] = []
+
+  add(slots: SlotInfo[], now: number): { answers: number; prompts: number } | null {
+    for (const s of slots) {
+      const prev = this.last.get(s.id)
+      if (prev) {
+        const same = prev.task === s.task
+        this.total.answers += Math.max(0, s.generated - (same ? prev.answers : 0))
+        this.total.prompts += Math.max(0, s.prompt_processed - (same ? prev.prompts : 0))
+      }
+      this.last.set(s.id, { task: s.task, answers: s.generated, prompts: s.prompt_processed })
+    }
+    const h = this.history
+    h.push({ t: now, ...this.total })
+    while (h.length > 1 && now - h[0].t > THROUGHPUT_WINDOW_MS) h.shift()
+    const dt = (now - h[0].t) / 1000
+    // a first figure only after a couple of polls: one interval's rate swings with every token burst
+    return dt >= 2 ? { answers: (this.total.answers - h[0].answers) / dt, prompts: (this.total.prompts - h[0].prompts) / dt } : null
+  }
+}
 
 // One slot, as LM Studio shows a loaded model's sequences: what it is doing and how far, and how long the
 // conversation it holds is

@@ -330,11 +330,14 @@ class ManagerTests(unittest.TestCase):
                  'n_prompt_tokens_cache':50993,'next_token':[{'n_decoded':1892,'n_remain':-1}]},
                 {'id':1,'is_processing':False,'n_ctx':262144}]
         class Res:
+            headers={'X-Strix-Waiting':'2'}
             def __enter__(s): return s
             def __exit__(s,*a): return False
             def read(s,*a): return json.dumps(answer).encode()
         with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',return_value=Res()):
-            got=m.slots()['slots']
+            r=m.slots()
+        got=r['slots']
+        self.assertEqual(r['waiting'],2)
         self.assertEqual(got[0],{'id':0,'active':True,'task':12,'context':51008,'prompt_processed':15,'prompt_cached':50993,'generated':1892})
         self.assertEqual(got[1],{'id':1,'active':False,'task':None,'context':0,'prompt_processed':0,'prompt_cached':0,'generated':0})
         with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',side_effect=OSError('busy')):

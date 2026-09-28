@@ -84,6 +84,7 @@ PATCH_ORDER = [
     "apply_kq_mask_seq_bits_030",
     "apply_kb_pending_031", "apply_mtp_index_share_031",
     "apply_ckpt_edges_032",
+    "apply_pool_guard_033",
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

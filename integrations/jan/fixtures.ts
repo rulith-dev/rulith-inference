@@ -85,9 +85,9 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
       return { slots: [
         { id: 0, active: true, task: 12, context: 51008 + tick * 40, prompt_processed: 15, prompt_cached: 50993, generated: 1850 + tick * 40 },
         { id: 1, active: true, task: 13, context: 38961 + tick * 35, prompt_processed: 24, prompt_cached: 38937, generated: 790 + tick * 35 },
-        { id: 2, active: true, task: 14, context: 4617, prompt_processed: 4096, prompt_cached: 0, generated: 0 },
+        { id: 2, active: true, task: 14 + Math.floor(tick / 12), context: 4617, prompt_processed: 350 * (tick % 12), prompt_cached: 0, generated: 0 },
         { id: 3, active: false, task: 9, context: 98768, prompt_processed: 12, prompt_cached: 98756, generated: 2199 },
-      ] } as T
+      ], waiting: tick % 20 < 10 ? 2 : 0 } as T
     case 'logs':
       return { text: Number(data.offset) ? '' : LOG, offset: LOG.length, file: 'C:\\Users\\me\\AppData\\Roaming\\dev.rulith.strixllama\\logs\\server.log', reset: false } as T
     default: return {} as T
