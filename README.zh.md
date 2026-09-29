@@ -1,4 +1,4 @@
-# Strix Llama
+# Rulith Inference
 
 在一台 AMD Strix Halo 机器上、在 Windows 下，把 125B 的 MoE 模型跑快。
 
@@ -6,6 +6,10 @@
 **Qwen3.8-Flash-Next**（125B-A6B，Unsloth UD-IQ4_XS，93.7 GB），经打过补丁的 llama.cpp 服务。
 
 *[English](README.md)*
+
+*原名 **Strix Llama**，0.3.6 起改为现名，以免和更早用这个名字的社区分支
+[halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp) 混淆。应用和数据都不变：
+已安装的 Strix Llama 会原地更新过来。*
 
 ## 当前水平
 
@@ -19,6 +23,7 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 | 解码，86K 上下文 | **27.3 ms/token**（36.7 tok/s，草稿接受率 63%） |
 | 解码，短上下文 | **22.5 ms/token**（44.4 tok/s，接受率 67%） |
 | 解码，3 / 4 路同时 | **55.4 / 62.5 tok/s** 合计（同样测法下单路 39.7 的 1.40 / 1.57 倍；每步耗时与 0.3.0 相同，合计随各轮采样的接受率浮动 ±10%） |
+| 关闭 MTP 解码，8 个约 40K token 的对话同时 | 512K token q8_0 池中合计 **80.8 tok/s**（0.3.6；同一时段 0.3.5 为 75.7，0.3.3 为 58.8），常用采样设置下 81.6；单个对话 110K 时 24.4 tok/s，约 210K 时 24.3（0.3.5：23.8 和 23.2） |
 | 图像输入 | 支持（Qwen3-VL 投影模型） |
 
 本仓库里的每个数字都附带产生它的命令，见 [docs/results.md](docs/results.md)。凡是改动无法在噪声
@@ -28,7 +33,7 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 ## 只想跑起来？
 
 **[docs/getting-started.zh.md](docs/getting-started.zh.md)**——从
-[Releases 页面](https://github.com/rulith-dev/strixllama/releases)装安装包、要下载的五个模型文件和
+[Releases 页面](https://github.com/rulith-dev/rulith-inference/releases)装安装包、要下载的五个模型文件和
 放在哪、点什么。不涉及 Python、ROCm 或任何编译工具。
 
 ## 模型文件
@@ -41,7 +46,7 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 | **模型**，必需 | Unsloth 的 Qwen3.8-Flash-Next-GGUF，[`UD-IQ4_XS`，三个分片](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS) | 93.7 GB |
 | **MTP 草稿**：推测解码，解码约 +60% | [`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf) | 1.9 GB |
 | **视觉投影**：图像输入 | [`mmproj-F16.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/mmproj-F16.gguf) | 904 MB |
-| **草稿头**，本项目提供：草稿自带的 IQ4_XS 输出投影，解码 +5–9% | [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf) | 349 MB |
+| **草稿头**，本项目提供：草稿自带的 IQ4_XS 输出投影，解码 +5–9% | [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf) | 349 MB |
 
 四样都平铺放进同一个文件夹：应用按文件名在模型第一个分片旁边找草稿、投影和草稿头。下载命令见
 [docs/getting-started.zh.md](docs/getting-started.zh.md)。
@@ -139,4 +144,4 @@ MIT，见 [LICENSE](LICENSE)。第三方署名见 [NOTICE.md](NOTICE.md)——�
 
 ---
 
-Strix Llama 由 [Rulith](https://rulith.ai) 开发。Rulith 做面向 AI 智能体的可验证执行基础设施。
+Rulith Inference 由 [Rulith](https://rulith.ai) 开发。Rulith 做面向 AI 智能体的可验证执行基础设施。

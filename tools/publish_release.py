@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-REPO = 'rulith-dev/strixllama'
+REPO = 'rulith-dev/rulith-inference'
 
 
 def credential():

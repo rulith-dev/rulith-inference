@@ -1,0 +1,34 @@
+{
+ "question": "0.3.6: what did several conversations at once pay for in the sparse attention's decode, and what of it can go without changing a bit of the output?",
+ "date": "2026-09-30",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve; this session ran ~7% slower than 2026-09-29's (0.3.5 at 3K: 40.1 ms against 37.3 then)",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP off unless stated",
+ "in_graph_cost_by_repetition": {
+  "method": "STRIX_REPEAT=<op>:4 dispatches the op 4 more times inside the captured graph (each copy writes what the first wrote); the step's growth / 4 is the op's in-graph cost. 8 conversations of ~20K (multi_probe --n 8 --words 6000 --gen 128), 512K q8_0 pool",
+  "topk_radix_below_32_rows": "+16.3 ms a step for 4 copies (101.8 -> 118.2 ms): ~340 us a strip",
+  "topk_row_kernel": "+0.4 ms a step for 4 copies (97.6 -> 98.0 ms)",
+  "one_conversation_110K": "the TOP_K of one row: no change either way (40.36 vs 40.37 ms a token); at ~210K 41.13 (radix) vs 41.19 (rows)"
+ },
+ "decode_score_kernel_in_server": {
+  "method": "STRIX_IDXD_BENCH=n: at the first strips of >= 8192 blocks with >= n queries, graphs off, after cudaDeviceSynchronize, both kernels 50 times each timed with events, scores compared bit for bit (identical every time)",
+  "8x20K_40640_blocks_8_queries": {"v1_rows_per_cell": 260, "v3_rows_per_cell": 222, "v1_rows_by_residue": 205, "v3_rows_by_residue": 48, "unit": "us a strip"},
+  "1x110K_27392_blocks_1_query": {"v1_rows_per_cell": 33, "v3_rows_per_cell": 33, "v1_rows_by_residue": 22, "v3_rows_by_residue": 17, "unit": "us a strip"},
+  "parts_of_v3_at_8x20K_rows_per_cell": "without the key loads 41 us, with them ~214 us: the reads, not the dot products, -inf stores, query loads or slot masks",
+  "synthetic_row_strides": {
+   "note": "the same kernel reading rows k*i (256 B rows): one conversation (27392 blocks) / eight (40640 blocks)",
+   "stride_1_256B": [17, 54], "stride_2_512B": [22, 49], "stride_4_1KB": [36, 198], "stride_8_2KB": [257, 388], "stride_12_3KB": [38, 187],
+   "unit": "us a strip",
+   "not_the_cause": "the KV pool size (256K pool: the same), concurrent copies (synchronized first: the same), the rows' region offsets (7 MiB apart: no effect once dense), padding rows (41 of 40640)"
+  }
+ },
+ "ab_against_0.3.5": {
+  "method": "alternated in one session: tools/decode_lab.py (one conversation), tmp/dec034/multi_probe.py and tmp/dec035/sample_probe.py (--n 8 --words 12000 --gen 384), tmp/gdn/sweep_streams.py (MTP on)",
+  "8x40K_512K_q8_0_greedy_ms_a_step": {"0.3.5": [104.52, 107.19], "0.3.6": [99.93, 98.33]},
+  "8x40K_512K_q8_0_sampled_ms_a_step": {"0.3.5": [105.76, 108.62], "0.3.6": [99.08, 97.31]},
+  "one_conversation_ms_a_token_3K_50K_110K": {"0.3.5": [40.14, 39.85, 42.06], "0.3.6": [38.16, 38.83, 40.98]},
+  "one_conversation_210K_ms_a_token": {"0.3.5": 43.10, "0.3.6": [41.19, 41.13]},
+  "mtp_on_short_context": "unchanged: the same texts, 24.3-26.1 ms a token alone, 65.7-66.7 tok/s with four streams"
+ },
+ "bitwise": "fusion_equiv_probe against the 0.3.3 references: f16 MTP off, f16 MTP on, q8_0 8 slots 512K - text and top-5 probabilities identical; multi_bitwise: 8 conversations' tokens identical to 0.3.5's; region moves (move_probe, 3 and 4 turns): 9 and 12 answers identical to 0.3.5's",
+ "check_modes": "STRIX_IDX_SCORE_DEC=2, STRIX_QSA_RUN=2, STRIX_PARALLEL_SAMPLING=2, STRIX_MMVQ_I8_CHECK=1 over 8 conversations greedy and sampled, the agent harness, a full pool, MTP streams and images: no difference, no abort"
+}

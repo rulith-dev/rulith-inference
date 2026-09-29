@@ -34,15 +34,16 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | `Sidebar.tsx` | the sidebar's brand block, the Model group (Library, Configuration, Logs), and the model server panel at its foot: state, load / unload, the model with a menu to run another, Settings and the guide |
 | `StrixLlamaSync.tsx` | the app-wide status poll, the provider registration, the optional load at startup, and the load-finished and out-of-memory toasts |
 | `store.ts`, `status.ts`, `parts.tsx` | shared state (catalog, profile being edited), the manager request and types, the small components the views share |
+| `attachments.ts` | documents in the chat: a dropped file's text read by the app (below), and a document the model's context cannot hold refused before it is sent |
 | `fixtures.ts` | canned manager answers for the browser preview (below); development builds only |
 | `strixllama.css` | a bounded log viewport that pauses auto-follow when you scroll up |
 | `rulith-theme.css` | the palette, type and corners for the whole app (below) |
-| `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable |
+| `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable — and one that reads a dropped document's bytes with Jan's own document parser (`tauri-plugin-rag`) through a temporary file it removes again |
 | `locales/{en,zh-CN}/strixllama.json` | English and Chinese |
 | `icons/` | the application icon, drawn by `make_icons.py` with no image library |
 
 Language follows Jan's own setting: Jan discovers i18n namespaces with `import.meta.glob`, so the
-locale files only have to be dropped in. 266 keys, identical key sets in both languages.
+locale files only have to be dropped in. 275 keys, identical key sets in both languages.
 
 ## Design
 
@@ -109,6 +110,26 @@ deleted file without reaching the origin, which is a bad surprise to discover la
 `apply.py` also calls `converge_settings()`, which strips settings surfaces this build has no path
 through — Jan's own llama.cpp engine controls, the Hub download token, and Jan's Resources and
 Community cards. They point at upstream Jan rather than at this build.
+
+## Documents in the chat
+
+Jan reads an attached document either into the message or into a vector store, through an embedding
+model its own llama.cpp engine serves. That engine is not in this build, so `documents()` in
+`apply.py` sends every document into the message whole: *Add documents or files* works (Jan offers it
+to a model with the `tools` capability, which the served model now carries), a document dropped on
+the chat box is read as it lands (Jan's chat box takes only images, audio and video there), and a
+file that gives no text, or that the loaded context cannot hold, is refused with the reason instead of
+falling back to embeddings. Settings › Attachments keeps the switch and the size limit; the chunking
+and retrieval settings belonged to the engine. Images need the model loaded with *Accept images*:
+then the model carries the `vision` capability.
+
+## Web search
+
+With `tools`, Jan's own web search works too: the model gets `web_search` and `web_fetch`, which
+Jan's websearch plugin answers from Exa's keyless endpoint (Tavily or a SearXNG instance can be set in
+Settings › Web Search). Jan has it on by default; `web_tools()` in `apply.py` starts it off - a stored
+setting from before included - so no chat sends the tools, or a search query to a third party,
+until the globe in the chat box turns it on.
 
 ## Updates
 

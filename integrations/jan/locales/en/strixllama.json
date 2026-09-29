@@ -12,7 +12,7 @@
     "banner": "At {{time}} Windows ran out of memory and the answers being generated were stopped ({{count}}).",
     "toast": "Windows ran out of memory: the answers being generated were stopped"
   },
-  "runtimeMissing": "The model runtime is missing from this installation. Reinstall Strix Llama to restore it.",
+  "runtimeMissing": "The model runtime is missing from this installation. Reinstall Rulith Inference to restore it.",
   "state": {
     "ready": "Running",
     "loading": "Loading",
@@ -37,7 +37,7 @@
     "switchNote": "The loaded model is unloaded first",
     "update": "New version",
     "updating": "Updating {{pct}}%",
-    "updateTitle": "Strix Llama {{version}} is available"
+    "updateTitle": "Rulith Inference {{version}} is available"
   },
   "footer": {
     "madeBy": "made by Rulith",
@@ -75,15 +75,23 @@
     "rescanned": "Scan complete: {{count}} files",
     "switching": "Switching to {{model}}"
   },
+  "attach": {
+    "tooLong": "{{name}} is {{tokens}} tokens long: more than the context the model is loaded with ({{context}} tokens) leaves room for. Attach a shorter file, or raise Context length under Model › Configuration.",
+    "unreadable": "{{name}} could not be read: {{reason}}",
+    "empty": "No text could be read from {{name}}.",
+    "imagesOff": "The model is loaded without image input. Turn on Accept images under Model › Configuration to send pictures.",
+    "disabled": "Attachments are turned off in Settings › Attachments.",
+    "tooLarge": "{{name}} is larger than the {{limit}} MB limit set in Settings › Attachments."
+  },
   "units": {
     "tokens": "tokens"
   },
   "welcome": {
-    "title": "Welcome to Strix Llama",
+    "title": "Welcome to Rulith Inference",
     "subtitle": "Runs Qwen3.8 Flash Next locally on your Ryzen AI Max.",
     "searching": "Looking for model files…",
     "noModelTitle": "No model files found",
-    "noModelBody": "Strix Llama needs the Qwen3.8 Flash Next GGUF files (about 94 GB). Add the folder that holds them, or download them first.",
+    "noModelBody": "Rulith Inference needs the Qwen3.8 Flash Next GGUF files (about 94 GB). Add the folder that holds them, or download them first.",
     "loading": "Loading the model. The first load after a restart can take a minute or two.",
     "ready": "The model is ready. Opening the chat…",
     "reviewSettings": "Review settings",
@@ -100,7 +108,7 @@
     "kindProjection": "Vision projectors",
     "kindAll": "All files",
     "folders": "Model folders",
-    "foldersHelp": "Strix Llama scans these folders for GGUF files. It only reads them and never changes a file.",
+    "foldersHelp": "Rulith Inference scans these folders for GGUF files. It only reads them and never changes a file.",
     "foldersSave": "Save and scan",
     "foldersSaved": "Model folders saved",
     "removeFolder": "Remove folder",
@@ -216,7 +224,7 @@
     },
     "startup": {
       "title": "Startup",
-      "autoload": "Load the model when Strix Llama starts",
+      "autoload": "Load the model when Rulith Inference starts",
       "autoloadHelp": "Off by default. When on, loads the last used model with its saved settings as soon as the app opens"
     },
     "advanced": {

@@ -12,7 +12,7 @@
     "banner": "{{time}} Windows 内存不足，正在生成的回答被中止（{{count}} 个）。",
     "toast": "Windows 内存不足：正在生成的回答被中止"
   },
-  "runtimeMissing": "这个安装里缺少模型运行库。重新安装 Strix Llama 即可恢复。",
+  "runtimeMissing": "这个安装里缺少模型运行库。重新安装 Rulith Inference 即可恢复。",
   "state": {
     "ready": "运行中",
     "loading": "加载中",
@@ -37,7 +37,7 @@
     "switchNote": "会先卸载当前加载的模型",
     "update": "新版本",
     "updating": "正在更新 {{pct}}%",
-    "updateTitle": "Strix Llama {{version}} 可以更新了"
+    "updateTitle": "Rulith Inference {{version}} 可以更新了"
   },
   "footer": {
     "madeBy": "Rulith 出品",
@@ -75,15 +75,23 @@
     "rescanned": "扫描完成：共 {{count}} 个文件",
     "switching": "正在切换到 {{model}}"
   },
+  "attach": {
+    "tooLong": "{{name}} 有 {{tokens}} 个 token，超出了模型当前上下文（{{context}} token）能容纳的长度。请附加较短的文件，或在「模型 › 配置」里调大上下文长度。",
+    "unreadable": "无法读取 {{name}}：{{reason}}",
+    "empty": "没有从 {{name}} 中读到文字。",
+    "imagesOff": "模型加载时没有开启图像输入。在「模型 › 配置」里打开「接受图片」后才能发送图片。",
+    "disabled": "附件功能已在「设置 › 附件」中关闭。",
+    "tooLarge": "{{name}} 超过了「设置 › 附件」中设定的 {{limit}} MB 上限。"
+  },
   "units": {
     "tokens": "token"
   },
   "welcome": {
-    "title": "欢迎使用 Strix Llama",
+    "title": "欢迎使用 Rulith Inference",
     "subtitle": "在你的 Ryzen AI Max 上本地运行 Qwen3.8 Flash Next。",
     "searching": "正在查找模型文件…",
     "noModelTitle": "没有找到模型文件",
-    "noModelBody": "Strix Llama 需要 Qwen3.8 Flash Next 的 GGUF 文件（约 94 GB）。添加存放它们的文件夹，或者先下载。",
+    "noModelBody": "Rulith Inference 需要 Qwen3.8 Flash Next 的 GGUF 文件（约 94 GB）。添加存放它们的文件夹，或者先下载。",
     "loading": "正在加载模型。重启后的第一次加载可能需要一两分钟。",
     "ready": "模型已就绪，正在打开对话…",
     "reviewSettings": "查看设置",
@@ -100,7 +108,7 @@
     "kindProjection": "视觉投影",
     "kindAll": "全部文件",
     "folders": "模型文件夹",
-    "foldersHelp": "Strix Llama 在这些文件夹里查找 GGUF 文件，只读取，不会改动任何文件。",
+    "foldersHelp": "Rulith Inference 在这些文件夹里查找 GGUF 文件，只读取，不会改动任何文件。",
     "foldersSave": "保存并扫描",
     "foldersSaved": "模型文件夹已保存",
     "removeFolder": "移除文件夹",
@@ -216,7 +224,7 @@
     },
     "startup": {
       "title": "启动",
-      "autoload": "启动 Strix Llama 时自动加载模型",
+      "autoload": "启动 Rulith Inference 时自动加载模型",
       "autoloadHelp": "默认关闭。打开后，应用一启动就按已保存的设置加载上次用的模型"
     },
     "advanced": {

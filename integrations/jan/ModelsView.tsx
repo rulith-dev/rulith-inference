@@ -12,7 +12,7 @@ import { useModelStore } from './store'
 import { Label, RowAction, Segments, StatePill, openExternal, useTr } from './parts'
 
 // Where the README lists the model files, pinned to the revision this build was tested with
-export const MODEL_FILES_URL = 'https://github.com/rulith-dev/strixllama#model-files'
+export const MODEL_FILES_URL = 'https://github.com/rulith-dev/rulith-inference#model-files'
 
 export default function ModelsView() {
   const tr = useTr()

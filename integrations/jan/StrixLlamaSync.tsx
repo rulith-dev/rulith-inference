@@ -92,10 +92,14 @@ export function StrixLlamaSync() {
     if (status?.status !== 'ready' || !status.served_models?.length) return
     const p = providers.find((p) => p.provider === PROVIDER)
     if (!p) return
+    // What the chat box offers depends on these: 'tools' for documents and Jan's web search (off until turned on,
+    // apply.py web_tools()), 'vision' for adding, pasting and dropping images - only when this load has the projector.
+    const capabilities = ['tools', ...(status.profile?.vision ? ['vision'] : [])]
     const models = status.served_models.map((m) => ({
       ...p.models.find((old) => old.id === m.id),
       id: m.id,
       displayName: status.model_name || m.id,
+      capabilities,
     }))
     if (JSON.stringify(p.models) !== JSON.stringify(models)) {
       useModelProvider.getState().updateProvider(PROVIDER, { models })

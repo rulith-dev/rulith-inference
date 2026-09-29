@@ -1,4 +1,4 @@
-# Strix Llama
+# Rulith Inference
 
 Serving a 125B mixture-of-experts model fast on one AMD Strix Halo machine, on Windows.
 
@@ -6,6 +6,10 @@ Target: **Ryzen AI Max+ 395** (Radeon 8060S, gfx1151, 128 GB unified memory) run
 **Qwen3.8-Flash-Next** (125B-A6B, Unsloth UD-IQ4_XS, 93.7 GB) through a patched llama.cpp.
 
 *[中文说明](README.zh.md)*
+
+*Formerly **Strix Llama**, renamed in 0.3.6 so as not to be confused with the community fork
+[halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp), which had the name first. Same app,
+same data: an installed Strix Llama updates in place.*
 
 ## Where it stands
 
@@ -20,7 +24,7 @@ conversations of ~4K tokens each decoding together, with a new sampling seed eve
 | decode, 86K context | **27.3 ms/token** (36.7 tok/s at 63% draft acceptance) |
 | decode, short context | **22.5 ms/token** (44.4 tok/s at 67% acceptance) |
 | decode, 3 / 4 conversations at once | **55.4 / 62.5 tok/s** summed (1.40× / 1.57× one conversation measured the same way, 39.7; per step the same as 0.3.0, the sum moves ±10% with the sampled rounds' acceptance) |
-| decode with MTP off, 8 conversations of ~40K tokens at once | **77.9 tok/s** summed in a 512K-token q8_0 pool (0.3.5; 0.3.4: 75.8 in the same session, 0.3.3: 58.8), 77.7 with typical sampling settings, and one conversation at 110K 24.6 tok/s (0.3.3: 21.6) |
+| decode with MTP off, 8 conversations of ~40K tokens at once | **80.8 tok/s** summed in a 512K-token q8_0 pool (0.3.6; 0.3.5: 75.7 in the same session, 0.3.3: 58.8), 81.6 with typical sampling settings; one conversation at 110K 24.4 tok/s and at ~210K 24.3 (0.3.5: 23.8 and 23.2) |
 | image input | supported (Qwen3-VL projector) |
 
 Every number in this repository comes with the command that produced it, in
@@ -31,7 +35,7 @@ speculation on, throughput without acceptance describes the prompt rather than t
 ## Just want to run it?
 
 **[docs/getting-started.md](docs/getting-started.md)** — the installer from the
-[releases page](https://github.com/rulith-dev/strixllama/releases), the five model files to download
+[releases page](https://github.com/rulith-dev/rulith-inference/releases), the five model files to download
 and where to put them, and what to press. No Python, ROCm or build tools involved.
 
 ## Model files
@@ -45,7 +49,7 @@ they were checked against (`38bb39e`: the sha256 of each file compared with the 
 | **Model**, required | Unsloth's Qwen3.8-Flash-Next-GGUF, [`UD-IQ4_XS`, three shards](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS) | 93.7 GB |
 | **MTP draft**: speculative decoding, ~+60% decode | [`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf) | 1.9 GB |
 | **Vision projector**: image input | [`mmproj-F16.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/mmproj-F16.gguf) | 904 MB |
-| **Draft head**, ours: the draft's own IQ4_XS output projection, +5-9% decode | [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf) | 349 MB |
+| **Draft head**, ours: the draft's own IQ4_XS output projection, +5-9% decode | [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf) | 349 MB |
 
 All four go flat into one folder: the app finds the draft, the projector and the head by name next to
 the model's first shard. [docs/getting-started.md](docs/getting-started.md) has the download commands.
@@ -155,4 +159,4 @@ for a [Jan](https://github.com/menloresearch/jan) checkout (Apache-2.0).
 
 ---
 
-Strix Llama is made by [Rulith](https://rulith.ai): verifiable execution infrastructure for AI agents.
+Rulith Inference is made by [Rulith](https://rulith.ai): verifiable execution infrastructure for AI agents.

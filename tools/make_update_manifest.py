@@ -1,9 +1,10 @@
 """Write latest.json, the file the app's updater reads, for a signed release build.
 
-    python tools/make_update_manifest.py dist/Strix-Llama_0.2.5_x64-setup.exe --notes dist/release-notes-v0.2.5.md
+    python tools/make_update_manifest.py dist/Rulith-Inference_0.3.6_x64-setup.exe --notes dist/release-notes-v0.3.6.md
 
-The app checks https://github.com/rulith-dev/strixllama/releases/latest/download/latest.json (the endpoint
-integrations/jan/apply.py configures), so this file is uploaded with every release, next to the setup it
+The app checks https://github.com/rulith-dev/rulith-inference/releases/latest/download/latest.json (the
+endpoint integrations/jan/apply.py configures; releases up to 0.3.5 check the old name, rulith-dev/strixllama,
+which GitHub redirects), so this file is uploaded with every release, next to the setup it
 names. The setup's signature comes from the .sig file Tauri writes beside it when the build is signed
 (TAURI_SIGNING_PRIVATE_KEY set); the app installs an update only if that signature verifies against the
 public key it was built with (integrations/jan/updater.pub). The version is read from the setup's name.
@@ -21,7 +22,7 @@ import re
 import sys
 from pathlib import Path
 
-REPO = 'rulith-dev/strixllama'
+REPO = 'rulith-dev/rulith-inference'
 
 
 def main():

@@ -20,7 +20,7 @@ export function SidebarBrand() {
     <div className="flex min-w-0 items-center gap-2.5 pl-1.5">
       <img src="/images/jan-logo.png" alt="" className="size-6 shrink-0 rounded-md" />
       <div className="min-w-0 leading-tight">
-        <div className="truncate text-[13px] font-semibold uppercase tracking-wide">Strix Llama</div>
+        <div className="truncate text-[13px] font-semibold uppercase tracking-wide">Rulith Inference</div>
         <div className="truncate text-[11px] text-muted-foreground">by Rulith</div>
       </div>
     </div>
@@ -121,7 +121,7 @@ export function ModelPanel() {
           <Settings className="size-3.5" />{tr('panel.settings')}
         </Link>
         <span className="flex items-center gap-2 text-muted-foreground">
-          <button type="button" className="hover:text-foreground" onClick={() => openExternal('https://github.com/rulith-dev/strixllama/blob/main/docs/getting-started.md')}>{tr('panel.guide')} ↗</button>
+          <button type="button" className="hover:text-foreground" onClick={() => openExternal('https://github.com/rulith-dev/rulith-inference/blob/main/docs/getting-started.md')}>{tr('panel.guide')} ↗</button>
           {updateState.isUpdateAvailable ? (
             // a newer release verified by the updater: open its prompt (release notes, Update) again
             <button type="button" title={tr('panel.updateTitle', { version: updateState.updateInfo?.version ?? '' })}

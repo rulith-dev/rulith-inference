@@ -1,4 +1,4 @@
-/* Strix Llama in Rulith's design language (Rulith Console and the Rulith desktop app): neutral greys, a white
+/* Rulith Inference in Rulith's design language (Rulith Console and the Rulith desktop app): neutral greys, a white
    primary button on dark (black on light), hairline borders, 6-8 px corners, compact system type, and one
    brand colour, Rulith green, for state. Jan's theme variables are overridden rather than its components:
    the chat, the settings and our pages all follow. !important because Jan's interface settings write --primary

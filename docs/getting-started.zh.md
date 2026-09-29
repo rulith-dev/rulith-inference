@@ -2,7 +2,7 @@
 
 *[English](getting-started.md)*
 
-这一页讲的是用发布的安装包运行 Strix Llama。这条路不需要 Python、ROCm、Visual Studio，也不需要
+这一页讲的是用发布的安装包运行 Rulith Inference（原名 Strix Llama）。这条路不需要 Python、ROCm、Visual Studio，也不需要
 源码——安装包自带整套运行时。自己编译是另一页：[install.md](install.md)。
 
 全部流程是：装应用，把五个文件下载到同一个文件夹，把应用指向这个文件夹，点"加载模型"，开聊。
@@ -19,8 +19,8 @@
 
 ## 1. 装应用
 
-从 [Releases 页面](https://github.com/rulith-dev/strixllama/releases)下载
-`Strix-Llama_<版本>_x64-setup.exe`，运行。安装到此为止：应用本体、用我们的 fork 编译的
+从 [Releases 页面](https://github.com/rulith-dev/rulith-inference/releases)下载
+`Rulith-Inference_<版本>_x64-setup.exe`，运行。安装到此为止：应用本体、用我们的 fork 编译的
 `llama-server`、它需要的 ROCm 库、进程管理器和它自己的 Python 都在里面，不用再装任何东西。
 
 从 0.2.5 起应用会自己更新：启动时检查本项目在 GitHub 上的新版本，有新版本时会弹出提示，侧栏底部也会
@@ -59,8 +59,8 @@ LM Studio 的目录，不复制。
 草稿和投影在文件夹里就自动开启，不在就保持关闭，"模型配置"页会说明没找到哪一个。没有草稿，
 解码慢约 40%。（第 4 个换成 `mtp-…-shared-Q8_0.gguf` 也行，两者相差不到 1%。）
 
-**再加一个，可选：草稿头**——[`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf)，349 MB，在本项目的
-[Releases 页面](https://github.com/rulith-dev/strixllama/releases)。放到第 4 个文件所在的同一个
+**再加一个，可选：草稿头**——[`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf)，349 MB，在本项目的
+[Releases 页面](https://github.com/rulith-dev/rulith-inference/releases)。放到第 4 个文件所在的同一个
 文件夹。下次重新扫描时应用会把两者合并成 `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf`
 （几秒钟，只做一次）并优先使用：英文解码快 5%，中文快 9%，接受率不变，下面的数字就是这个配置测的。
 见[第 5 节](#5-可选更快的草稿头解码-5–9)。
@@ -83,7 +83,7 @@ foreach ($f in
   aria2c -x 8 -s 8 -c -d $dir -o (Split-Path $f -Leaf) "$base/$f"
 }
 # 可选：草稿头（第 5 节）
-aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf"
+aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf"
 ```
 
 国内访问 Hugging Face 慢或不通的话用镜像：把 `$base` 里的 `huggingface.co` 换成 `hf-mirror.com`。
@@ -148,7 +148,7 @@ Windows 更大的页面文件（内存加页面文件的总量通常最先用完
 
 Unsloth 的 `shared-*` 草稿没有自己的输出投影，每一步草稿都要去读模型那份 521 MB 的。这个投影只是
 一张张量，所以单独发布：`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`，349 MB，在
-[Releases 页面](https://github.com/rulith-dev/strixllama/releases)。下载到模型文件夹里、第 4 个文件
+[Releases 页面](https://github.com/rulith-dev/rulith-inference/releases)。下载到模型文件夹里、第 4 个文件
 旁边，然后在**模型 › 模型库**里点**重新扫描**。应用会在旁边写出
 `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf`（两个文件逐字节拼接，几秒钟，只做一次；这是
 应用唯一会写进模型文件夹的文件），弹一条提示，之后所有没手动选过草稿的配置都用它。**模型 › 配置**的
@@ -167,6 +167,7 @@ Unsloth 的 `shared-*` 草稿没有自己的输出投影，每一步草稿都要
   或页面文件不够。
 - **8080 端口被占用。** 本应用早前实例启动的 `llama-server` 还在跑；模型页面会认领它并可以卸载。
   别的程序占了这个端口就得手动停掉。
-- **东西都在哪。** 应用在 `%LOCALAPPDATA%\Strix Llama`；管理器的设置、模型目录缓存和最近一次服务日志在
-  它下面的 `runtime\config\jan\`；聊天记录在 `%APPDATA%\strixllama\data`。卸载会删掉应用文件夹连同
-  这些设置，聊天记录保留。
+- **东西都在哪。** 应用在 `%LOCALAPPDATA%\Rulith Inference`（改名前安装、之后更新过来的，仍在
+  `%LOCALAPPDATA%\Strix Llama`）；管理器的设置、模型目录缓存、提示缓存和最近一次服务日志在它下面的
+  `runtime\config\jan\`；聊天记录在 `%APPDATA%\strixllama\data`。卸载会删掉应用；勾选"删除应用数据"时
+  设置和提示缓存一并删除，聊天记录无论如何都保留。

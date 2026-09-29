@@ -1,7 +1,7 @@
 # Installing and running it
 
-**The short way** is the installer from the [releases page](https://github.com/rulith-dev/strixllama/releases):
-`strixllama_<version>_x64-setup.exe` carries the desktop app and, under `runtime/`, everything it
+**The short way** is the installer from the [releases page](https://github.com/rulith-dev/rulith-inference/releases):
+`Rulith-Inference_<version>_x64-setup.exe` carries the desktop app and, under `runtime/`, everything it
 runs — `llama-server` built from the pinned fork, the eight ROCm DLLs it imports plus the gfx1151
 kernel libraries, the Visual C++ and OpenMP runtimes, the manager and an embedded Python. On a
 machine set up as in section 1, with the model files from section 5 already in LM Studio's folder,

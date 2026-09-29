@@ -31,7 +31,7 @@ const status = () => {
   const m = models.find(x => x.id === running)
   return {
     status: state === 'failed' ? 'stopped' : state, endpoint: 'http://127.0.0.1:8080/v1',
-    runtime: 'C:\\Users\\me\\AppData\\Local\\Strix Llama\\runtime\\bin\\hip\\llama-server.exe', runtime_available: true,
+    runtime: 'C:\\Users\\me\\AppData\\Local\\Rulith Inference\\runtime\\bin\\hip\\llama-server.exe', runtime_available: true,
     runtime_info: { rocm: '10.2.0a20260925', gfx: 'gfx1151' },
     runtime_env: { LLAMA_QSA_SPARSE: '1', STRIX_SPEC_DRAFT_BY_SLOTS: '3,2,2,2,0' },
     ...(m ? { identity: { pid: 23456 }, model_path: m.path, model_name: m.name, profile: runningProfile,

@@ -14,13 +14,22 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
-# The name people see, and the one machines use. The repository, the package, the binary, the
-# provider id and the data directory are the slug; the window, the sidebar, the credits and the
-# installer show the name.
-NAME = 'Strix Llama'
+# The name people see, and the one machines use. The package, the binary, the provider id and the
+# data directory are the slug; the window, the sidebar, the credits and the installer show the name.
+# Up to 0.3.5 the app was Strix Llama (LEGACY_NAME, the name an existing install is found by); it was
+# renamed in 0.3.6 so as not to be confused with halo-box/strix-llama.cpp, and the slug stayed, so the
+# data, the settings and the app's identity carry over unchanged.
+NAME = 'Rulith Inference'
+LEGACY_NAME = 'Strix Llama'
 SLUG = 'strixllama'
+# The repository on GitHub, renamed from rulith-dev/strixllama with the app: GitHub redirects the old
+# name, so the old updater endpoint and posted links keep working.
+REPO = 'rulith-dev/rulith-inference'
+# The publisher the installer registers the app under (Jan's configuration names Menlo Research, which
+# made Jan, not this build); the uninstall entry and the install-location key go under it.
+PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.3.5'
+VERSION = '0.3.6'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -29,9 +38,53 @@ JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
 # browser preview uses (fixtures.ts, imported only by development builds).
 UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
             'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
-            'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
+            'attachments.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
-NSIS_HOOKS = r"""!macro NSIS_HOOK_PREINSTALL
+NSIS_HOOKS = r"""Var LegacyDir
+
+; An install made before the rename (up to 0.3.5, as Strix Llama). The installer names the folder, the
+; uninstall entry, the install-location key and the shortcuts after the product, so the new name's setup
+; would install a second copy beside the old one - and the model server's settings and prompt cache live
+; under runtime\config in the install folder, tens of GB. So the new version goes into the old folder, as
+; an update would, and the old name's entries give way to the new name's (NSIS_HOOK_POSTINSTALL).
+!macro STRIX_FIND_LEGACY
+  ReadRegStr $LegacyDir HKCU "Software\Menlo Research Pte. Ltd.\@LEGACY@" ""
+  ${If} $LegacyDir == ""
+    ; the uninstall entry's copy is quoted
+    ReadRegStr $LegacyDir HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\@LEGACY@" "InstallLocation"
+    StrCpy $0 $LegacyDir 1
+    ${If} $0 == '"'
+      StrCpy $LegacyDir $LegacyDir "" 1
+      StrCpy $LegacyDir $LegacyDir -1
+    ${EndIf}
+  ${EndIf}
+  ${IfNot} ${FileExists} "$LegacyDir\@SLUG@.exe"
+    StrCpy $LegacyDir ""
+  ${EndIf}
+!macroend
+
+; a shortcut under the old name, renamed (it points at the same exe, which has not moved)
+!macro STRIX_RENAME_SHORTCUT DIR
+  ${If} ${FileExists} "${DIR}\@LEGACY@.lnk"
+    ${If} ${FileExists} "${DIR}\${PRODUCTNAME}.lnk"
+      Delete "${DIR}\@LEGACY@.lnk"
+    ${Else}
+      Rename "${DIR}\@LEGACY@.lnk" "${DIR}\${PRODUCTNAME}.lnk"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_PREINSTALL
+  !insertmacro STRIX_FIND_LEGACY
+  ; only in place of the default folder: a folder chosen on the directory page is kept
+  ${If} $LegacyDir != ""
+  ${AndIf} $INSTDIR == "$LOCALAPPDATA\${PRODUCTNAME}"
+    ; Section Install made the default folder already; it is empty
+    SetOutPath "$LOCALAPPDATA"
+    RMDir "$INSTDIR"
+    StrCpy $INSTDIR $LegacyDir
+    SetOutPath $INSTDIR
+  ${EndIf}
   ; a model server still running from this install holds runtime\bin\hip open. Stop it as the app does -
   ; through the manager, which writes its conversations to the disk tier first - then stop whatever of this
   ; install is still running: only processes whose file lies under $INSTDIR.
@@ -42,7 +95,38 @@ NSIS_HOOKS = r"""!macro NSIS_HOOK_PREINSTALL
   ; with; it is runtime\bin\hip now, and the old copy would otherwise stay behind after an upgrade
   RMDir /r "$INSTDIR\runtime\bin\hip-rocm101"
 !macroend
-"""
+
+!macro NSIS_HOOK_POSTINSTALL
+  ; the old name's uninstall entry and install-location key, now that the new name's cover the same folder
+  ; (two entries would uninstall one folder), and its shortcuts, renamed. A taskbar pin is left as it is: it
+  ; points at the same exe and keeps working.
+  ${If} $LegacyDir != ""
+  ${AndIf} $LegacyDir == $INSTDIR
+    DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\@LEGACY@"
+    DeleteRegKey HKCU "Software\Menlo Research Pte. Ltd.\@LEGACY@"
+    DeleteRegKey /ifempty HKCU "Software\Menlo Research Pte. Ltd."
+    !insertmacro STRIX_RENAME_SHORTCUT "$SMPROGRAMS"
+    !insertmacro STRIX_RENAME_SHORTCUT "$DESKTOP"
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_POSTUNINSTALL
+  ; The uninstaller deletes the files the installer laid down, one by one, and leaves what the runtime wrote
+  ; beside them: its logs and bytecode, and runtime\config - the manager's settings, the model catalog and
+  ; the prompt cache, which grows to tens of GB. Those go with "Delete the application data", like the app's
+  ; other data; an update (the updater runs the old uninstaller) keeps everything.
+  ${If} $UpdateMode <> 1
+    RMDir /r "$INSTDIR\runtime\logs"
+    RMDir /r "$INSTDIR\runtime\tools\__pycache__"
+    ${If} $DeleteAppDataCheckboxState = 1
+      RMDir /r "$INSTDIR\runtime\config"
+    ${EndIf}
+    RMDir "$INSTDIR\runtime\tools"
+    RMDir "$INSTDIR\runtime"
+    RMDir "$INSTDIR"
+  ${EndIf}
+!macroend
+""".replace('@LEGACY@', LEGACY_NAME).replace('@SLUG@', SLUG)
 
 def replace_once(path, old, new):
     text = path.read_text(encoding='utf-8')
@@ -93,6 +177,8 @@ def main():
     lib = JAN / 'src-tauri/src/lib.rs'
     replace_once(lib, 'pub mod core;', 'pub mod core;\nmod strixllama;')
     replace_once(lib, 'tauri::generate_handler![', 'tauri::generate_handler![\n            strixllama::strixllama_request,')
+    replace_once(lib, '            strixllama::strixllama_request,\n',
+                 '            strixllama::strixllama_request,\n            strixllama::strixllama_parse_dropped,\n')
     replace_once(JAN / 'src-tauri/src/main.rs', '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]', '#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]')
     # The chat goes through the app's Rust HTTP client (reqwest), which picks up the Windows
     # system proxy but not its "bypass for 127.*" list - so with Clash or similar on, every
@@ -247,6 +333,8 @@ def main():
                  "      const isStoppedTurn = isAbort || isError || isDisconnect || finishReason === 'length'\n")
     converge_settings()
     drop_integrations()
+    documents()
+    web_tools()
     brand(KEEP_DATA_DIR)
     brand_text()
     # Jan's own llama.cpp engine is not loaded at all. Left in, its extension downloads a Vulkan
@@ -357,6 +445,7 @@ def brand(keep_data_dir=False):
     data = json.loads(conf.read_text(encoding='utf-8'))
     data['productName'] = NAME
     data['mainBinaryName'] = SLUG      # strixllama.exe, whatever the product is called
+    data.setdefault('bundle', {})['publisher'] = PUBLISHER
     data['version'] = VERSION
     # Settings › General reads the web app's package version
     web_pkg = JAN / 'web-app/package.json'
@@ -412,7 +501,7 @@ def brand(keep_data_dir=False):
     plugins = data.get('plugins') or {}
     plugins['updater'] = {
         'pubkey': (HERE / 'updater.pub').read_text(encoding='utf-8').strip(),
-        'endpoints': [f'https://github.com/rulith-dev/{SLUG}/releases/latest/download/latest.json'],
+        'endpoints': [f'https://github.com/{REPO}/releases/latest/download/latest.json'],
         'windows': {'installMode': 'passive'},
     }
     data['plugins'] = plugins
@@ -990,6 +1079,153 @@ def drop_integrations():
     # prefix only: converge_settings() rewrites the rest of that comment line, and runs before this
     cut_span(menu, "          {/* Integrations section */}\n", "          {/* Model Providers section", keep_end=True)
     drop_declarations(menu, ('IconTopologyStar3',))
+
+
+def documents():
+    """Documents in the chat (issue #4): attached with "Add documents or files" or dropped on the chat box.
+
+    Jan reads a document either into the message or into a vector store through an embedding model its own llama.cpp
+    engine serves, and this build leaves that engine out - so a document goes into the message whole, from wherever it
+    came (a project's conversations too). The menu item needs the model's 'tools' capability, which StrixLlamaSync
+    gives it (web_tools() below). components/strixllama/attachments.ts reads the text and refuses, with the reason, a
+    file that gives none or that the model's context cannot hold. Jan's chat box takes only images, audio and video
+    when dropped: an HTML5 drop carries a file's bytes but no path, so a dropped document goes to
+    strixllama_parse_dropped (strixllama.rs), which reads it with the parser the file picker reaches - made public here
+    for that.
+    """
+    replace_once(JAN / 'src-tauri/plugins/tauri-plugin-rag/src/lib.rs', 'mod parser;\n', 'pub mod parser;\n')
+
+    chat = JAN / 'web-app/src/containers/ChatInput.tsx'
+    replace_once(chat, "import { toast } from 'sonner'\n",
+                 "import { toast } from 'sonner'\n"
+                 "import { fileExtension, parseDroppedDocument, readDocument } from '@/components/strixllama/attachments'\n")
+    replace_once(chat, """            size,
+            parseMode: parsePreference,
+          })""", """            size,
+            // strixllama: into the message; there is no embedding engine to index it
+            parseMode: 'inline',
+          })""")
+    replace_once(chat, "  const dropAcceptsAnything = hasMmproj || audioSupported || videoSupported\n", """\
+  // strixllama: a document dropped on the chat box is read as it lands and goes into the message, like one the file
+  // picker attached (Jan's chat box takes only images, audio and video); allowed where that menu item is
+  const docsSupported = !!selectedModel?.capabilities?.includes('tools')
+  const attachDroppedDocuments = async (files: File[]) => {
+    if (!attachmentsEnabled) {
+      toast.info(t('strixllama:attach.disabled'))
+      return
+    }
+    const limit = typeof maxFileSizeMB === 'number' && maxFileSizeMB > 0 ? maxFileSizeMB : undefined
+    for (const file of files) {
+      if (limit !== undefined && file.size > limit * 1024 * 1024) {
+        toast.error(t('strixllama:attach.tooLarge', { name: file.name, limit }))
+        continue
+      }
+      // a dropped file has no path: this finds its chip again, and tells a second drop of the same file apart
+      const key = `drop:${file.name}:${file.size}:${file.lastModified}`
+      let duplicate = false
+      setAttachmentsForThread(attachmentsKey, (prev) => {
+        duplicate = prev.some((a) => a.contentHash === key)
+        return duplicate
+          ? prev
+          : [...prev, { type: 'document' as const, name: file.name, fileType: fileExtension(file.name), size: file.size,
+              contentHash: key, processing: true }]
+      })
+      if (duplicate) continue
+      try {
+        const text = await readDocument(file.name, () => parseDroppedDocument(file))
+        setAttachmentsForThread(attachmentsKey, (prev) =>
+          prev.map((a) => a.contentHash === key
+            ? { ...a, processing: false, processed: true, injectionMode: 'inline' as const, inlineContent: text }
+            : a))
+      } catch (err) {
+        setAttachmentsForThread(attachmentsKey, (prev) => prev.filter((a) => a.contentHash !== key))
+        toast.error(err instanceof Error ? err.message : String(err))
+      }
+    }
+  }
+
+  const dropAcceptsAnything = hasMmproj || audioSupported || videoSupported || docsSupported
+""")
+    replace_once(chat, """    if (otherOnes.length > 0 && hasMmproj) {
+      const dt = new DataTransfer()
+      otherOnes.forEach((f) => dt.items.add(f))""", """    // strixllama: pictures go to the image path, every other file is a document (attachDroppedDocuments)
+    const imageOnes = otherOnes.filter((f) => f.type.startsWith('image/'))
+    const docOnes = otherOnes.filter((f) => !f.type.startsWith('image/'))
+    if (imageOnes.length > 0 && !hasMmproj) {
+      toast.info(t('strixllama:attach.imagesOff'))
+    }
+    if (docOnes.length > 0 && docsSupported) {
+      void attachDroppedDocuments(docOnes)
+    }
+    if (imageOnes.length > 0 && hasMmproj) {
+      const dt = new DataTransfer()
+      imageOnes.forEach((f) => dt.items.add(f))""")
+    processing = JAN / 'web-app/src/lib/attachmentProcessing.ts'
+    replace_once(processing, "import { toast } from 'sonner'\n",
+                 "import { toast } from 'sonner'\n"
+                 "import { readDocument } from '@/components/strixllama/attachments'\n")
+    replace_once(processing, """      // Project files always use embeddings, never inline
+      if (projectId) {
+        targetMode = 'embeddings'
+      }
+
+      const canInline = !projectId && targetPreference !== 'embeddings' && !!doc.path
+
+      if (canInline) {
+        try {
+          parsedContent = await serviceHub
+            .rag()
+            .parseDocument?.(doc.path!, doc.fileType)
+        } catch (err) {
+          console.warn(`Failed to parse ${doc.name} for inline use`, err)
+        }
+      }""", """      // strixllama: into the message, in a project's conversations too - there is no embedding engine to index it
+      // with. A file that gives no text, or that the context cannot hold, is refused with the reason.
+      const canInline = targetPreference !== 'embeddings' && !!doc.path
+
+      if (canInline) {
+        parsedContent = await readDocument(doc.name, () =>
+          serviceHub.rag().parseDocument?.(doc.path!, doc.fileType) ?? Promise.resolve(undefined))
+      }""")
+
+    transport = JAN / 'web-app/src/lib/custom-chat-transport.ts'
+    # with attachments, Jan's system prompt points the model at retrieval tools for them; here their text is in the message
+    replace_once(transport, """      'attached to that turn (file_id, name, type, size, chunk count, mode).',
+      'Use the available retrieval tools with those file_ids when their',
+      'contents are relevant to the request.',""", """      'attached to that turn (file_id, name, type, size, chunk count, mode).',
+      // strixllama: every document is in the message (mode: inline); there are no retrieval tools in this build
+      'The text of each file follows in the same message, after a line',
+      '"File: <name>".',""")
+    # the rest of the attachment settings are the embedding engine's: chunking, retrieval, search
+    replace_once(JAN / 'web-app/src/routes/settings/attachments.tsx', "              {defs.map((d) => {\n",
+                 "              {/* strixllama: the others (chunks, retrieval, search) are the embedding engine's, not in this build */}\n"
+                 "              {defs.filter((d) => d.key === 'enabled' || d.key === 'max_file_size_mb').map((d) => {\n")
+
+
+def web_tools():
+    """Jan's web search, which this build's model never had: Jan offers web_search and web_fetch (tauri-plugin-websearch:
+    Exa's keyless endpoint by default, Tavily or SearXNG in Settings > Web Search) only to a model with the 'tools'
+    capability, and StrixLlamaSync now gives it. Jan has web search on unless it is turned off, so every chat would send
+    the two tools and every search would go to a third party: here it starts off, and the globe in the chat box turns it
+    on. It was already on (Jan's default) in every system prompt, as an instruction about tools the model was never
+    given; while off, that instruction is not sent either.
+    """
+    config = JAN / 'web-app/src/hooks/useWebSearchConfig.ts'
+    replace_once(config, "      webSearchEnabled: true,\n",
+                 "      webSearchEnabled: false, // strixllama: off until the globe in the chat box turns it on\n")
+    # a stored setting from before says true because Jan's default did: off once, too
+    replace_once(config, """      name: localStorageKey.settingWebSearch,
+      storage: createJSONStorage(() => backendStorage),""", """      name: localStorageKey.settingWebSearch,
+      // strixllama: version 1 - web search starts off in this build (see its default above), stored settings included
+      version: 1,
+      migrate: (stored) => ({ ...(stored as WebSearchConfigState), webSearchEnabled: false }),
+      storage: createJSONStorage(() => backendStorage),""")
+    # 'tools' with 'vision' also brings the button of Jan's browser extension, which runs through MCP servers this build
+    # does not set up (drop_integrations)
+    replace_once(JAN / 'web-app/src/containers/ChatInput.tsx',
+                 "                {!effectiveAgentMode && hasJanBrowserMCPConfig && modelSupportsBrowser && (\n",
+                 "                {/* strixllama: Jan's browser extension runs through MCP, which this build does not set up */}\n"
+                 "                {false && !effectiveAgentMode && hasJanBrowserMCPConfig && modelSupportsBrowser && (\n")
 
 
 if __name__ == '__main__':

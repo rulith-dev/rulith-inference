@@ -2,6 +2,42 @@
 use serde_json::Value;
 use std::{io::Write, path::PathBuf, process::{Command, Stdio}};
 
+/// The text of a document dropped on the chat box. An HTML5 drop hands the webview the file's bytes but not its path
+/// (Jan turns Tauri's own drop handling off, since its image drops need the HTML5 events), so the bytes come here raw
+/// and are read by the parser Jan's file picker reaches (tauri-plugin-rag), through a temporary file that is removed
+/// again. The header x-file-type is the extension, as the picker passes it.
+#[tauri::command]
+pub async fn strixllama_parse_dropped(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let bytes: Vec<u8> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        // the IPC's postMessage fallback carries them as a JSON array of numbers
+        tauri::ipc::InvokeBody::Json(Value::Array(items)) => items.iter()
+            .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect::<Option<Vec<u8>>>().ok_or("Expected the file's bytes")?,
+        _ => return Err("Expected the file's bytes".into()),
+    };
+    if bytes.len() as u64 > tauri_plugin_rag::MAX_PARSE_FILE_SIZE {
+        return Err("File too large (max 200MB)".into());
+    }
+    // also the temporary file's extension, so nothing but letters and digits
+    let file_type: String = request.headers().get("x-file-type").and_then(|v| v.to_str().ok()).unwrap_or("")
+        .chars().filter(char::is_ascii_alphanumeric).take(16).collect::<String>().to_ascii_lowercase();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = std::env::temp_dir().join("strixllama-drops");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let path = dir.join(format!("{}-{nanos}.{}", std::process::id(), if file_type.is_empty() { "bin" } else { &file_type }));
+        std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+        let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || tauri_plugin_rag::parser::parse_document(&path.to_string_lossy(), &file_type)));
+        let _ = std::fs::remove_file(&path);
+        match parsed {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => Err("Document parsing failed unexpectedly".into()),
+        }
+    }).await.map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn strixllama_request(request: Value) -> Result<Value, String> {
     let op = request.get("op").and_then(Value::as_str).ok_or("Missing operation")?;

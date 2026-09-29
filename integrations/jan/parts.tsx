@@ -201,13 +201,13 @@ export function PageFooter() {
   const tr = useTr()
   const links: [string, string][] = [
     ['rulith.ai', 'https://rulith.ai'],
-    [tr('footer.source'), 'https://github.com/rulith-dev/strixllama'],
-    [tr('footer.guide'), 'https://github.com/rulith-dev/strixllama/blob/main/docs/getting-started.md'],
-    [tr('footer.licenses'), 'https://github.com/rulith-dev/strixllama/blob/main/NOTICE.md'],
+    [tr('footer.source'), 'https://github.com/rulith-dev/rulith-inference'],
+    [tr('footer.guide'), 'https://github.com/rulith-dev/rulith-inference/blob/main/docs/getting-started.md'],
+    [tr('footer.licenses'), 'https://github.com/rulith-dev/rulith-inference/blob/main/NOTICE.md'],
   ]
   return (
     <footer className="mt-8 border-t pt-4 text-xs text-muted-foreground">
-      <span className="font-semibold uppercase tracking-wide">Strix Llama</span> · {tr('footer.madeBy')} ·{' '}
+      <span className="font-semibold uppercase tracking-wide">Rulith Inference</span> · {tr('footer.madeBy')} ·{' '}
       {links.map(([label, url], i) => (
         <span key={url}>
           <button type="button" className="text-[var(--rl-blue)] hover:underline" onClick={() => openExternal(url)}>{label}</button>

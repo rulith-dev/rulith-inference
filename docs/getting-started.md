@@ -2,7 +2,7 @@
 
 *[中文](getting-started.zh.md)*
 
-This page is for running Strix Llama from the release installer. Nothing on it needs Python, ROCm,
+This page is for running Rulith Inference (formerly Strix Llama) from the release installer. Nothing on it needs Python, ROCm,
 Visual Studio or a source checkout — the installer carries the whole runtime. Building it yourself
 is a different page: [install.md](install.md).
 
@@ -21,8 +21,8 @@ folder, press *Load model*, chat.
 
 ## 1. Install the app
 
-Download `Strix-Llama_<version>_x64-setup.exe` from the
-[releases page](https://github.com/rulith-dev/strixllama/releases) and run it. That is the whole
+Download `Rulith-Inference_<version>_x64-setup.exe` from the
+[releases page](https://github.com/rulith-dev/rulith-inference/releases) and run it. That is the whole
 installation: the app, `llama-server` built from our fork, the ROCm libraries it needs, the process
 manager and its own Python are all inside. Nothing else has to be installed.
 
@@ -67,8 +67,8 @@ automatically when they are in the folder and left off when they are not, and th
 page says which of the two it did not find. Without the draft, decode is about 40% slower.
 (`mtp-…-shared-Q8_0.gguf` works in place of file 4; the two are within 1% of each other.)
 
-**One more, optional: the draft head** — [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf), 349 MB,
-from this project's [releases page](https://github.com/rulith-dev/strixllama/releases). Put it in the
+**One more, optional: the draft head** — [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf), 349 MB,
+from this project's [releases page](https://github.com/rulith-dev/rulith-inference/releases). Put it in the
 same folder as file 4. On the next rescan the app combines the two into
 `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf` (a few seconds, once) and prefers it: decode
 is 5% faster on English and 9% on Chinese with the same acceptance rate, which is the configuration
@@ -92,7 +92,7 @@ foreach ($f in
   aria2c -x 8 -s 8 -c -d $dir -o (Split-Path $f -Leaf) "$base/$f"
 }
 # optional: the draft head (section 5)
-aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/strixllama/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf"
+aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf"
 ```
 
 If Hugging Face is slow or unreachable where you are, use the mirror: replace `huggingface.co` in
@@ -171,7 +171,7 @@ same acceptance rate. Everything else on this page works without it.
 Unsloth's `shared-*` drafts have no output projection of their own: every draft step streams the
 model's 521 MB one. The projection is a single tensor, so it is shipped on its own —
 `mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`, 349 MB, on the
-[releases page](https://github.com/rulith-dev/strixllama/releases). Download it into the model's
+[releases page](https://github.com/rulith-dev/rulith-inference/releases). Download it into the model's
 folder, next to file 4, and press **Rescan** under Model › Library. The app writes
 `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf` beside them (a byte-for-byte splice of the
 two files, a few seconds, done once; it is the only file the app ever writes into a model folder),
@@ -193,6 +193,8 @@ Building the head yourself instead needs a source checkout with the toolchain:
   gfx1151, or a carve or page file too small for the context length.
 - **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running;
   the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand.
-- **Where things are.** The app is in `%LOCALAPPDATA%\Strix Llama`; the manager's settings, model
-  catalog and last server log are in `runtime\config\jan\` under it; chats are in
-  `%APPDATA%\strixllama\data`. Uninstalling removes the app folder including those settings; chats stay.
+- **Where things are.** The app is in `%LOCALAPPDATA%\Rulith Inference` (in `%LOCALAPPDATA%\Strix Llama`
+  when it was installed before the rename and updated since); the manager's settings, model catalog,
+  prompt cache and last server log are in `runtime\config\jan\` under it; chats are in
+  `%APPDATA%\strixllama\data`. Uninstalling removes the app; the settings and the prompt cache go too
+  when you tick *Delete the application data*, and chats stay either way.

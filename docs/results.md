@@ -764,6 +764,36 @@ remains is expected: the disk store keeps a prefix shared by several conversatio
 conversation computed it, so a conversation restored from disk can differ in the last bits of those cells from the copy
 it computed itself (same tokens, another batch shape). Details: `docs/results/mtp-off-round2-035-20260929.json`.
 
+**Several conversations and long contexts: the sparse attention's per-query work (0.3.6, 2026-09-30).** With eight
+conversations in a step the sparse attention's decode inputs hold a row a query and a block list interleaved across the
+conversations (a position bucket at a time, one block of each). Three things cost more than they should have there. The
+TOP_K that picks each query's 512 blocks took the parallel radix path below 32 rows, a dozen launches: repeating it four
+more times in the graph (`STRIX_REPEAT=topk:4`, new, measurement only) added 16.3 ms a step at eight conversations of
+~20K, against 0.4 ms for the one-pass row kernel (0.2.0) that prefill already used; that kernel now takes every row
+count (`apply_top_k_rows_036`; one conversation, one row, is unchanged at 110K and 210K). The block score (0.3.4's
+`k_idx_score_dec`) ran every query's dot products across the whole wave whichever conversation a block belonged to;
+`k_idx_score_dec3` marks the queries that see each block first and computes only those (`apply_idx_score_v3_036`, the
+same bits). And timing that kernel's parts in the server (`STRIX_IDXD_BENCH`) showed its key reads at ~50 GB/s with
+eight conversations against ~210 GB/s with one: a block's key sat in the row of its first cell, so a conversation's keys
+were 1 KB apart, and on this machine strides like that alias in the DRAM channels (synthetic rows in the same kernel: 2
+KB apart 254 us, 3 KB 34 us, 256 B 17 us). The block-key cache is now laid out by residue class - cell c in row `(c %
+4)*S + c/4` - so consecutive blocks' keys are adjacent rows (`apply_kb_rows_036`, a bijection, so correct whatever the
+block layout; the region moves move one row run per class): the score at 8 x 20K went 260 us a strip (0.3.5) -> 48, and
+at one conversation of 110K 33 -> 17 us. Beside these, the 5-8 column q8_0 and Q6_K vector products read their
+activations laid out by lane (`apply_mmvq_i8_036`, the same bits; the q8_0 classes 1.0-1.4 ms less a step at eight
+columns, the Q6_K lm head 3.75 -> 2.9-3.1 ms). Alternated with 0.3.5 in one session: eight conversations of ~40K in a
+512K q8_0 pool, MTP off, greedy 105.9 -> 99.1 ms a step (75.7 -> 80.8 tok/s), sampled (temperature 0.8, top-k 40, top-p
+0.95, min-p 0.05, repeat penalty) 107.2 -> 98.2 ms (74.8 -> 81.6 tok/s); one conversation 40.1 / 39.9 / 42.1 -> 38.2 /
+38.8 / 41.0 ms at 3K / 50K / 110K and 43.1 -> 41.2 ms at ~210K; MTP on at short context unchanged (the same texts; the
+session ran ~7% slower than 2026-09-29's). Bitwise 0.3.3-0.3.5 with f16 and MTP off, f16 and MTP on, q8_0 in the 512K
+pool, eight conversations alone and together, and four MTP streams; the check modes compared the score, the run inputs,
+the parallel samples and every 5-8 column product with the old ways (tens of thousands of comparisons) and found no
+difference. Not done, and why: sampling on the GPU (~2 ms a step at eight conversations, but it cannot serve top-p on
+ROCm, grammars or the checkpoints that keep raw logits), folding the two latency-bound F32 products (~0.5 ms, bitwise
+only by copying the vector kernel's reduction), the KV gather fused into the attention kernel (the tile kernel's loader
+shared by every attention kernel would have to read q8_0 by index; days of work), and overlapping the host with the GPU
+between steps (a pipeline change; risky for a point release). Details: `docs/results/multi-conv-036-20260930.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
