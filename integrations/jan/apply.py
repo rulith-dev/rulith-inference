@@ -29,7 +29,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.3.6'
+VERSION = '0.3.7'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -1086,8 +1086,10 @@ def documents():
 
     Jan reads a document either into the message or into a vector store through an embedding model its own llama.cpp
     engine serves, and this build leaves that engine out - so a document goes into the message whole, from wherever it
-    came (a project's conversations too). The menu item needs the model's 'tools' capability, which StrixLlamaSync
-    gives it (web_tools() below). components/strixllama/attachments.ts reads the text and refuses, with the reason, a
+    came (a project's conversations too). So it needs nothing of the model: Jan offers the menu item only to a model
+    with the 'tools' capability, and 0.3.6 relied on StrixLlamaSync giving it - which a model listed by 0.3.5 got only
+    once a model had loaded, so after the update the item stayed grey. It is offered always now, and drops the same.
+    components/strixllama/attachments.ts reads the text and refuses, with the reason, a
     file that gives none or that the model's context cannot hold. Jan's chat box takes only images, audio and video
     when dropped: an HTML5 drop carries a file's bytes but no path, so a dropped document goes to
     strixllama_parse_dropped (strixllama.rs), which reads it with the parser the file picker reaches - made public here
@@ -1105,10 +1107,17 @@ def documents():
             // strixllama: into the message; there is no embedding engine to index it
             parseMode: 'inline',
           })""")
+    replace_once(chat, """                    <DropdownMenuItem
+                      onClick={handleAttachDocsIngest}
+                      disabled={!selectedModel?.capabilities?.includes('tools')}
+                    >""", """                    <DropdownMenuItem
+                      onClick={handleAttachDocsIngest}
+                    >""")
     replace_once(chat, "  const dropAcceptsAnything = hasMmproj || audioSupported || videoSupported\n", """\
   // strixllama: a document dropped on the chat box is read as it lands and goes into the message, like one the file
-  // picker attached (Jan's chat box takes only images, audio and video); allowed where that menu item is
-  const docsSupported = !!selectedModel?.capabilities?.includes('tools')
+  // picker attached (Jan's chat box takes only images, audio and video). Text in the message needs nothing of the
+  // model, so both are always offered
+  const docsSupported = true
   const attachDroppedDocuments = async (files: File[]) => {
     if (!attachmentsEnabled) {
       toast.info(t('strixllama:attach.disabled'))

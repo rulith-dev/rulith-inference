@@ -88,6 +88,17 @@ export function StrixLlamaSync() {
     })
   }, [providers])
 
+  // Models this provider listed before 0.3.6 carry no capabilities, and the list below is refreshed only from a running
+  // server: until a model had loaded, the chat box offered no web search (and, in 0.3.6, no documents). Whatever it
+  // serves takes tools, so they get 'tools' as soon as the store has hydrated.
+  useEffect(() => {
+    const p = providers.find((p) => p.provider === PROVIDER)
+    if (!p || p.models.every((m) => m.capabilities?.includes('tools'))) return
+    useModelProvider.getState().updateProvider(PROVIDER, {
+      models: p.models.map((m) => ({ ...m, capabilities: ['tools', ...(m.capabilities ?? []).filter((c) => c !== 'tools')] })),
+    })
+  }, [providers])
+
   useEffect(() => {
     if (status?.status !== 'ready' || !status.served_models?.length) return
     const p = providers.find((p) => p.provider === PROVIDER)

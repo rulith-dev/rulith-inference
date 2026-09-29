@@ -115,8 +115,9 @@ Community cards. They point at upstream Jan rather than at this build.
 
 Jan reads an attached document either into the message or into a vector store, through an embedding
 model its own llama.cpp engine serves. That engine is not in this build, so `documents()` in
-`apply.py` sends every document into the message whole: *Add documents or files* works (Jan offers it
-to a model with the `tools` capability, which the served model now carries), a document dropped on
+`apply.py` sends every document into the message whole: *Add documents or files* works whatever the
+model (Jan offers it only to a model with the `tools` capability; text in the message needs nothing of
+the model, and in 0.3.6 the item stayed grey after an update until a model had loaded), a document dropped on
 the chat box is read as it lands (Jan's chat box takes only images, audio and video there), and a
 file that gives no text, or that the loaded context cannot hold, is refused with the reason instead of
 falling back to embeddings. Settings › Attachments keeps the switch and the size limit; the chunking
