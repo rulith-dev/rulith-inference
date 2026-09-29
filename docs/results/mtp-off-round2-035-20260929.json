@@ -1,0 +1,58 @@
+{
+ "question": "0.3.5: where does an MTP-off decode step spend the time the weights do not account for, what of it can go without changing a bit of the output, and (from a community pointer to llama.cpp #29092) does any state cross between requests?",
+ "date": "2026-09-29",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS (Q4_K_XL where stated), MTP off unless stated",
+ "bandwidth_floor": {
+  "bytes_per_token": "5.84 GB: Q8_0 trunk incl. lm head (Q6_K 0.52) and F32 router (0.25) 4.68, experts 10 of 512 1.16; the per-layer n-gram table (28.8 GB IQ4_NL) is a gather",
+  "floor_ms": "27.8 at the ~210 GB/s this machine sustains",
+  "step_ms_3K": 37.0,
+  "graph_replayed_twice": "a decode step of 38.93 ms became 75.78 with its graph replayed twice: GPU ~36.85 ms, host ~2.1 ms"
+ },
+ "in_graph_cost_by_class": {
+  "method": "remove one class of nodes from the captured graph (STRIX_SKIP_OPS=OP or OP@ne0, STRIX_SKIP_NOFILL=1; output garbage, never an index-producing op), one conversation at 3K, 128 tokens; the per-dispatch event timer (STRIX_NODE_TIMING) adds ~25 us a dispatch and misstates small kernels",
+  "ms_per_token_and_GB_s": {
+   "hc down projections MUL_MAT@320 (97)": [2.10, 162],
+   "MUL_MAT@10240 (hc up 97, GDN qkv 36, ple key 1)": [6.83, 201],
+   "GDN gate MUL_MAT@6144 (36)": [2.93, 205],
+   "MUL_MAT@2560 (ssm_out, attn_output, shared expert down)": [4.64, 192],
+   "attention q MUL_MAT@12288 (12)": [1.80, 222],
+   "MUL_MAT@512 (F32 router 48, k, v, indexer q)": [1.94, 163],
+   "hc inject F32 [10240 -> 4] (96)": [0.83, "latency"],
+   "GDN alpha/beta F32 [2560 -> 48] (72)": [0.41, "latency"],
+   "lm head": [2.28, 229],
+   "MUL_MAT_ID experts": [6.41, 181],
+   "GATED_DELTA_NET (36)": [0.11, null],
+   "SCALE (266)": [0.00, null],
+   "ADD, GLU, SIGMOID": ["~0", null]
+  },
+  "eight_streams_caveat": "at eight conversations the same removal is confounded: garbage router inputs collapse the routing onto a few experts and the MoE cost drops"
+ },
+ "did_not_help": {
+  "second_stream_for_small_F32_products": "36.97 -> 48.24 ms a token (bitwise, but cross-stream dependencies in a HIP graph are expensive here)",
+  "vector_kernel_two_rows_a_workgroup_at_2_to_8_columns": "eight conversations 103.3 -> 125.7 ms a step (the RDNA3.5 unrolled Q8_0 path needs one row)",
+  "vector_kernel_two_waves_a_row_at_2_to_8_columns": "103.3 -> 103.9 (and not bitwise)",
+  "one_block_a_row_TOP_K_for_eight_rows": "103.29 -> 103.48 (same selection)"
+ },
+ "patches": {
+  "apply_idx_score_skip_035": "the decode indexer score tests a query's visibility first and skips the invisible query's dot products (bit masks of slots); the computed scores are the same bits",
+  "apply_qsa_run_buffers_035": "reused run-input buffers, one-hot membership rows; inputs byte for byte the same; QSA input host time at 8 x 40K 1.7-1.8 -> 0.8-1.05 ms",
+  "apply_parallel_sampling_035": "plain samples of a step's generating slots on one thread each; STRIX_PARALLEL_SAMPLING=2 compared 1026 tokens with the old way, all equal",
+  "apply_skip_ops_shape_035": "measurement: STRIX_SKIP_NOFILL, OP@ne0",
+  "apply_restore_wait_035": "a restore waits for the queued zeroing of freed cells before writing rows"
+ },
+ "ab_against_0_3_4": {
+  "how": "tmp/dec035/final_verify.sh: 0.3.4 (tmp/hip-034) and the new build alternated, same session",
+  "one_conversation_ms_3K_50K_110K": {"0.3.4": [37.27, 38.64, 39.65], "0.3.5": [37.02, 38.64, 39.67]},
+  "eight_conversations_40K_512K_q8_0_greedy_ms_per_step": {"0.3.4": [104.79, 106.35], "0.3.5": [102.49, 102.98], "tok_s": "75.8 -> 77.9"},
+  "eight_conversations_40K_sampled_ms_per_step": {"0.3.4": [108.10, 110.45], "0.3.5": [103.36, 102.67], "tok_s": "73.2 -> 77.7", "sampling": "temperature 0.8, top-k 40, top-p 0.95, min-p 0.05, repeat penalty 1.05"},
+  "bitwise_0_3_3": "f16 MTP off, f16 MTP on, q8_0 8 slots 512K: text and top-5 identical",
+  "check_modes": "STRIX_IDX_SCORE_DEC=2 STRIX_QSA_RUN=2 STRIX_PARALLEL_SAMPLING=2 over eight conversations greedy and sampled, the agent harness, the pool probe, four streams with MTP, images: no difference"
+ },
+ "llama_cpp_29092_check": {
+  "leak_probe": "tmp/gdn_leak/leak_probe.py: 12 documents in disjoint invented vocabularies behind one instruction prefix, /completion, temperature 0, seed 7; 0-7 each in a fresh slot, then 1..11, 0, 3, 1 in one used slot: every warm answer with a fresh reference byte-identical, no word of another document in any; 8 slots q8_0 512K MTP off, and MTP on",
+  "recurrent_state": "a conversation's recurrent state after coming back into a slot hashes the same whatever used the slot in between",
+  "bug_found": "restored conversations had rows zeroed: zero_cells (0.1.17) queues the zeroing of freed cells on the graphs' stream, the restore writes rows with ggml_backend_tensor_set on another; in the case found the last attention layer's V for cells 3840..4429 of a 4536-cell conversation came back zero (318 KB of the 191 MB state), whichever conversation had used the slot. Fixed by apply_restore_wait_035: whole-state hash as it left == as it came back (tmp/gdn_leak/check_restore_hashes.py)",
+  "expected_difference": "the disk store splits a conversation's runs at the longest common prefix with stored runs and keeps the shared part once; a conversation restored from disk gets those cells as the first conversation computed them (same tokens, another batch shape): in the case found one cell's K/V in the last two attention layers differed by one quantization step, which flipped a late token at temperature 0"
+ }
+}

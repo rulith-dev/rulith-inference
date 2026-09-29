@@ -730,6 +730,40 @@ tool results) taking three turns in the 512K pool: working set 4.80 / 6.53 / 8.3
 4.79 / 4.80 / 4.81 GiB with it. The agent harness (a main agent and five sub-agents, eight slots) processed 0.97x the
 ideal as before, with 29 checkpoints given up. Details: `docs/results/decode-mtp-off-034-20260928.json`.
 
+**Where an MTP-off decode step goes, and a restore that lost rows (0.3.5, 2026-09-29).** A token reads ~5.84 GB of
+weights (the Q8_0 trunk 4.68 GB with the lm head and the F32 router, ten of 512 experts 1.16 GB), ~27.8 ms at the
+~210 GB/s this machine sustains; a step took 37.0 ms at 3K. Replaying each decode graph twice put the GPU at ~36.9 ms
+of it and the host at ~2 ms. The per-dispatch event timer inflates every kernel by ~25 us, so the GPU part was split by
+removing one class of nodes at a time from the captured graph (`STRIX_SKIP_OPS` with the new `STRIX_SKIP_NOFILL`,
+selecting by output width with `OP@ne0`): the ~2000 small kernels a token dispatches cost almost nothing inside a HIP
+graph (266 SCALEs: 0.00 ms), the large GEMVs run at 190-229 GB/s, and what is left is spread thin - the F32 router and
+the hyper-connection down projections at ~160 GB/s (~0.9 ms), the experts at 181 GB/s (~0.9 ms), two F32 products of
+4 and 48 rows that are pure latency (~1.2 ms), ~2 ms of host between tokens. Things that did not help, and are not in:
+a second stream for the small F32 products (+11 ms a token: cross-stream dependencies in a HIP graph are expensive
+here), two rows a workgroup or two waves a row for the vector kernel at 2-8 columns (-22% and no change), and the
+one-block-a-row TOP_K for eight rows (no change). With several conversations: the decode indexer score now skips the
+blocks a query cannot see (`apply_idx_score_skip_035`), the run-based inputs reuse their buffers
+(`apply_qsa_run_buffers_035`), and the slots of a step are sampled in parallel (`apply_parallel_sampling_035`). Eight
+conversations of ~40K tokens in a 512K q8_0 pool, alternated with 0.3.4 in one session: greedy 105.6 -> 102.7 ms a step
+(75.8 -> 77.9 tok/s), sampled (temperature 0.8, top-k 40, top-p 0.95, min-p 0.05, repeat penalty) 109.3 -> 103.0 ms
+(73.2 -> 77.7 tok/s); one conversation unchanged (37.27 / 38.64 / 39.65 -> 37.02 / 38.64 / 39.67 ms at 3K / 50K /
+110K). Bitwise 0.3.3 with f16 and MTP off, f16 and MTP on, q8_0 in the 512K pool; the check modes compared the score,
+the inputs and the parallel samples with the old ways and found no difference.
+
+Checking llama.cpp #29092 (on gfx1151 the fused GatedDeltaNet carried recurrent state across requests, so an earlier
+prompt's text appeared in later answers) found no such leak here: twelve documents in disjoint invented vocabularies
+(`tmp/gdn_leak/leak_probe.py`, greedy, seed 7) answered in one used slot came out byte-identical to fresh slots, with no
+word of another document, and a conversation's recurrent state after coming back into a slot hashes the same whatever
+used the slot in between. Hashing a conversation's whole state as it left a slot and after it came back
+(`STRIX_STATE_HASH`, and `STRIX_STATE_DUMP` for the bytes) found another bug: the zeroing of freed cells (0.1.17) is
+queued on the graphs' stream while a restore writes its rows from the host on another, so for a conversation restored
+into cells another had just left, the last-queued zeroing - the last attention layer's V for ~590 cells - landed after
+the restore and blanked them. Never another conversation's data; the restored conversation lost that context in that
+layer, since 0.1.17. `apply_restore_wait_035` waits for the queue first; leave and return now hash the same. What
+remains is expected: the disk store keeps a prefix shared by several conversations (a system prompt) once, as the first
+conversation computed it, so a conversation restored from disk can differ in the last bits of those cells from the copy
+it computed itself (same tokens, another batch shape). Details: `docs/results/mtp-off-round2-035-20260929.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
