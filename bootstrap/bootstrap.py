@@ -89,6 +89,7 @@ PATCH_ORDER = [
     "apply_idx_score_skip_035", "apply_qsa_run_buffers_035", "apply_parallel_sampling_035", "apply_skip_ops_shape_035",
     "apply_restore_wait_035",
     "apply_mmvq_i8_036", "apply_idx_score_v3_036", "apply_kb_rows_036", "apply_top_k_rows_036", "apply_repeat_probe_036",
+    "apply_fa_gather_037", "apply_mmvq_i8_unroll_037",
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

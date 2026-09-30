@@ -12,13 +12,15 @@
   "common/sampling.cpp": "efc21ff844b71fd2e63a57fc04cbfe48c155f136e65affb01b9bc22e11f088d0",
   "common/sampling.h": "5e50517ed1a0be07ba10a307b6da6714c4fd313be8c80ee192349c47a01b2922",
   "common/speculative.cpp": "82af15204df2b6fa4bd9d46d6be2e31c565e8db7d46a4749e6aa52482c357b84",
-  "ggml/include/ggml.h": "ae54776045f191d614b71869c06a1dfa526cb5c0dcf0bf641bd47bdf718403b8",
+  "ggml/include/ggml.h": "d6ab764f705394804098afdddbeb96a3f94ad4dc13315e0b42bfdd464a6b567b",
   "ggml/src/ggml-alloc.c": "6a4b269c56f03c37f74f78419aa9e77463ee8e58a82e1f1e7be6e850a550974c",
   "ggml/src/ggml-cpu/ggml-cpu.c": "b1bc2b55c1f747a4334fa2255387ae03e99dd4a094db4f39a7089adae46fb8ce",
   "ggml/src/ggml-cpu/ops.cpp": "48267ec6cf55ad47915ff755b53fc2a90118cc8c1912c0b0671644e8827894e4",
   "ggml/src/ggml-cuda/concat.cu": "e055ceb67e104305084dde17b21794c8ff5999d389174ef81a4ba87fbcb6a4bc",
   "ggml/src/ggml-cuda/cpy.cu": "e3b2d6e5eb2182be9c105d716b48abaf5c10f9de0567bfc783e73c7b532502f1",
-  "ggml/src/ggml-cuda/fattn.cu": "76b3f923c4ce90b051f6c137c233032e00b20ea313fe4078a5cc95319d49e920",
+  "ggml/src/ggml-cuda/fattn-common.cuh": "0ae8fab68b1ee021ff4ddd9fe6d231a91f055bc54fdb3126d9e82669d61e6549",
+  "ggml/src/ggml-cuda/fattn-tile.cuh": "0c34e5e903b4e5cafec673be01a1481cdecf8709af4fb57f47fb05212f40cfb2",
+  "ggml/src/ggml-cuda/fattn.cu": "aaece5abdbe0da1166cfe53439cfc6ca8d7957bace8c6a3777742654b6a4ca4c",
   "ggml/src/ggml-cuda/gated_delta_net.cu": "28bfc3d71a54651aaff05d3a49302e7a1c42d88ffe3d10ae6cfd225f0f0e2dcb",
   "ggml/src/ggml-cuda/gated_delta_net.cuh": "1883dcc8240f3125b62cf4910fb2006be0821fc99c0d4d3819ebff26bdd7a4a5",
   "ggml/src/ggml-cuda/gdn-conv.cu": "eced61710a178ba5bc07985775e64711f82c9173cb57d05d3054c46ddaa759bb",
@@ -33,7 +35,7 @@
   "ggml/src/ggml-cuda/mmq-load-tiles.cuh": "0a43a30415c57c7d14d5f1cb03789fbd12850fa00cee9f7fb841d952b84c1484",
   "ggml/src/ggml-cuda/mmq.cu": "afa9ca158fc00b2eddf386677950640796d0a6288f2a7e6b4770d377a5a52874",
   "ggml/src/ggml-cuda/mmq.cuh": "fc09981f738c1c8458bc1e0298b49d4adf19386cfd45e893587b218d4db1e4c3",
-  "ggml/src/ggml-cuda/mmvq.cu": "debd40f70e642f846006a0a4a0850587f119ed6badd6d2478ed011a6ee868797",
+  "ggml/src/ggml-cuda/mmvq.cu": "1f84d3e4f6491ac055a2fb554a40e74825411e4b3e54a501a53084c1f049e056",
   "ggml/src/ggml-cuda/norm-gated.cu": "745be55d5cea27f00081a75f5be2e345bf8d3dcadbddcb5690ea7b2851325492",
   "ggml/src/ggml-cuda/norm-gated.cuh": "0749290fe652bb66c08e56e76900ab4fbe5c24ae0f8319a952cb0c03edfa8cb2",
   "ggml/src/ggml-cuda/norm.cu": "0aa127c81446392ba81b9c34267785cf92f6bbaba5a2e3213e46fa61b739df77",
@@ -46,9 +48,10 @@
   "ggml/src/ggml-cuda/strixllama-chain.cuh": "15d9dc25d28d292f2ea7c72e80281694855c847465532991c1060c67a583723f",
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cu": "5019f6b5201fd11d2d77c00a7a4df1ee387813d4acc28455fddd43105ec80a9a",
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cuh": "ed9f51c30db922f743196cca350a1554067fd0fa021f404910ea6bea91d753dc",
+  "ggml/src/ggml-cuda/template-instances/fattn-tile-instance-dkq256-dv256.cu": "bab775f698015c5bec61441475e52a8dfa3a76aa6f73dbee40d717aaff3632aa",
   "ggml/src/ggml-cuda/top-k.cu": "828c71403b17e318f302c487ed7ddeb2cb2f9429149241e71172dba369e87d46",
   "ggml/src/ggml-cuda/vecdotq.cuh": "3b879a937d5143902db4cae2530529c32fd464dbfb822a7fe31875aba57707ce",
-  "ggml/src/ggml.c": "dc12f87fb6a8fd3d7df18c2e506b941b3714929fffb33261842dae2a11cad4ed",
+  "ggml/src/ggml.c": "36a6e56f5da3e998075f13937bb1e078729c79c4747bc917b8bc06c4dcabe950",
   "include/llama.h": "6e5018ff2c408dc44cd0f270f3815c923807afad6dcd7ea83bdc3305d4eedb1a",
   "src/llama-batch.cpp": "2e8917f6c103405d2b75b6683c37c8c60c9cd1758547451e239b7213ce27a8b5",
   "src/llama-batch.h": "568cef05377579b3db763404064155e75ddd4a18507208c1d017ae8560ea0261",
@@ -71,7 +74,7 @@
   "src/models/block-graph.inc": "716077d2dd61f3d7edb94945eaf1cd4aa2bb86f452eff22832d9cf279d55ec07",
   "src/models/delta-net-base.cpp": "bc3ff0fc6e312a0e848cbe19ff1772aac7ea703ee86379d7b094a522490438f9",
   "src/models/models.h": "a47d4049f2e5385a0f38465fd85d2ff99f47c3bf7629c92bf2706e10ccc56246",
-  "src/models/qwen4exp.cpp": "758dd542a06e51d4fe22e0d54a21fadc83c7224bd719cb9c4c6ccc7683b45c91",
+  "src/models/qwen4exp.cpp": "d6b4727cb0b66079d6961c41b860979eaff68b72c6fa2c613d3a92f15418b341",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "63b40d1aa142a62032da8bab47b53513b688fe8a18b6980ac07300f672c007c0",
   "tools/server/server-common.cpp": "e2a5ae4ade6846cfc872c1d4a8f60415ada01b8d659ba70bc481ded9640ad890",
@@ -134,6 +137,14 @@
   "ggml/src/ggml-cuda/cpy.cu": {
    "git_blob": "fd7ffc0bc55758a119e995f614937b755c8e3c9a",
    "sha256": "db0520aac5613b26956422e7b10253c564f34cec81cbbe90cdf8b28143ba0984"
+  },
+  "ggml/src/ggml-cuda/fattn-common.cuh": {
+   "git_blob": "48b631e60fb4e46232e781abab1a3530eab3c091",
+   "sha256": "411e3017439046288815a08a47d301dff046a909eb0ab505ac7f22f87257aabc"
+  },
+  "ggml/src/ggml-cuda/fattn-tile.cuh": {
+   "git_blob": "8981ab804ce0ac625e8b0905e2392339343a2e1a",
+   "sha256": "4cc9ff180840f2795640b01f507c608a1d65d09e582dfd9825d1a07a6ad16f39"
   },
   "ggml/src/ggml-cuda/fattn.cu": {
    "git_blob": "6bceb19c2ef114e9568d711a6131bd194be71f33",
@@ -230,6 +241,10 @@
   "ggml/src/ggml-cuda/softcap.cuh": {
    "git_blob": "6d34fb2bee41684d93504e8a2fae172c993f5e50",
    "sha256": "4187b9b447cdafcce48c5d855f6b614e6637fa1c1138943c8fec8ef415eb0def"
+  },
+  "ggml/src/ggml-cuda/template-instances/fattn-tile-instance-dkq256-dv256.cu": {
+   "git_blob": "bc65c723eca9df5323feb38c4a5c792ce31dafbc",
+   "sha256": "e13966ac7f971950f9060ba87e0026a1ffab9b1f5697b5b29a5ff3226169ea5b"
   },
   "ggml/src/ggml-cuda/top-k.cu": {
    "git_blob": "30f8c915c40719b90f990905168725aac1e7f169",

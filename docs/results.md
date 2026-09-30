@@ -794,6 +794,31 @@ only by copying the vector kernel's reduction), the KV gather fused into the att
 shared by every attention kernel would have to read q8_0 by index; days of work), and overlapping the host with the GPU
 between steps (a pipeline change; risky for a point release). Details: `docs/results/multi-conv-036-20260930.json`.
 
+**Several conversations: the sparse attention reads its cells in place (0.3.9, 2026-10-01).** The decode's sparse
+attention copied each query's selection - 2051 cells, padded to 2304 - out of the KV cache with `ggml_get_rows` into an
+f16 slab per query, then ran the tile flash attention on the slabs. At eight conversations of ~20K the copies took as
+long as the attention itself (~3.0 and ~3.2 ms a step by `STRIX_REPEAT`, 0.3.6). `ggml_flash_attn_ext_gather` gives the
+kernel the cache and the cell list instead: its K/V loader reads the tile's rows through the list, copying f16 values and
+dequantizing q8_0 ones as `ggml_get_rows` does, and the launch takes the f16 kernel's occupancy, so the parallel blocks,
+the split of the cells between them and their combination are the ones the copy got - the output is the copy's bit for
+bit (`apply_fa_gather_037`; `STRIX_FA_GATHER_CHECK=1` compares every call in the server). The q8_0 conversion runs in
+f16: the 0x6400 bias turns a byte into half(q) exactly, and one f16 multiply by the scale rounds the exact product once,
+as converting the float product does - checked for all 65536 scales x 256 values; with byte loads and the float path
+the kernel was ~7% slower. Standalone, 12 layers of the model's shapes: eight queries at 20K 6.6 -> 2.1 ms (q8_0) and
+6.8 -> 2.4 (f16), one at 40K 0.94 -> 0.39. Alternated with 0.3.6 in the server: eight conversations of ~40K in a 512K
+q8_0 pool, MTP off, 99.6 / 100.1 -> 92.4 / 94.8 ms a step (80.3 -> 85.6 tok/s); eight of ~20K with the f16 cache 95.9 ->
+88.4 ms (83.5 -> 90.6 tok/s); one conversation 37.3 / 38.7 / 39.0 -> 37.3 / 38.0 / 38.6 ms at 3K / 50K / 110K (two pairs
+each; a first pair, slower on both sides - 0.3.6 at 43.6 ms at 50K - is left out); MTP on at short context, three / four
+streams 58.4 / 66.0 -> 59.6 / 68.4 and 54.9 / 67.3 -> 56.0 / 69.2 tok/s in two rounds with the same texts. The 5-8
+column q8_0 GEMV also unrolls its K loop by two (`apply_mmvq_i8_unroll_037`: [10240 -> 320] at eight columns 26.3 ->
+22.1 us, the same bits). Bitwise 0.3.3-0.3.6 on the probes (f16 MTP off and on, q8_0 on 8 slots in 512K); eight
+conversations one at a time give the same tokens as 0.3.5 and 0.3.6. Tried and dropped, both bitwise: a small-K GEMV
+that keeps the activations in registers across rows ([320 -> 10240] at eight columns 28.5 -> 25.4 us at best, nothing
+at one column), and routed experts read once per distinct expert for 2-16 tokens (one wave computing every token routed
+to its expert: 43 -> 50 ms for eight tokens' 48 layers - the registers went 60 -> 104, and the per-pair kernel already
+finds a shared expert's second read in the cache; at eight tokens the experts are read at ~190 GB/s, near the
+bandwidth). Details: `docs/results/multi-conv-039-20261001.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

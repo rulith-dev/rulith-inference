@@ -1,0 +1,141 @@
+{
+ "date": "2026-10-01",
+ "release": "0.3.9",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS (Unsloth)",
+ "change": "ggml_flash_attn_ext_gather: the sparse-attention decode reads its selected cells from the KV cache inside the tile flash attention instead of copying them (ggml_get_rows) first; the 5-8 column q8_0 GEMV unrolls its K loop by two",
+ "standalone_12_layers_ms": {
+  "method": "one graph of 12 layers each with its own cache, the copy-then-attend path (A) and the fused op (B), bitwise compared, HIP graphs on",
+  "8_queries_20K_q8_0": {
+   "A": 6.61,
+   "B": 2.13
+  },
+  "8_queries_20K_f16": {
+   "A": 6.84,
+   "B": 2.39
+  },
+  "1_query_40K_q8_0": {
+   "A": 0.945,
+   "B": 0.393
+  },
+  "1_query_40K_f16": {
+   "A": 0.982,
+   "B": 0.482
+  },
+  "3_queries_20K_q8_0": {
+   "A": 2.51,
+   "B": 1.04
+  },
+  "16_queries_20K_q8_0": {
+   "A": 14.4,
+   "B": 4.01
+  },
+  "outputs": "bit-identical in every configuration, also with 30% of the selection empty"
+ },
+ "q8_0_dequant_check": "the 0x6400 bias + one f16 multiply equals float(q)*float(d) cast to half for all 65536 scales x 256 values",
+ "ab_against_0.3.6": {
+  "method": "alternated in one session: tools/decode_lab.py (one conversation, f16, MTP off), tmp/dec034/multi_probe.py (--n 8 --gen 384), tmp/gdn/sweep_streams.py (MTP on, f16, --chars 14500 --vary-seeds)",
+  "8x40K_512K_q8_0_greedy_ms_a_step": {
+   "0.3.6": [
+    99.64,
+    100.08
+   ],
+   "0.3.9": [
+    92.39,
+    94.8
+   ]
+  },
+  "8x40K_512K_q8_0_greedy_tok_s": {
+   "0.3.6": [
+    80.4,
+    80.1
+   ],
+   "0.3.9": [
+    86.7,
+    84.5
+   ]
+  },
+  "8x20K_f16_greedy_ms_a_step": {
+   "0.3.6": [
+    95.93
+   ],
+   "0.3.9": [
+    88.4
+   ]
+  },
+  "8x20K_f16_greedy_tok_s": {
+   "0.3.6": [
+    83.5
+   ],
+   "0.3.9": [
+    90.6
+   ]
+  },
+  "one_conversation_ms_a_token_3K_50K_110K": {
+   "0.3.6": [
+    [
+     37.43,
+     38.91,
+     39.23
+    ],
+    [
+     37.08,
+     38.5,
+     38.72
+    ]
+   ],
+   "0.3.9": [
+    [
+     37.54,
+     38.11,
+     38.64
+    ],
+    [
+     37.15,
+     37.89,
+     38.6
+    ]
+   ],
+   "left_out": "a first pair, slower on both sides: 0.3.6 38.79 / 43.61 / 45.37 (prefill also 6-8% slower), 0.3.9 38.96 / 39.49 / 39.60"
+  },
+  "mtp_on_tok_s_rounds": {
+   "1_stream": {
+    "0.3.6": [
+     41.4,
+     38.5
+    ],
+    "0.3.9": "the same within noise (round 2: 37.5)"
+   },
+   "3_streams": {
+    "0.3.6": [
+     58.4,
+     54.9
+    ],
+    "0.3.9": [
+     59.6,
+     56.0
+    ]
+   },
+   "4_streams": {
+    "0.3.6": [
+     66.0,
+     67.3
+    ],
+    "0.3.9": [
+     68.4,
+     69.2
+    ]
+   },
+   "texts": "identical hashes, round by round"
+  }
+ },
+ "checks": {
+  "equivalence_probes": "text and top-5 probabilities identical to 0.3.3 with f16 MTP off, f16 MTP on, q8_0 8 slots 512K MTP off",
+  "eight_conversations_alone": "the same tokens as 0.3.5 and 0.3.6 (q8_0), and as 0.3.6 with f16; together differs run to run with the batch shapes, as before",
+  "check_mode": "STRIX_FA_GATHER_CHECK=1 + STRIX_MMVQ_I8_CHECK=1: 8 conversations q8_0 and f16, one conversation at ~50K, 3 MTP streams, images; 5000+ fused calls compared, no difference, no abort"
+ },
+ "dropped": {
+  "small_k_rows_gemv": "activations in registers across rows for [320 -> 10240] / [640 -> 2560]: bitwise, 28.5 -> 25.4 us at eight columns at best, nothing at one; not worth the code",
+  "moe_expert_shared": "one wave computing every token routed to its expert (2-16 tokens): bitwise, 43 -> 50 ms for eight tokens' 48 layers (registers 60 -> 104); the per-pair kernel already reads a shared expert's second copy from the cache"
+ }
+}

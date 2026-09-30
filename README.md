@@ -24,7 +24,7 @@ conversations of ~4K tokens each decoding together, with a new sampling seed eve
 | decode, 86K context | **27.3 ms/token** (36.7 tok/s at 63% draft acceptance) |
 | decode, short context | **22.5 ms/token** (44.4 tok/s at 67% acceptance) |
 | decode, 3 / 4 conversations at once | **55.4 / 62.5 tok/s** summed (1.40× / 1.57× one conversation measured the same way, 39.7; per step the same as 0.3.0, the sum moves ±10% with the sampled rounds' acceptance) |
-| decode with MTP off, 8 conversations of ~40K tokens at once | **80.8 tok/s** summed in a 512K-token q8_0 pool (0.3.6; 0.3.5: 75.7 in the same session, 0.3.3: 58.8), 81.6 with typical sampling settings; one conversation at 110K 24.4 tok/s and at ~210K 24.3 (0.3.5: 23.8 and 23.2) |
+| decode with MTP off, 8 conversations of ~40K tokens at once | **85.6 tok/s** summed in a 512K-token q8_0 pool (0.3.9; 0.3.6: 80.3 in the same session, 0.3.3: 58.8); eight of ~20K with the f16 cache 90.6 (0.3.6: 83.5); one conversation at 110K 25.9 tok/s (0.3.6: 25.7) |
 | image input | supported (Qwen3-VL projector) |
 
 Every number in this repository comes with the command that produced it, in
