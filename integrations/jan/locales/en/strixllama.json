@@ -327,5 +327,15 @@
     "launch_failed": "The model process did not start; see the log",
     "oom": "the GPU ran out of memory",
     "error": "the model process exited with an error"
+  },
+  "compact": {
+    "running": "The conversation is about to outgrow the model's context: summarizing its earlier part…",
+    "done": "The earlier part of the conversation was summarized: about {{from}} → {{to}} tokens",
+    "dropped": "The first {{count}} messages were removed to fit the model's context (no summary could be made)"
+  },
+  "download": {
+    "saved": "Saved to {{path}}",
+    "show": "Show",
+    "failed": "Could not save the file: {{reason}}"
   }
 }

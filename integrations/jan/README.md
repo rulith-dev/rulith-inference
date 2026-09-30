@@ -35,15 +35,18 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | `StrixLlamaSync.tsx` | the app-wide status poll, the provider registration, the optional load at startup, and the load-finished and out-of-memory toasts |
 | `store.ts`, `status.ts`, `parts.tsx` | shared state (catalog, profile being edited), the manager request and types, the small components the views share |
 | `attachments.ts` | documents in the chat: a dropped file's text read by the app (below), and a document the model's context cannot hold refused before it is sent |
+| `compact.ts` | a conversation that outgrows the model's context folded into a summary (below) |
+| `downloads.ts` | files the page saves (a code block's download button, a table's CSV, the Logs page's log) written into Downloads by the app (below) |
 | `fixtures.ts` | canned manager answers for the browser preview (below); development builds only |
 | `strixllama.css` | a bounded log viewport that pauses auto-follow when you scroll up |
 | `rulith-theme.css` | the palette, type and corners for the whole app (below) |
-| `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable — and one that reads a dropped document's bytes with Jan's own document parser (`tauri-plugin-rag`) through a temporary file it removes again |
+| `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable — one that reads a dropped document's bytes with Jan's own document parser (`tauri-plugin-rag`) through a temporary file it removes again, and one that writes a file the page saves into the Downloads folder, numbering the name when it is taken |
+| `tests/compact.test.ts` | the unit tests of `compact.ts`, run with the web app's vitest beside the module (not copied by `apply.py`) |
 | `locales/{en,zh-CN}/strixllama.json` | English and Chinese |
 | `icons/` | the application icon, drawn by `make_icons.py` with no image library |
 
 Language follows Jan's own setting: Jan discovers i18n namespaces with `import.meta.glob`, so the
-locale files only have to be dropped in. 275 keys, identical key sets in both languages.
+locale files only have to be dropped in. 281 keys, identical key sets in both languages.
 
 ## Design
 
@@ -131,6 +134,38 @@ Jan's websearch plugin answers from Exa's keyless endpoint (Tavily or a SearXNG 
 Settings › Web Search). Jan has it on by default; `web_tools()` in `apply.py` starts it off - a stored
 setting from before included - so no chat sends the tools, or a search query to a third party,
 until the globe in the chat box turns it on.
+
+## Long conversations
+
+A conversation that outgrows the model's context used to fail with "Model ran out of context size", and every later
+message with it. `compact.ts` (hooked into Jan's chat transport by `compaction()` in `apply.py`, for the local provider)
+folds it instead: when the next request would pass 80% of the context the server was loaded with - counted from the
+server's own usage figures up to the last answer, plus an estimate that takes a CJK character as a token - the model
+first summarizes the conversation so far, and the request goes out as the summary (in the system prompt) plus the new
+message. The summary request is the previous request plus an instruction, same system prompt, same conversion, same
+tool definitions (without their execute), thinking off, so the server answers it from its cache and only writes the
+summary; later requests keep the same head and reuse the cache again. The thread keeps the summary and the id of the
+last message it covers (`metadata.strix_compact`); editing or deleting that message drops it. When no summary can be
+made, the oldest messages are left out, with a note for the model. Jan's own trimmer (`lib/context-manager.ts`) is not
+used: it counts 3.5 characters a token, a third of the truth for Chinese, and re-trims or re-summarizes on every
+request, so the prompt's head changes each turn and the server re-reads the whole window every time.
+
+## Several conversations at once
+
+The thread route is one component reused across threads, and each thread's AI SDK `Chat` keeps the callbacks it was
+created with, so the tool loop's `AbortController` - a single `useRef` - was shared by every conversation: two answers
+that called tools at the same time overwrote and cleared each other's, and the one whose results came back last never
+sent them back to the model. `concurrent_tools()` in `apply.py` gives each thread its own controller; a thread you
+leave while its tools run keeps going, and only a tool call waiting for your approval stops when you leave, as before.
+
+## Downloads
+
+The code blocks in an answer have a download button (Jan's `streamdown`), tables an export, the Logs page a log
+download; all of them click a `download` link to a blob URL, which Tauri's webview saved nowhere visible (issue #5).
+`downloads.ts` takes those clicks: it keeps each blob by its URL as it is made (the page's `fetch` is the HTTP plugin's
+and cannot read a blob URL), holds back the revoke until the bytes are read, and hands them to
+`strixllama_save_download`, which writes them into the Downloads folder; a notice says where, with a button to show
+the file.
 
 ## Updates
 

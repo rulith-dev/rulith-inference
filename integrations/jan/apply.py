@@ -29,7 +29,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.3.7'
+VERSION = '0.3.8'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -38,7 +38,7 @@ JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
 # browser preview uses (fixtures.ts, imported only by development builds).
 UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
             'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
-            'attachments.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
+            'attachments.ts', 'compact.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
 NSIS_HOOKS = r"""Var LegacyDir
 
@@ -179,6 +179,8 @@ def main():
     replace_once(lib, 'tauri::generate_handler![', 'tauri::generate_handler![\n            strixllama::strixllama_request,')
     replace_once(lib, '            strixllama::strixllama_request,\n',
                  '            strixllama::strixllama_request,\n            strixllama::strixllama_parse_dropped,\n')
+    replace_once(lib, '            strixllama::strixllama_parse_dropped,\n',
+                 '            strixllama::strixllama_parse_dropped,\n            strixllama::strixllama_save_download,\n')
     replace_once(JAN / 'src-tauri/src/main.rs', '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]', '#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]')
     # The chat goes through the app's Rust HTTP client (reqwest), which picks up the Windows
     # system proxy but not its "bypass for 127.*" list - so with Clash or similar on, every
@@ -335,6 +337,9 @@ def main():
     drop_integrations()
     documents()
     web_tools()
+    chat_width()
+    compaction()
+    concurrent_tools()
     brand(KEEP_DATA_DIR)
     brand_text()
     # Jan's own llama.cpp engine is not loaded at all. Left in, its extension downloads a Vulkan
@@ -1209,6 +1214,194 @@ def documents():
     replace_once(JAN / 'web-app/src/routes/settings/attachments.tsx', "              {defs.map((d) => {\n",
                  "              {/* strixllama: the others (chunks, retrieval, search) are the embedding engine's, not in this build */}\n"
                  "              {defs.filter((d) => d.key === 'enabled' || d.key === 'max_file_size_mb').map((d) => {\n")
+
+
+
+def chat_width():
+    """The chat's column as wide as the model pages' (StrixLlamaPage.tsx: max-w-[1280px], px-6). Jan sizes it as a
+    share of the window instead - 4/5, then 4/6 from the xl breakpoint - so on a wide window the conversation ran wider
+    than Configuration and Logs beside it, and on a narrower one it was the narrower of the two. The conversation, the
+    chat box under it, the new-chat page and a project's page take the same column now.
+    """
+    col = 'mx-auto w-full max-w-[1280px] px-6'
+    thread = JAN / 'web-app/src/routes/threads/$threadId.tsx'
+    replace_once(thread, "              className={cn('mx-auto w-full md:w-4/5 xl:w-4/6')}\n",
+                 "              className={cn('" + col + "')}\n")
+    replace_once(thread, '        <div className="py-4 mx-auto w-full md:w-4/5 xl:w-4/6">\n',
+                 '        <div className="py-4 ' + col + '">\n')
+    replace_once(JAN / 'web-app/src/routes/index.tsx', "            'mx-auto w-full md:w-4/5 xl:w-4/6 -mt-20',\n",
+                 "            '" + col + " -mt-20',\n")
+    replace_once(JAN / 'web-app/src/routes/project/$projectId.tsx', '        <div className="mx-auto w-full md:w-4/5 xl:w-4/6">\n',
+                 '        <div className="' + col + '">\n')
+
+
+def compaction():
+    """A conversation that outgrows the model's context is folded into a summary instead of failing
+    (components/strixllama/compact.ts says how and why Jan's own trimmer is not used). The transport calls it for the
+    local provider once the system prompt is built: it gets the window to send - the messages after the last fold,
+    with the summary in the system prompt - and, when a fold is due, asks the model for the summary with the request as
+    it went last time (same system prompt, same conversion, same tool definitions without their execute, so the server
+    finds it cached) plus the instruction, thinking off.
+    """
+    t = JAN / 'web-app/src/lib/custom-chat-transport.ts'
+    replace_once(t, "  convertToModelMessages,\n  streamText,\n", "  convertToModelMessages,\n  generateText,\n  streamText,\n")
+    replace_once(t, "import { ModelFactory } from './model-factory'\n",
+                 "import { ModelFactory } from './model-factory'\n"
+                 "import { compactConversation, INSTRUCTION } from '@/components/strixllama/compact'\n")
+    replace_once(t, "    const effectiveSystem =\n      typeof rawSystem === 'string' && rawSystem.trim().length > 0\n",
+                 "    let effectiveSystem =\n      typeof rawSystem === 'string' && rawSystem.trim().length > 0\n")
+    replace_once(t, """    // Auto-trim or auto-compact conversation history when max_context_tokens is configured
+    let effectiveMessages = messagesToConvert
+""", """    // strixllama: a conversation past the context is folded into a summary first (components/strixllama/compact.ts)
+    let strixWindow = messagesToConvert
+    if (providerId === 'strixllama' && this.threadId) {
+      const summaryTools =
+        Object.keys(this.tools).length > 0 &&
+        (selectedModel?.capabilities?.includes('tools') ?? this.modelSupportsTools)
+          ? Object.fromEntries(Object.entries(this.tools).map(([k, tool]) => [k, { ...tool, execute: undefined }]))
+          : undefined
+      const compacted = await compactConversation({
+        threadId: this.threadId,
+        messages: messagesToConvert,
+        system: effectiveSystem,
+        summarize: async (msgs, system) => {
+          const vision = selectedModel?.capabilities?.includes('vision') ?? false
+          const summaryModel = await ModelFactory.createModel(
+            modelId,
+            useModelProvider.getState().getProviderByName(providerId) ?? provider,
+            {
+              ...extractModelSamplingDefaults(selectedModel),
+              ...inferenceParams,
+              chat_template_kwargs: { enable_thinking: false },
+            }
+          )
+          const asked: UIMessage[] = [
+            ...msgs,
+            { id: 'strix-compact', role: 'user', parts: [{ type: 'text', text: INSTRUCTION }] },
+          ]
+          const summaryMessages = await convertToModelMessages(
+            coalesceMessagesForAlternation(
+              resolveOrphanToolCalls(
+                this.encodeVideoAttachments(
+                  this.encodeAudioAttachments(
+                    stripUnsupportedImageParts(this.mapUserInlineAttachments(asked), vision)
+                  )
+                )
+              )
+            )
+          )
+          const r = await generateText({
+            model: summaryModel,
+            system,
+            messages: summaryMessages,
+            tools: summaryTools,
+            toolChoice: summaryTools ? 'auto' : undefined,
+            maxOutputTokens: 2500,
+            abortSignal: options.abortSignal,
+          })
+          return r.text
+        },
+      })
+      strixWindow = compacted.messages
+      effectiveSystem = compacted.system
+    }
+
+    // Auto-trim or auto-compact conversation history when max_context_tokens is configured
+    let effectiveMessages = strixWindow
+""")
+    replace_once(t, "        const compactResult = await compactMessages(\n          messagesToConvert,\n",
+                 "        const compactResult = await compactMessages(\n          strixWindow,\n")
+    replace_once(t, "        const trimResult = trimMessages(\n          messagesToConvert,\n",
+                 "        const trimResult = trimMessages(\n          strixWindow,\n")
+
+
+def concurrent_tools():
+    """Tool calls in several conversations at once. The thread route is one component reused across threads, and each
+    thread's Chat keeps the callbacks it was created with, so the tool loop's AbortController - one useRef - was shared by
+    every conversation: two answers that called tools at the same time overwrote and cleared each other's, and the one
+    whose results came back last was never sent back to the model (it showed its sources and stopped; seen with two web
+    searches 0.7 s apart). Leaving a thread also aborted its loop, so a search stopped when you switched chats. Now each
+    thread has its own controller (toolLoops), a thread left while its tools run keeps going, and only a loop waiting for
+    the user's approval is stopped on leaving, as before.
+    """
+    r = JAN / 'web-app/src/routes/threads/$threadId.tsx'
+    replace_once(r, "import { useAutoScroll } from '@/hooks/useAutoScroll'\n",
+                 "import { useAutoScroll } from '@/hooks/useAutoScroll'\n\n"
+                 "// strixllama: the running tool loop of each thread (see concurrent_tools() in apply.py)\n"
+                 "const toolLoops = new Map<string, AbortController>()\n")
+    replace_once(r, """  // AbortController for cancelling tool calls
+  const toolCallAbortController = useRef<AbortController | null>(null)
+""", """  // strixllama: the tool loop's AbortController is per thread, in toolLoops above
+""")
+    replace_once(r, """      if (
+        !toolCallAbortController.current ||
+        toolCallAbortController.current?.signal.aborted
+      ) {
+        return false
+      }
+      return lastAssistantMessageIsCompleteWithToolCalls({ messages })
+    },
+    []
+  )""", """      const toolLoop = toolLoops.get(threadId)
+      if (!toolLoop || toolLoop.signal.aborted) {
+        return false
+      }
+      return lastAssistantMessageIsCompleteWithToolCalls({ messages })
+    },
+    [threadId]
+  )""")
+    replace_once(r, """      toolCallAbortController.current = new AbortController()
+      const signal = toolCallAbortController.current.signal
+""", """      const toolLoop = new AbortController()
+      toolLoops.set(threadId, toolLoop)
+      const signal = toolLoop.signal
+""")
+    replace_once(r, """        sessionData.tools = []
+        toolApprovalPromises.current.clear()
+        toolCallAbortController.current = null
+        useAppState.getState().setThreadBusy(threadId, false)
+      })().catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Tool call error:', error)
+        }
+        sessionData.tools = []
+        toolApprovalPromises.current.clear()
+        toolCallAbortController.current = null
+        useAppState.getState().setThreadBusy(threadId, false)
+      })""", """        for (const t of sessionData.tools) toolApprovalPromises.current.delete(t.toolCallId)
+        sessionData.tools = []
+        if (toolLoops.get(threadId) === toolLoop) toolLoops.delete(threadId)
+        useAppState.getState().setThreadBusy(threadId, false)
+      })().catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Tool call error:', error)
+        }
+        for (const t of sessionData.tools) toolApprovalPromises.current.delete(t.toolCallId)
+        sessionData.tools = []
+        if (toolLoops.get(threadId) === toolLoop) toolLoops.delete(threadId)
+        useAppState.getState().setThreadBusy(threadId, false)
+      })""")
+    replace_once(r, """  useEffect(() => {
+    // Stable ref object (never reassigned) — capture for the cleanup closure.
+    const approvalPromises = toolApprovalPromises.current
+    return () => {
+      toolCallAbortController.current?.abort()
+      toolCallAbortController.current = null
+      approvalPromises.clear()
+      useToolApprovalRequests.getState().clearPendingForThread(threadId)
+    }
+  }, [threadId])""", """  useEffect(() => {
+    return () => {
+      // strixllama: a thread left while its tools run (a web search) goes on and answers in the background; one
+      // waiting for the user's approval stops, as before - no one is there to give it
+      const pending = useToolApprovalRequests.getState().pending ?? {}
+      if (Object.values(pending).some((q) => q.threadId === threadId)) {
+        toolLoops.get(threadId)?.abort()
+        toolLoops.delete(threadId)
+      }
+      useToolApprovalRequests.getState().clearPendingForThread(threadId)
+    }
+  }, [threadId])""")
 
 
 def web_tools():

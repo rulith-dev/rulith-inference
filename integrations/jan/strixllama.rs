@@ -38,6 +38,70 @@ pub async fn strixllama_parse_dropped(request: tauri::ipc::Request<'_>) -> Resul
     }).await.map_err(|e| e.to_string())?
 }
 
+/// A file the page hands over for saving (issue #5): a code block's download button, a table's CSV, the Logs page. The
+/// webview's own download of a blob link saved nowhere visible, so the bytes come here and go into the Downloads
+/// folder under the name the page gave (x-file-name, percent-encoded UTF-8), numbered when that name is taken.
+/// Returns the path written.
+#[tauri::command]
+pub async fn strixllama_save_download<R: tauri::Runtime>(app: tauri::AppHandle<R>, request: tauri::ipc::Request<'_>)
+        -> Result<String, String> {
+    use tauri::Manager;
+    let bytes: Vec<u8> = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(Value::Array(items)) => items.iter()
+            .map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
+            .collect::<Option<Vec<u8>>>().ok_or("Expected the file's bytes")?,
+        _ => return Err("Expected the file's bytes".into()),
+    };
+    let raw = request.headers().get("x-file-name").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    let name = percent_decode(&raw);
+    // a file name only: no folders, nothing Windows refuses in a name
+    let mut clean: String = name.chars()
+        .map(|c| if c.is_control() || "<>:\"/\\|?*".contains(c) { '_' } else { c }).collect();
+    clean = clean.trim().trim_end_matches(['.', ' ']).to_string();
+    if clean.is_empty() || clean.chars().all(|c| c == '.') { clean = "download".into(); }
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let (stem, ext) = match clean.rfind('.') {
+            Some(i) if i > 0 => (clean[..i].to_string(), clean[i..].to_string()),
+            _ => (clean.clone(), String::new()),
+        };
+        // create_new, so two saves of one name at once cannot land on the same file
+        for n in 0..10000 {
+            let path = if n == 0 { dir.join(&clean) } else { dir.join(format!("{stem} ({n}){ext}")) };
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(mut f) => {
+                    f.write_all(&bytes).map_err(|e| e.to_string())?;
+                    return Ok(path.to_string_lossy().to_string());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        Err("No free name for the file in Downloads".into())
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn percent_decode(s: &str) -> String {
+    let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let (Some(h), Some(l)) = (hex(b[i + 1]), hex(b[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 #[tauri::command]
 pub async fn strixllama_request(request: Value) -> Result<Value, String> {
     let op = request.get("op").and_then(Value::as_str).ok_or("Missing operation")?;

@@ -8,6 +8,8 @@ import { useTranslation } from '@/i18n/react-i18next-compat'
 import { ENDPOINT, LAST_MODEL_KEY, PROVIDER, autoloadEnabled, request, serverState, useStrixLlamaStatus, type ServerState } from './status'
 // Rulith's palette and type for the whole app, loaded with the root route
 import './rulith-theme.css'
+// downloads from the page (a code block's button, a table's CSV) go through the app: see downloads.ts
+import './downloads'
 
 // Mounted once at the root. Polls the manager, and keeps the chat side of Jan pointed at it.
 //
