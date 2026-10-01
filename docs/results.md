@@ -23,10 +23,30 @@ the driver pages during decode: prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/t
 
 ## Headline
 
-Measured 2026-09-28 on 0.3.1, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
+Measured 2026-10-01 on 0.4.0, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
 **on a freshly started server** (see the image note below — that qualifier is load-bearing), with the
 model files of [the README's list](../README.md#model-files) and the app's default settings (eight
-slots, MTP with three drafts, images on, f16 K/V):
+slots, MTP with three drafts, images on, f16 K/V); log `tmp/dec041/headline_040.log`:
+
+| | | |
+|---|---|---|
+| prefill, 95.6K tokens of real text | **1237 t/s** | 1236.8 / 1238.3 / 1218.4 over 3 runs |
+| decode, 86K context | **23.9 ms/token** (41.8 tok/s) | 23.93 / 23.93 / 23.95, draft acceptance 65%, 2.90 tokens per pass |
+| decode, short context | **21.7 ms/token** (46.1 tok/s) | 21.77 / 21.58 / 21.71, acceptance 65%, 2.88 tokens per pass |
+| decode, 3 / 4 conversations at once | **59.8 / 69.1 tok/s** summed | four slots, ~4K tokens each, default sampling with a new seed every round, nine rounds each; one conversation 42.1 |
+| decode with MTP off, 8 conversations of ~40K at once | **91.0 tok/s** summed | 90.6 / 91.3, a 512K-token q8_0 pool, greedy (`tmp/dec034/multi_probe.py --n 8 --words 12000 --gen 384`) |
+| decode with MTP off, 8 conversations of ~20K at once | **95.6 tok/s** summed | 94.4 / 96.8, f16 in a 256K pool (`--words 6000`) |
+| decode with MTP off, one conversation | **27.5 / 27.0 / 26.5 tok/s** | at 3K / 50K / 110K: 36.43 / 36.34 / 35.58, 37.21 / 37.06 / 36.71, 37.58 / 37.90 / 37.75 ms a token (`tools/decode_lab.py --set mtp=false parallel=4 --words 900,14700,32400 --n 256`) |
+| image input | works | Qwen3-VL projector, 904 MB |
+
+Against 0.3.1's table below (the same protocol, 2026-09-28): prefill 1228 -> 1237 t/s; decode at 86K 27.3 -> 23.9
+ms/token while acceptance went 63 -> 65% - a pass 77.0 -> 69.4 ms (27.3 x 2.82 tokens against 23.93 x 2.90); short
+context 22.5 -> 21.7 at 67 -> 65%, a pass 66.2 -> 62.5 ms; several conversations 55.4 / 62.5 -> 59.8 / 69.1 tok/s with
+one at 39.7 -> 42.1 (1.40x / 1.57x -> 1.42x / 1.64x). The MTP-off rows against 0.3.9, alternated earlier the same day
+(`tmp/dec041/ab041.log`): eight of ~40K 85.7, eight of ~20K 89.4, one conversation 25.9 / 25.5 / 25.0 tok/s. What moved
+them is 0.3.4-0.3.9's decode work and 0.4.0's (below); details `docs/results/decode-040-20261001.json`.
+
+Measured 2026-09-28 on 0.3.1, the same protocol:
 
 | | | |
 |---|---|---|
@@ -818,6 +838,56 @@ at one column), and routed experts read once per distinct expert for 2-16 tokens
 to its expert: 43 -> 50 ms for eight tokens' 48 layers - the registers went 60 -> 104, and the per-pair kernel already
 finds a shared expert's second read in the cache; at eight tokens the experts are read at ~190 GB/s, near the
 bandwidth). Details: `docs/results/multi-conv-039-20261001.json`.
+
+**One and several conversations: the small kernels, BF16 copies and the delta net's state (0.4.0, 2026-10-01).** The
+work started from a profile that could be trusted: a `wall_clock64` timestamp kernel captured into the HIP graph after
+every dispatch (`STRIX_GPU_TIMELINE`, new, measurement only) - repeating a product reads its weights from the 32 MB cache
+and looks free, and the per-node event timer adds ~25 us a dispatch. One conversation at 3K then read 35.6 ms of GPU a
+token against a 27.8 ms bandwidth floor: the big products at ~214 GB/s, the routed experts at 170-180, and ~3 ms in
+small kernels that wait on latency rather than memory. Three of those were slow for their size because of their code:
+the fused elementwise chains indexed every operand the general way, unrolled - code fetched at every launch; reading
+each operand by kind with the step loop rolled took sigmoid-mul-add 8.4 -> 2.7 us, add-softplus-mul 8.2 -> 2.5 and
+scale-silu 3.5 -> 1.4. The hyper-connection inject went 6.0 -> 4.0 us (`mul_mat_vec_f` unrolled below 128 rows) and the
+expert selection 10.3 -> 7.8 (`topk_moe` with a DPP arg-max) - `apply_decode_small_kernels_040`, the same arithmetic.
+Next, 264 of the model's F32 weights - the routers, the shared experts' gates, the delta-net alpha / beta and the
+hyper-connection injects - hold only bfloat16 values; BF16 copies of them, multiplied by the vector kernel, whose bf16
+loop is its f32 loop, give the same products from half the bytes (`apply_bf16_twins_040`; the router 28 -> 17 us at
+one token). Together, one conversation at 3K / 50K / 110K 2.4 / 2.7 / 1.9 ms a token faster.
+
+With eight conversations the timeline showed the projections right after each delta-net layer 1.5-2.4x slower than the
+same products elsewhere. A standalone model of the layer (`tmp/dec040/wb_probe.hip`, `wb_probe2.hip`) took it apart: the
+state update read its 24 MB (8 conversations x 48 heads x 64 KB) at ~117 GB/s - a warp held one 512-byte column - and
+wrote it back into the caches, from where the next kernels' reads evicted it, ~135 us later in each layer. A warp now
+takes two columns, each summed by the same lanes in the same order, and the read runs at ~205 GB/s (in the server, a
+step 87.6 -> 84.4 ms, alternated inside one run: sequential runs drifted 3-5% over minutes and said nothing). Skipping
+the write altogether, as an upper bound, saved 5.85 ms of an 83.5 ms step. The deferred rollback of 0.2.6 already kept
+per-token records - delta, key and gate, 33 KB - and a verify left the state row as it was; now every short batch,
+also without MTP, appends its records after the pending ones and the replayed state goes back to the row once eight
+are pending (`STRIX_GDN_ACC`), so the state is written once in nine tokens: a step 4.6 ms shorter (82.5 -> 77.9 ms,
+in-run), the record replay loaded six records at a time. The replay is the plain net's fmaf chain, so the bits do not
+move; the host's own replay (a state saved while records are pending) got an AVX2 FMA path, self-checked, after the
+CRT's `fmaf` took 262 ms for eight records of a conversation (`apply_gdn_records_041`). Last, each decode step's PLE
+gather nearly always misses a row of its RAM cache, and the unbuffered read of it waited ~0.5 ms for the drive to leave
+a low-power state it enters within ~1 ms of idle; a read issued ahead of the gather wakes it (`apply_ple_wake_041`, the
+gather at eight conversations 0.80 -> 0.45 ms).
+
+Alternated with 0.3.9 in one session (`tmp/dec041/ab041.log`): one conversation, MTP off, 38.6 -> 36.7 ms a token at
+3K (25.9 -> 27.3 tok/s), 39.3 -> 36.8 at 50K, 40.0 -> 38.8 at 110K; eight conversations of ~40K in a 512K q8_0 pool,
+MTP off, 85.7 -> 91.7 tok/s (two runs each: 85.4 / 86.0 and 93.7 / 89.8), eight of ~20K with f16 89.4 -> 97.1; MTP on,
+one stream +1.3 / +1.7% in two rounds with the same texts, three and four +1-3% at similar acceptance (other sampled
+texts). Eight conversations decoding together gain less
+end to end than their pure decode steps (about 11% less GPU time a step, the in-run A/Bs together) because in these
+runs many steps also carry another
+conversation's prompt, and such a step replays the records first and writes the states, as before. Bitwise: the
+probes (f16 MTP off, f16 MTP on, q8_0 on 8 slots in 512K) give 0.3.3's text and top-5 probabilities; eight conversations
+each alone give 0.3.5-0.3.9's tokens; eight conversations in one request - every step the same batch on any build -
+give the same tokens on 0.3.9, 0.4.0, 0.4.0 with `STRIX_GDN_ACC=0` and with `STRIX_GDN_COLS=1`
+(`tmp/dec041/multi_lockstep.py`; eight requests racing each other join steps in a timing-dependent order, so their
+tokens can differ from run to run); 78 op-level cases of the delta-net kernels with one and two columns, records
+appended included, the same bits. Tried and dropped: the IQ3_S grid in LDS for the one-token expert product (77.6 ->
+82.2 us, slower: the global table stays in cache), its K loop unrolled (no change), the hyper-connection norm's weights
+loaded early, non-temporal state stores, `HIP_FORCE_DEV_KERNARG=1` (no change each), and 16 records a set instead of 8
+(the same step, deeper replays). Details: `docs/results/decode-040-20261001.json`.
 
 ## Correctness
 

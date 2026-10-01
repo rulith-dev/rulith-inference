@@ -13,18 +13,19 @@ same data: an installed Strix Llama updates in place.*
 
 ## Where it stands
 
-Measured on the target machine with 0.3.1 (2026-09-28), speculative decoding on, at the app's default
+Measured on the target machine with 0.4.0 (2026-10-01), speculative decoding on, at the app's default
 settings (eight conversation slots, MTP, images on): prefill over 95.6K tokens of real text; 400 tokens
 decoded after 86K tokens of that text, and after a one-line question; and at four slots, several
-conversations of ~4K tokens each decoding together, with a new sampling seed every round:
+conversations of ~4K tokens each decoding together, with a new sampling seed every round. The last row
+is MTP off; its 0.3.9 figures were measured alternately with 0.4.0 the same day:
 
 | | |
 | --- | --- |
-| prefill | **1228 t/s** |
-| decode, 86K context | **27.3 ms/token** (36.7 tok/s at 63% draft acceptance) |
-| decode, short context | **22.5 ms/token** (44.4 tok/s at 67% acceptance) |
-| decode, 3 / 4 conversations at once | **55.4 / 62.5 tok/s** summed (1.40× / 1.57× one conversation measured the same way, 39.7; per step the same as 0.3.0, the sum moves ±10% with the sampled rounds' acceptance) |
-| decode with MTP off, 8 conversations of ~40K tokens at once | **85.6 tok/s** summed in a 512K-token q8_0 pool (0.3.9; 0.3.6: 80.3 in the same session, 0.3.3: 58.8); eight of ~20K with the f16 cache 90.6 (0.3.6: 83.5); one conversation at 110K 25.9 tok/s (0.3.6: 25.7) |
+| prefill | **1237 t/s** |
+| decode, 86K context | **23.9 ms/token** (41.8 tok/s at 65% draft acceptance; 0.3.1: 27.3 at 63%) |
+| decode, short context | **21.7 ms/token** (46.1 tok/s at 65% acceptance; 0.3.1: 22.5 at 67%) |
+| decode, 3 / 4 conversations at once | **59.8 / 69.1 tok/s** summed (1.42× / 1.64× one conversation measured the same way, 42.1; 0.3.1: 55.4 / 62.5 and 39.7; the sum moves ±10% with the sampled rounds' acceptance) |
+| decode with MTP off, 8 conversations of ~40K tokens at once | **91.0 tok/s** summed in a 512K-token q8_0 pool (0.3.9: 85.7 the same day, 0.3.3: 58.8); eight of ~20K with the f16 cache 95.6 (0.3.9: 89.4); one conversation 27.5 / 27.0 / 26.5 tok/s at 3K / 50K / 110K (0.3.9: 25.9 / 25.5 / 25.0) |
 | image input | supported (Qwen3-VL projector) |
 
 Every number in this repository comes with the command that produced it, in
@@ -63,7 +64,7 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
 `bootstrap.py` clones `pwilkin/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 53-file delta is also published as one commit on a fork, so it can be
+against the ROCm SDK. The same 82-file delta is also published on a fork, a commit per release, so it can be
 read as a plain diff: [rulith-dev/llama.cpp, branch `strixllama`](https://github.com/rulith-dev/llama.cpp/tree/strixllama). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
 remembered.
@@ -82,7 +83,7 @@ and Chinese.
 
 ## What is actually in here
 
-The whole delta against upstream llama.cpp is **53 files** — 49 modified, 4 added, out of 3610. The
+The whole delta against upstream llama.cpp is **82 files** — 78 modified, 4 added, out of 3610. The
 substantial pieces:
 
 | | |
@@ -98,6 +99,8 @@ substantial pieces:
 | **A prefix cache that follows agents** | The recurrent state can be resumed only where a checkpoint was kept, so checkpoints now sit where later prompts branch: where the system prompt ends, at each user message, at the end of each prompt. A new session on a system prompt another slot already computed copies it on the GPU instead of computing it again, and sessions that start together wait for the first one's copy. An agent workload (10K-token system prompt, three sessions at once, three sub-agents): 73K tokens processed → 29K, prompt time 172 → 60 s. |
 | **Several agents at once** | Agent tools run a session per sub-agent on one long system prompt, so every slot looked 97% similar to every new session, and a new session took whichever slot scored highest, cutting another agent's history. A slot now takes a request for what it holds only when the request continues it, and eight conversations stay loaded by default. Conversations that are answering share one pass whatever their lengths, a prompt gets a pass of its own, and while conversations answer a step takes at most 2048 prompt tokens. Six agents, 0.2.6 at its four slots against 0.2.7 at its eight: 75K tokens processed → 45K, median time to the first token 10.1 → 3.4 s, the longest pause of a streaming agent 6.2 → 2.7 s; a 19K-token prompt pauses a streaming conversation for 2.2 s at a time instead of 7. |
 | **Rollback without snapshots** | A speculative verify saved the recurrent state after every checked token, 3 MB a layer, in case a draft was rejected. It now records only what it needs to recompute a rejected tail (33 KB a token) and replays it in the next step: a verify step at three / four conversations 2.8% / 4.0% shorter, output identical bit for bit. |
+| **The delta net's state, written once in nine tokens** | Three layers in four keep a 3 MB state per conversation, read and rewritten for every token: with eight conversations, 24 MB written a layer a token, which cost more than reading it. A token now writes only its 33 KB record, and the state goes back to memory once eight records are pending, from the same records and the same arithmetic; a warp also reads two of its columns at once. Eight conversations of ~20K tokens, MTP off: 89.4 → 97.1 tok/s (0.4.0); output identical bit for bit. |
+| **Small decode kernels and BF16 copies** | A profile from timestamps captured inside the HIP graph showed ~3 ms a token in small kernels bound by latency: fused elementwise chains that fetched unrolled general indexing code at every launch (8.4 → 2.7 us), a top-k without DPP. And 264 F32 weights - routers, gates, injects - hold only bfloat16 values; BF16 copies give the same products from half the bytes. One conversation, MTP off, 25.9 → 27.3 tok/s at 3K (0.4.0), the same output. |
 | **Three correctness fixes** | Speculative verification batches ran dense attention with no causal mask, so long answers drifted and stopped early. Image input aborted the server three separate ways in the QSA block machinery, and a fourth when a second loaded conversation got an image. |
 | **Measurement instrumentation** | Per-graph, per-dispatch and per-phase timing, all off unless an environment variable is set. |
 
@@ -117,12 +120,12 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 53 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 82 files, byte for byte
 ```
 
-It restores the 47 modified files to upstream from the clone's own git objects, addressed by the blob
+It restores the 78 modified files to upstream from the clone's own git objects, addressed by the blob
 hashes in `bootstrap/UPSTREAM.json` — so clean upstream is reconstructed rather than trusted — then
-replays the snapshot and every script and compares. It reports **53 / 53**.
+replays the snapshot and every script and compares. It reports **82 / 82**.
 
 It was not always so. Five of the 24 were owned by no script at all - including the largest measured
 win in the project, which a clean rebuild would have silently dropped - and three scripts had drifted
@@ -156,6 +159,9 @@ the ones above — it is a list of the ways this project measured itself wrong.
 MIT, see [LICENSE](LICENSE). Third-party attribution in [NOTICE.md](NOTICE.md) — in particular this
 patches [pwilkin/llama.cpp](https://github.com/pwilkin/llama.cpp) (MIT) and the Jan overlay is meant
 for a [Jan](https://github.com/menloresearch/jan) checkout (Apache-2.0).
+
+If these patches are useful in your project, please credit Rulith Inference with a link to
+[this repository](https://github.com/rulith-dev/rulith-inference). That is a request, not a condition of the licence.
 
 ---
 

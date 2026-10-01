@@ -1,0 +1,272 @@
+{
+ "question": "0.4.0: where does a decode step spend its GPU time beyond the weights' bandwidth floor, at one and at eight conversations, and what of it can go without changing a bit of the output?",
+ "date": "2026-10-01",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP draft head IQ4_XS",
+ "profile_method": {
+  "tool": "STRIX_GPU_TIMELINE=N (apply_gpu_timeline_040): a wall_clock64 timestamp kernel captured into the HIP graph after every dispatch, ~0.7-3 us each, subtracted; tables per op class and graph shape",
+  "why_not_others": "STRIX_REPEAT reads a repeated product's weights from the 32 MB cache (a repeated GEMV looks free); the per-node event timer adds ~25 us a dispatch",
+  "in_run_ab": "STRIX_AB=16 (apply_ab_switch_041): the side flips every 16 decode graphs, graphs recaptured, the two graphs after a flip left out. A null A/B (both sides the same code) read +0.3%; sequential runs of the same build read 92.4 / 96.3 / 97.0 ms a step at 8x40K within half an hour",
+  "summary": "tmp/dec040/ab_summary.py <log> [rows]: the per-side medians of the graph spans"
+ },
+ "one_conversation_profile_3K_0_3_9": {
+  "gpu_ms_per_token": 35.6,
+  "floor_ms": "27.8 (5.84 GB at ~210 GB/s)",
+  "big_products": "~214 GB/s",
+  "routed_experts": "6.45 ms at 170-180 GB/s",
+  "small_kernels": "~3 ms of 3-9 us kernels bound by latency, not memory"
+ },
+ "small_kernels": {
+  "patch": "apply_decode_small_kernels_040",
+  "fused_chains": "operands read by kind (direct, linear, scalar), step loop rolled: sigmoid-mul-add 8.4 -> 2.7 us, add-softplus-mul 8.2 -> 2.5, scale-silu 3.5 -> 1.4 (the unrolled general indexing was code fetched at every launch; an unrolled switch made it ~3x slower)",
+  "mmvf_few_rows": "unroll 4 below 128 rows: the hyper-connection inject 6.0 -> 4.0 us",
+  "topk_moe": "DPP arg-max, expf not inlined: 10.3 -> 7.8 us (a 10-round serial chain, ~5.5 us warm)",
+  "bits": "the same arithmetic; STRIX_CHAIN_VERIFY 80 exact / 0 differ"
+ },
+ "bf16_twins": {
+  "patch": "apply_bf16_twins_040",
+  "weights": "264 F32 weights whose every value is a bfloat16 (routers, shared-expert gates, ssm alpha / beta, hyper-connection injects), twins 0.14 GiB",
+  "why_bitwise": "mul_mat_vec_f's bf16 loop is its f32 loop and bf16 widens to f32 exactly; GGML_BF16_TWIN_MAGIC keeps a twin on the vector kernel up to 8 columns (bf16 alone takes the WMMA mmf kernel from 4 columns on RDNA3.5, other sums)",
+  "router_us": {
+   "1_column": [
+    28,
+    17
+   ],
+   "8_columns": [
+    36,
+    28
+   ]
+  }
+ },
+ "dec040_ab_vs_0_3_9": {
+  "one_conversation_ms_per_token": {
+   "3K": [
+    39.4,
+    37.0
+   ],
+   "50K": [
+    41.1,
+    38.4
+   ],
+   "110K": [
+    40.7,
+    38.8
+   ]
+  },
+  "eight_x_2K_step_ms_switch_toggled": [
+   91.45,
+   89.54
+  ]
+ },
+ "delta_net_state": {
+  "standalone_model": "tmp/dec040/wb_probe.hip, wb_probe2.hip: 36 layers of qkv 27.9 MB -> state update -> z 16.7 MB -> out 16.7 MB -> experts 64 MB, own buffers each, timed per dispatch",
+  "standalone_us": {
+   "no_state_update": "z 73.0, out 73.4",
+   "one_column_in_place": "update 218.4, z 84.1, out 158.1, experts 333.3 (the write-back lands on the next kernels)",
+   "one_column_read_only": 207.2,
+   "two_columns_read_only": 123.4,
+   "two_columns_in_place": "update 122.9, z 83.7, out 159.6, experts 324.7",
+   "nontemporal_loads_and_stores": "update 273-358, the next kernels at baseline: the write costs the same, paid inside"
+  },
+  "two_columns_in_server": {
+   "8x2K_step_ms": [
+    87.6,
+    84.4
+   ],
+   "one_conversation": "unchanged (36.80 / 36.83 ms)",
+   "mtp_4_streams_verify": "-1.1%, within noise"
+  },
+  "write_skipped_upper_bound_8x2K_ms": [
+   83.5,
+   77.7
+  ],
+  "records_accumulate": {
+   "setting": "STRIX_GDN_ACC=8 (records a set; 0 or 1: the state written back every short batch as before)",
+   "8x2K_step_ms": {
+    "flush_every_step": 82.5,
+    "append": 77.9
+   },
+   "w16_8x2K_step_ms": {
+    "flush_every_step": 80.9,
+    "append": 76.2,
+    "note": "the same gain, deeper replays, twice the record memory"
+   },
+   "replay_block": "6 records loaded at a time; 8 took 98 VGPRs (occupancy 16 -> 12) and slowed the flushing steps",
+   "host_replay": "AVX2 FMA, self-checked against fmaf (values around 1, tiny, denormal, huge) at first use: 262 -> 14 ms for 8 records of a conversation's 36 layers"
+  },
+  "bits": "tmp/dec040/gdn_cols_test.cpp: 78 cases (plain net 1-8 sequences x 1-17 tokens, deferred net with 0-4 records replayed, append with the row kept, replay alone), one column = two columns"
+ },
+ "ple_drive_wake": {
+  "patch": "apply_ple_wake_041",
+  "finding": "tmp/dec041/ssd_latency.cpp on the model file, unbuffered 4 KB reads: back to back 144-153 us; after 1 / 5 / 20 / 80 ms idle 584-648 us; polling the completion instead of waiting 634 us (the drive or its link, not a sleeping core); a wake-up read 500 / 300 / 200 us ahead: 171 / 244 / 332 us",
+  "decode_gather": "16 rows a token; with no miss 0.0-0.1 ms, with one miss ~0.7 ms",
+  "8_conversations_gather_ms": [
+   0.8,
+   0.45
+  ],
+  "note": "multi_probe's greedy text repeats itself, so one conversation's gathers there never missed; real text misses every few tokens"
+ },
+ "ab_vs_0_3_9_end_to_end": {
+  "log": "tmp/dec041/ab041.log, alternated in one session",
+  "one_conversation_mtp_off_ms_per_token": {
+   "3K": {
+    "0.3.9": [
+     38.98,
+     38.19
+    ],
+    "0.4.0": [
+     37.0,
+     36.3
+    ]
+   },
+   "50K": {
+    "0.3.9": [
+     39.77,
+     38.76
+    ],
+    "0.4.0": [
+     36.95,
+     36.67
+    ]
+   },
+   "110K": {
+    "0.3.9": [
+     40.38,
+     39.67
+    ],
+    "0.4.0": [
+     40.25,
+     37.36
+    ]
+   }
+  },
+  "8x40K_q8_0_512K_mtp_off_tok_s": {
+   "0.3.9": [
+    85.4,
+    86.0
+   ],
+   "0.4.0": [
+    93.7,
+    89.8
+   ]
+  },
+  "8x20K_f16_mtp_off_tok_s": {
+   "0.3.9": 89.4,
+   "0.4.0": 97.1
+  },
+  "mtp_on_tok_s": {
+   "1_stream_same_texts": {
+    "0.3.9": [
+     40.1,
+     37.8
+    ],
+    "0.4.0": [
+     40.8,
+     38.3
+    ]
+   },
+   "3_streams": {
+    "0.3.9": [
+     59.8,
+     55.6
+    ],
+    "0.4.0": [
+     60.6,
+     57.7
+    ]
+   },
+   "4_streams": {
+    "0.3.9": [
+     66.2,
+     70.4
+    ],
+    "0.4.0": [
+     69.9,
+     71.8
+    ]
+   }
+  },
+  "why_eight_gain_less_end_to_end": "multi_probe's conversations start decoding while others still prefill; a step carrying a prompt is ragged, replays the pending records first and runs the plain net (lazy mode 2)"
+ },
+ "release_checks": {
+  "bitwise": "probes f16 MTP off, f16 MTP on, q8_0 8 slots 512K: text and top-5 probabilities identical to 0.3.3; eight conversations alone = 0.3.5-0.3.9's tokens; eight in one request (tmp/dec041/multi_lockstep.py) identical on 0.3.9 / 0.4.0 / STRIX_GDN_ACC=0 / STRIX_GDN_COLS=1",
+  "gates": "tmp/dec041/gates_041.log: truncation 79K with MTP 30/30; agent probe; fault probes; agent harness 0.98x ideal; prefix cache 0.98x / 0.99x; pool guard burst; images; the user's 512K case with a restore; answer edges; block keys in a used slot; #29092 check; leave == return state hashes (the one known shared-prefix difference, the same hashes on 0.3.5-0.3.9); long pair from disk; no asserts",
+  "replay": "82 / 82 from clean upstream, 96 patches"
+ },
+ "dropped": {
+  "iq3s_grid_in_lds_one_token_experts": "77.6 -> 82.2 us, slower",
+  "iq3s_k_loop_unroll_4": "77.8 vs 78.3 us, no change",
+  "hc_combine_norm_gamma_prefetch": "no change",
+  "gdn_nontemporal_state_stores": "no change (the loads had already brought the lines into the MALL)",
+  "HIP_FORCE_DEV_KERNARG": "no change",
+  "records_16_a_set": "the same step as 8"
+ },
+ "headline_0_4_0": {
+  "log": "tmp/dec041/headline_040.log, runtime bin/hip (0.4.0), the protocol of docs/results.md's headline: a fresh server each decode_lab run, temperature 0, cache_prompt false, the app's default profile (8 slots, MTP draft 3, images on, f16)",
+  "prefill_95_6K_t_s": [
+   1236.8,
+   1238.3,
+   1218.4
+  ],
+  "decode_86K_ms_per_token": [
+   23.93,
+   23.93,
+   23.95
+  ],
+  "decode_86K_acceptance": "262/405 = 65%, 2.90 tokens a pass (0.3.1: 63%, 2.82)",
+  "decode_short_ms_per_token": [
+   21.77,
+   21.58,
+   21.71
+  ],
+  "decode_short_acceptance": "261/404 = 65%, 2.88 tokens a pass (0.3.1: 67%, 2.94)",
+  "ms_per_pass": {
+   "86K": {
+    "0.3.1": 77.0,
+    "0.4.0": 69.4
+   },
+   "short": {
+    "0.3.1": 66.2,
+    "0.4.0": 62.5
+   }
+  },
+  "several_conversations_tok_s_mean_of_9_rounds": {
+   "1": 42.1,
+   "3": 59.8,
+   "4": 69.1,
+   "acceptance_mean": "60% / 63% / 65%",
+   "0.3.1": {
+    "1": 39.7,
+    "3": 55.4,
+    "4": 62.5
+   }
+  },
+  "mtp_off": {
+   "8x40K_q8_0_512K_tok_s": [
+    90.6,
+    91.3
+   ],
+   "8x20K_f16_256K_tok_s": [
+    94.4,
+    96.8
+   ],
+   "one_conversation_ms_per_token": {
+    "3K": [
+     36.43,
+     36.34,
+     35.58
+    ],
+    "50K": [
+     37.21,
+     37.06,
+     36.71
+    ],
+    "110K": [
+     37.58,
+     37.9,
+     37.75
+    ]
+   }
+  }
+ }
+}
