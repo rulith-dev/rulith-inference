@@ -889,6 +889,43 @@ appended included, the same bits. Tried and dropped: the IQ3_S grid in LDS for t
 loaded early, non-temporal state stores, `HIP_FORCE_DEV_KERNARG=1` (no change each), and 16 records a set instead of 8
 (the same step, deeper replays). Details: `docs/results/decode-040-20261001.json`.
 
+**MTP with sampling: speculative sampling and shorter drafts (0.4.1, 2026-10-01).** A user found the MTP acceptance low
+next to other engines (a comparison on UD-Q4_K_XL read 71% for this one, 84% for Halogen); their own log read 67-70%
+with one draft, three conversations and Jan's sampling (temperature 0.7, top_k 20, top_p 0.8). With sampling, the draft
+was each step's top candidate and the verification an exact match against the target's own draw: a draft token was
+accepted with probability p(x), exact in distribution but blind to how close the draft's distribution is. Speculative
+sampling (Leviathan et al. 2023, Chen et al. 2023) draws the draft from q - the draft head's top ten candidates through
+the target's top-k, top-p, min-p and temperature - accepts a token with probability min(1, p(x) / q(x)) and replaces a
+rejected one with a draw from max(0, p - q), so a position is accepted with probability sum min(p, q). On the user's
+prompt, both expectations computed at every verified position (`STRIX_SPEC_SAMPLING_STATS`, the same contexts): the
+first position 63.4 -> 66.9% over 3840 positions, the second 58.0 -> 60.0% over 2560; the acceptance observed, 66.8%,
+matched. q's temperature against the target's did not matter (0.4-1.3 times it within 0.7 points of each other), nor
+did the draft head's precision: a Q8_0 MTP layer and/or the target's Q6_K LM head instead of Q4_K_M and IQ4_XS read
+66.9-68.9% at the first position in runs whose texts differ (about +-2 points between runs; Halogen's note of 51 -> 59%
+from 8-bit dense projections did not reproduce here). What is left is the draft head itself: at temperature 0.7 its
+distribution and the target's share about two thirds of their mass, where under greedy decoding the first position is
+accepted ~86% - and Halogen verifies greedily, its output byte-identical to greedy decoding.
+
+Drafts accepted less often pay for fewer positions. With speculative sampling, the same prompt and sampling, three
+rounds of 1200 tokens each, tok/s summed over the rounds' wall time: one conversation 36.0 with two drafts against 34.5
+with three (three seed sets each); two conversations 55.6 with two, 54.7 with one; three 67.6 with one against 63.5
+with two; four 77.0 with one against 71.2 with two and 70.7 without; six 87.0 with one against 89.2 without; eight 96.3
+against 102.1. A sampled request's draft now has its own cap by generating slots, 2, 2, 1, 1 and none from five
+(`STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED`, set by the manager); greedy requests keep 3, 2, 2, 2, none.
+
+Alternated with 0.4.0 in one session, the app's profile, the same prompt and seeds, twice each (`tmp/spec/ab042.log`):
+one conversation 33.6 -> 36.2 tok/s (33.57 / 33.53 against 36.07 / 36.23), three conversations 61.3 -> 67.1 summed
+(61.30 / 61.23 against 67.37 / 66.87); each build gives the same tokens for the same seed from run to run. The
+acceptance a log reports moves more than the speed - 42.6 -> 55.6% for one conversation, ~51 -> ~69% for three -
+because the drafts are shorter. Checks: `tools/spec_sampling_mc.py` compiles the shipped functions alone and checks by
+Monte Carlo that a token drawn from q and verified against p comes out distributed as p (35 parameter sets, 400K draws
+each) and that streams of drafts of up to three tokens, cut by a confidence rule as p_min cuts them, give p's joint law
+over three tokens; a control stream that drops drafts shorter than two comes out biased (chi-square z 1694), which is
+why a short drawn draft is kept when p_min is set. Greedy decoding keeps the exact match: the probes give 0.3.3's text
+and top-5 probabilities with MTP on and off and with q8_0 on eight slots; the truncation test at 79K finishes its list
+greedy and at temperature 0.7, and the agent probe (temperature 0.7, tools, regenerates, aborted streams) logs no
+warning (`tmp/spec/gates_042.log`). Details: `docs/results/spec-sampling-041-20261001.json`.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

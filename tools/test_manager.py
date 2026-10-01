@@ -545,6 +545,13 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(env({'parallel':4})['STRIX_SPEC_DRAFT_BY_SLOTS'],'3,2,2,0')
             self.assertEqual(env({'parallel':4,'draft_max':1})['STRIX_SPEC_DRAFT_BY_SLOTS'],'1,1,1,0')
         self.assertNotIn('STRIX_SPEC_DRAFT_BY_SLOTS',env({'parallel':4,'mtp':False}))
+    def test_sampled_requests_draft_less(self):
+        env=lambda raw: m.runtime_environment(m.validate_profile(dict({'vision':False},**raw),self.model))
+        # their own table, also with one slot: 2 drafts for one or two generating, 1 for three or four, none from five
+        if m.validate_profile({'vision':False},self.model)['mtp']:
+            self.assertEqual(env({'parallel':1})['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'],'2,2,1,1,0')
+            self.assertEqual(env({'parallel':4,'draft_max':1})['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'],'1,1,1,1,0')
+        self.assertNotIn('STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED',env({'parallel':4,'mtp':False}))
     def test_the_kv_cache_is_f16_or_q8_0_and_reaches_both_type_flags(self):
         for kv in m.KV_TYPES:
             a=m.argv(self.model,m.validate_profile({'vision':False,'kv':kv},self.model))

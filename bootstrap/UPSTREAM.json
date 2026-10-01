@@ -9,9 +9,10 @@
   "common/chat.h": "b575be7cf92bc36d8af7711ff7e94bd767c7c3b3589c7660907e2e4c7235e88a",
   "common/common.cpp": "eb8755df4b79449339cb860e3ba929c5821c1dc32e7c07f9bd4f7e35cac5ddac",
   "common/common.h": "8f6972940e6677ef3b1b2a5f5f84dad93ce3c51269a961a2cce139725b39d475",
-  "common/sampling.cpp": "efc21ff844b71fd2e63a57fc04cbfe48c155f136e65affb01b9bc22e11f088d0",
-  "common/sampling.h": "5e50517ed1a0be07ba10a307b6da6714c4fd313be8c80ee192349c47a01b2922",
-  "common/speculative.cpp": "82af15204df2b6fa4bd9d46d6be2e31c565e8db7d46a4749e6aa52482c357b84",
+  "common/sampling.cpp": "4e783c3085a969bdb76f49af6cbbf59d6ca855b7708fe2f97007a42059ab6cf0",
+  "common/sampling.h": "e5cba84f679bbdbd0b435919541cc1e79a80b5968be4e06d4baa407b368d568b",
+  "common/speculative.cpp": "b8951624044d7e75054e1d1f3841984ec2ecda752b039d1f02f29ed791833059",
+  "common/speculative.h": "1c30a33745fd9db3dd7ce11d20e9b2a42eaf921e83c5b6a921f1efd9b2b8e94d",
   "ggml/include/ggml.h": "25919129d4381f2cf9ced8f8be9011eb4d6a6e2d9271c34192266ca0f095b1cf",
   "ggml/src/ggml-alloc.c": "6a4b269c56f03c37f74f78419aa9e77463ee8e58a82e1f1e7be6e850a550974c",
   "ggml/src/ggml-cpu/ggml-cpu.c": "b1bc2b55c1f747a4334fa2255387ae03e99dd4a094db4f39a7089adae46fb8ce",
@@ -81,7 +82,7 @@
   "tests/test-backend-ops.cpp": "63b40d1aa142a62032da8bab47b53513b688fe8a18b6980ac07300f672c007c0",
   "tools/server/server-common.cpp": "e2a5ae4ade6846cfc872c1d4a8f60415ada01b8d659ba70bc481ded9640ad890",
   "tools/server/server-common.h": "ce3d4154d51f7d44fcd57e9cb5228f72f240fc4094366562b4e9ab5a7e94e813",
-  "tools/server/server-context.cpp": "a3182749dc3d0c6a9dcea81faa691ebb9dd5de68f1295d6b266415e49e25123e",
+  "tools/server/server-context.cpp": "a90e21cee8e21a71066f721cd2e917dbb2cd9f5bb4536aede154e0f49f0fc553",
   "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
   "tools/server/server-queue.cpp": "3a2a196c19bb758c3ce55f2c983dafcddb91d71fd87ce02cf081f2b55dad80b8",
   "tools/server/server-queue.h": "39d958942e30e8b02db6bdd9bfa7687178bb199ebb616e7d3e88881b5565d592",
@@ -115,6 +116,10 @@
   "common/speculative.cpp": {
    "git_blob": "8c3208af5fabc32ea0aae6f73cfbc96558036258",
    "sha256": "4db665a495adde2268731668cb1387e434cf7f071da84b2f67f0f9bcf87cc477"
+  },
+  "common/speculative.h": {
+   "git_blob": "c968750e2d80e490f60ad365828552ad0c644c2f",
+   "sha256": "d9ed2612f3635949473c1b1c61ddcc427cb74056afa80f1d31c2c2940565ccba"
   },
   "ggml/include/ggml.h": {
    "git_blob": "85a1ae7ae20880c782fe25ad80ba7f9f98f3515b",

@@ -43,10 +43,10 @@ def build_fill(approx_tokens):
     return "\n".join(out)
 
 
-def turn(port, max_tokens, fill=""):
+def turn(port, max_tokens, fill="", temperature=0.0, seed=0):
     content = (fill + "\n\n" + ASK) if fill else ASK
     body = {"messages": [{"role": "user", "content": content}], "max_tokens": max_tokens,
-            "temperature": 0, "stream": True, "chat_template_kwargs": {"enable_thinking": False}}
+            "temperature": temperature, "seed": seed, "stream": True, "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request("http://127.0.0.1:%d/v1/chat/completions" % port,
                                  data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
     t0 = time.time()
@@ -74,11 +74,13 @@ def main():
     ap.add_argument("--max-tokens", type=int, default=3000)
     ap.add_argument("--reps", type=int, default=2)
     ap.add_argument("--fill", type=int, default=0, help="approximate prompt tokens of preamble")
+    ap.add_argument("--temperature", type=float, default=0.0,
+                    help="above 0: sampled answers (speculative sampling when MTP is on), a new seed each rep")
     args = ap.parse_args()
 
     fill = build_fill(args.fill) if args.fill else ""
     for i in range(args.reps):
-        t, finish, text, wall = turn(args.port, args.max_tokens, fill)
+        t, finish, text, wall = turn(args.port, args.max_tokens, fill, args.temperature, 1000 + i)
         # how far through the 30 sections did it actually get
         reached = max((n for n in range(1, 31) if f"{n}." in text or f"{n}、" in text), default=0)
         print("rep %d: prompt %s, %s tokens, finish_reason=%s, reached section %d/30, %.1f s at %.1f tok/s%s" % (

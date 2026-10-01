@@ -24,8 +24,8 @@ Upstream: [`pwilkin/llama.cpp`](https://github.com/pwilkin/llama.cpp) at
 `patches/` applies to that revision, and `tools/replay_bootstrap.py` proves the set reproduces
 the build exactly.
 
-`bootstrap/UPSTREAM.json` records the provenance of the 82 files this project changes: for each of
-the 78 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 82 the
+`bootstrap/UPSTREAM.json` records the provenance of the 83 files this project changes: for each of
+the 79 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 83 the
 SHA-256 the patch set produces. The replay restores the upstream side by blob hash, so what it
 rebuilds from is upstream's content by construction rather than by assertion.
 
@@ -80,8 +80,8 @@ projector. Obtain them from their official channels and observe their own licens
 `f5daaa3cfa6358e5dd398911ec741813745a5440`，固定在 `bootstrap/bootstrap.py` 里。`patches/` 下的
 每个脚本都针对该版本；`tools/replay_bootstrap.py` 可证明整套补丁精确重建该构建。
 
-`bootstrap/UPSTREAM.json` 记录本项目改动的那 82 个文件的来源：被修改的 78 个各记其**上游**版本的
-Git blob SHA-1 与 SHA-256，82 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
+`bootstrap/UPSTREAM.json` 记录本项目改动的那 83 个文件的来源：被修改的 79 个各记其**上游**版本的
+Git blob SHA-1 与 SHA-256，83 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
 所以它据以重建的内容是上游的——这是构造保证，不是声明。
 
 ### Jan —— Apache License 2.0，Copyright 2025 Menlo Research（https://menlo.ai）

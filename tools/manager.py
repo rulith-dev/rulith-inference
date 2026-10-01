@@ -783,6 +783,16 @@ def runtime_environment(cfg):
     if cfg.get('mtp') and cfg.get('parallel', 1) > 1:
         dm = int(cfg['draft_max'])
         env['STRIX_SPEC_DRAFT_BY_SLOTS'] = ','.join(str(x) for x in (dm, min(dm, 2), min(dm, 2), min(dm, 2), 0))
+    # A request that samples (temperature above 0) has its drafts drawn and verified by speculative sampling since 0.4.1
+    # and accepted less often than a greedy one's - at temperature 0.7 on prose ~67% at the first position, ~86% greedy -
+    # so a draft position pays less, and it has its own table, also with one slot (STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED).
+    # Measured 2026-10-01 on Chinese prose at Jan's sampling (temperature 0.7, top_k 20, top_p 0.8), tok/s summed:
+    # one conversation 36.3 with 2 drafts against 35.5 with 3 (three seed sets); two 55.6 with 2, 54.6 with 1; three
+    # 67.6 with 1 against 63.5 with 2; four 77.0 with 1 against 71.2 with 2 and 70.7 without; six 87.0 with 1 against
+    # 89.2 without.
+    if cfg.get('mtp'):
+        dm = int(cfg['draft_max'])
+        env['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'] = ','.join(str(x) for x in (min(dm, 2), min(dm, 2), min(dm, 1), min(dm, 1), 0))
     # Several conversations decoding together: from seven tokens a step the routed experts leave the vector kernel's
     # single pass - for chunks of it up to 16 tokens since 0.2.3, for the tiled kernel past that, which dequantizes an
     # expert once for all its tokens (eight conversations +6% summed, measured before the chunks). Not with one slot,

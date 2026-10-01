@@ -64,7 +64,7 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
 `bootstrap.py` clones `pwilkin/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 82-file delta is also published on a fork, a commit per release, so it can be
+against the ROCm SDK. The same 83-file delta is also published on a fork, a commit per release, so it can be
 read as a plain diff: [rulith-dev/llama.cpp, branch `strixllama`](https://github.com/rulith-dev/llama.cpp/tree/strixllama). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
 remembered.
@@ -83,7 +83,7 @@ and Chinese.
 
 ## What is actually in here
 
-The whole delta against upstream llama.cpp is **82 files** — 78 modified, 4 added, out of 3610. The
+The whole delta against upstream llama.cpp is **83 files** — 79 modified, 4 added, out of 3610. The
 substantial pieces:
 
 | | |
@@ -101,6 +101,7 @@ substantial pieces:
 | **Rollback without snapshots** | A speculative verify saved the recurrent state after every checked token, 3 MB a layer, in case a draft was rejected. It now records only what it needs to recompute a rejected tail (33 KB a token) and replays it in the next step: a verify step at three / four conversations 2.8% / 4.0% shorter, output identical bit for bit. |
 | **The delta net's state, written once in nine tokens** | Three layers in four keep a 3 MB state per conversation, read and rewritten for every token: with eight conversations, 24 MB written a layer a token, which cost more than reading it. A token now writes only its 33 KB record, and the state goes back to memory once eight records are pending, from the same records and the same arithmetic; a warp also reads two of its columns at once. Eight conversations of ~20K tokens, MTP off: 89.4 → 97.1 tok/s (0.4.0); output identical bit for bit. |
 | **Small decode kernels and BF16 copies** | A profile from timestamps captured inside the HIP graph showed ~3 ms a token in small kernels bound by latency: fused elementwise chains that fetched unrolled general indexing code at every launch (8.4 → 2.7 us), a top-k without DPP. And 264 F32 weights - routers, gates, injects - hold only bfloat16 values; BF16 copies give the same products from half the bytes. One conversation, MTP off, 25.9 → 27.3 tok/s at 3K (0.4.0), the same output. |
+| **MTP when sampling** | With a temperature above 0, a draft token counted only when the model drew that very token. The draft head now draws its proposals from its own distribution, shaped by the request's sampling settings, and speculative sampling accepts each with the probability that keeps every token distributed exactly as the model alone samples it: at temperature 0.7 the first proposal is kept 67% of the time instead of 63%. Proposals kept less often pay for fewer a step, so sampled answers draft 2 tokens for one or two conversations, 1 for three or four. At Jan's settings, one conversation 33.6 → 36.2 tok/s, three 61.3 → 67.1 (0.4.1). Greedy output unchanged bit for bit. |
 | **Three correctness fixes** | Speculative verification batches ran dense attention with no causal mask, so long answers drifted and stopped early. Image input aborted the server three separate ways in the QSA block machinery, and a fourth when a second loaded conversation got an image. |
 | **Measurement instrumentation** | Per-graph, per-dispatch and per-phase timing, all off unless an environment variable is set. |
 
@@ -120,12 +121,12 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 82 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 83 files, byte for byte
 ```
 
-It restores the 78 modified files to upstream from the clone's own git objects, addressed by the blob
+It restores the 79 modified files to upstream from the clone's own git objects, addressed by the blob
 hashes in `bootstrap/UPSTREAM.json` — so clean upstream is reconstructed rather than trusted — then
-replays the snapshot and every script and compares. It reports **82 / 82**.
+replays the snapshot and every script and compares. It reports **83 / 83**.
 
 It was not always so. Five of the 24 were owned by no script at all - including the largest measured
 win in the project, which a clean rebuild would have silently dropped - and three scripts had drifted

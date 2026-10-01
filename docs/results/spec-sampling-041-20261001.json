@@ -1,0 +1,218 @@
+{
+ "question": "0.4.1: why is MTP acceptance low when the model samples, what can raise it without changing the output distribution, and how long should a sampled request's draft be?",
+ "date": "2026-10-01",
+ "machine": "GMKtec EVO-X2 class, Ryzen AI Max+ 395 (gfx1151), 128 GB, 96 GB carve",
+ "model": "Qwen3.8-Flash-Next UD-IQ4_XS, MTP draft head shared-Q4_K_M with its own IQ4_XS LM head",
+ "protocol": "tmp/spec/spec_accept.py through tmp/kvr/with_server.py (the app's profile; parallel 4 unless noted): N chat requests at once with the user's prompt '重新来一篇武侠方面的，5000字', Jan's sampling (temperature 0.7, top_k 20, top_p 0.8; min_p the server's 0.05), 1200 tokens each, a new seed per conversation and round, three rounds; tok/s summed = tokens over each round's wall time, averaged over rounds",
+ "method": {
+  "speculative_sampling": "Leviathan et al. 2023, Chen et al. 2023: the draft drawn from q (the draft head's top ten candidates through the target's top-k, top-p and min-p at temperature 1, then softmax at the target's temperature), a draft token accepted with probability min(1, p(x)/q(x)), a rejected one replaced by a draw from max(0, p - q), a draw from p after a draft accepted whole; p = the target chain's samplers but dist, then dist's softmax",
+  "expected_acceptance_stats": "STRIX_SPEC_SAMPLING_STATS=1: at every verified position, sum_y min(p(y), q'(y)) for q' = q's support at temperature temp*s, and p(top token of q) for the greedy draft - both on the same contexts",
+  "monte_carlo": "tools/spec_sampling_mc.py: the shipped functions compiled alone; one position, 35 parameter sets x 400K draws: output ~ p, draft ~ q, acceptance = sum min(p,q) (all within 5 sigma); streams of drafts of 1-3 tokens cut by a confidence rule on q: the joint law of three tokens = p's (3 streams, 3-9M steps); a control that drops drafts shorter than 2 is biased (chi2 z 1694)"
+ },
+ "expected_acceptance_same_contexts": {
+  "run": "3 conversations x 3 rounds, seeds 2000 (tmp/spec/s4.log, logs/spec_s4-server.log)",
+  "first_position": {
+   "n": 3840,
+   "greedy_draft": 0.634,
+   "drawn_from_q": 0.669,
+   "observed": 0.668,
+   "by_q_temperature_over_target": {
+    "0.25": 0.648,
+    "0.40": 0.655,
+    "0.55": 0.661,
+    "0.70": 0.664,
+    "0.85": 0.667,
+    "1.00": 0.669,
+    "1.15": 0.669,
+    "1.30": 0.669
+   }
+  },
+  "second_position": {
+   "n": 2560,
+   "greedy_draft": 0.58,
+   "drawn_from_q": 0.6,
+   "observed": 0.596
+  }
+ },
+ "draft_head_precision": {
+  "note": "separate runs, different texts: about +-2 points between runs",
+  "q4km_layer_iq4xs_head (shipped)": {
+   "first": [
+    0.669,
+    0.634
+   ],
+   "second": 0.6,
+   "overall": 0.535
+  },
+  "q8_0_layer_iq4xs_head": {
+   "first": [
+    0.672,
+    0.64
+   ],
+   "second": 0.61,
+   "overall": 0.543
+  },
+  "q8_0_layer_q6k_head": {
+   "first": [
+    0.689,
+    0.657
+   ],
+   "second": 0.61,
+   "overall": 0.553
+  },
+  "q4km_layer_q6k_head": {
+   "first": [
+    0.67,
+    0.64
+   ],
+   "second": 0.591,
+   "overall": 0.529
+  },
+  "format": "first: [drawn from q, greedy draft] expected; overall = accepted / drafted"
+ },
+ "speculative_sampling_on_off_seeds_3000": {
+  "3_conversations_default_draft": {
+   "on": {
+    "acceptance": 0.547,
+    "tokens_a_pass": 2.09,
+    "tok_s": 64.5
+   },
+   "off": {
+    "acceptance": 0.498,
+    "tokens_a_pass": 1.99,
+    "tok_s": 61.7
+   }
+  },
+  "1_conversation_default_draft": {
+   "on": {
+    "acceptance": 0.481,
+    "tokens_a_pass": 2.3,
+    "tok_s": 36.5
+   },
+   "off": {
+    "acceptance": 0.448,
+    "tokens_a_pass": 2.2,
+    "tok_s": 34.8
+   }
+  },
+  "1_conversation_draft_1_threshold_0": {
+   "on": {
+    "acceptance": 0.678,
+    "tokens_a_pass": 1.68,
+    "tok_s": 36.2
+   },
+   "off": {
+    "acceptance": 0.666,
+    "tokens_a_pass": 1.66,
+    "tok_s": 35.9
+   }
+  },
+  "3_conversations_draft_1_threshold_0": {
+   "on": {
+    "acceptance": 0.679,
+    "tokens_a_pass": 1.68,
+    "tok_s": 68.7
+   },
+   "off": {
+    "acceptance": 0.653,
+    "tokens_a_pass": 1.65,
+    "tok_s": 65.8
+   }
+  }
+ },
+ "draft_length_with_speculative_sampling_tok_s": {
+  "1_conversation": {
+   "1": 34.6,
+   "2": [
+    36.8,
+    35.4,
+    35.8
+   ],
+   "3": [
+    34.6,
+    34.5,
+    34.4
+   ],
+   "seed_sets": [
+    4000,
+    5000,
+    6000
+   ]
+  },
+  "2_conversations": {
+   "1": 54.7,
+   "2": 55.6
+  },
+  "3_conversations": {
+   "1": 67.6,
+   "2": 63.5
+  },
+  "4_conversations": {
+   "1": 77.0,
+   "2": 71.2,
+   "off": 70.7
+  },
+  "6_conversations_8_slots": {
+   "1": 87.0,
+   "off": 89.2
+  },
+  "8_conversations_8_slots": {
+   "1": 96.3,
+   "off": 102.1
+  },
+  "chosen": "STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED 2,2,1,1,0 (greedy keeps 3,2,2,2,0)"
+ },
+ "release_checks": "tmp/spec/gates_042.log",
+ "ab_vs_0_4_0": {
+  "log": "tmp/spec/ab042.log, alternated old / new / old / new, seeds 8000, the app's profile (8 slots)",
+  "1_conversation_tok_s": {
+   "0.4.0": [
+    33.57,
+    33.53
+   ],
+   "0.4.1": [
+    36.07,
+    36.23
+   ],
+   "acceptance": [
+    0.426,
+    0.556
+   ],
+   "tokens_a_pass": [
+    2.16,
+    2.03
+   ]
+  },
+  "3_conversations_tok_s": {
+   "0.4.0": [
+    61.3,
+    61.23
+   ],
+   "0.4.1": [
+    67.37,
+    66.87
+   ],
+   "acceptance": [
+    [
+     0.511,
+     0.504
+    ],
+    [
+     0.69,
+     0.68
+    ]
+   ],
+   "tokens_a_pass": [
+    [
+     2.02,
+     2.0
+    ],
+    [
+     1.69,
+     1.68
+    ]
+   ]
+  },
+  "note": "each build gives the same tokens for the same seed run to run (identical counts in its two runs)"
+ }
+}
