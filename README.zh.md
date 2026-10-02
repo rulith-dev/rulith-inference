@@ -30,6 +30,14 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 之上分辨的，就直接写明分辨不出，而不是算作收益；解码数字一律带上草稿接受率——开着推测解码时，脱离
 接受率谈吞吐，描述的是那段提示词，不是这套运行时。
 
+**Linux。** 没有 Linux 安装包，但打过补丁的 llama.cpp 可以在 Linux 上编译。有用户在 Linux 上用 ROCm 编译了
+[rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp) 的 `strixllama` 分支，用 `llama-bench`
+测量（`-b 8192 -ub 8192 -fa 1`，并导出应用使用的开关）：UD-IQ4_XS 预填充 1254 t/s（pp2048）、生成
+27.8 tok/s（tg128，关闭 MTP），与 Windows 相同；UD-Q4_K_XL 为 804 和 26.0，因为调优过的专家内核针对的是
+UD-IQ4_XS 里的量化类型（[帖子](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)）。
+这些开关是 [tools/manager.py](tools/manager.py) 中的 `HIP_GATES` 和 `HIP_QSA_GATES`；不设置时，服务端
+接近原版 llama.cpp。
+
 ## 只想跑起来？
 
 **[docs/getting-started.zh.md](docs/getting-started.zh.md)**——从
@@ -122,7 +130,8 @@ python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 83 �
 
 ## 适用范围与限制
 
-- **仅 Windows。** 管理器用 Win32 进程 API；构建目标是 gfx1151。
+- **仅 Windows。** 管理器用 Win32 进程 API；构建目标是 gfx1151。单独的补丁版服务端也能在 Linux 上编译，
+  这是用户实测的，不是本机测的（见上文"Linux"）。
 - **单一模型族。** 注意力部分专属于 `qwen4exp`。内核部分（IQ3_S MMB、MMVQ 每工作组行数）适用面更广。
 - **不是 llama.cpp 的分叉。** 本仓库只放补丁、工具和实测数据，不含模型权重、上游源码或二进制。
 

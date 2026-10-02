@@ -33,6 +33,15 @@ Every number in this repository comes with the command that produced it, in
 says so rather than claiming a win — and decode figures carry their draft acceptance, because with
 speculation on, throughput without acceptance describes the prompt rather than the runtime.
 
+**On Linux.** There is no Linux installer, but the patched llama.cpp builds there. A user built the
+`strixllama` branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp) with ROCm on Linux
+and measured it with `llama-bench` (`-b 8192 -ub 8192 -fa 1`, with the app's switches exported):
+UD-IQ4_XS 1254 t/s prefill (pp2048) and 27.8 tok/s decode (tg128, MTP off), the same as on Windows;
+UD-Q4_K_XL 804 and 26.0, because the tuned expert kernels cover the quant types inside UD-IQ4_XS
+([thread](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)). The switches are
+`HIP_GATES` and `HIP_QSA_GATES` in [tools/manager.py](tools/manager.py); without them the server runs
+close to stock llama.cpp.
+
 ## Just want to run it?
 
 **[docs/getting-started.md](docs/getting-started.md)** — the installer from the
@@ -136,7 +145,8 @@ rotted in the first place.
 
 ## Scope and limits
 
-- **Windows only.** The manager uses Win32 process APIs; the build targets gfx1151.
+- **Windows only.** The manager uses Win32 process APIs; the build targets gfx1151. The patched server
+  alone also builds on Linux; that was measured by a user, not here (see "On Linux" above).
 - **One model family.** The attention work is specific to `qwen4exp`. The kernel work (IQ3_S MMB,
   MMVQ rows-per-block) applies more broadly.
 - **Not a llama.cpp fork.** This repository holds patches, tools and measurements. No model weights,
