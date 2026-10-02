@@ -926,6 +926,22 @@ and top-5 probabilities with MTP on and off and with q8_0 on eight slots; the tr
 greedy and at temperature 0.7, and the agent probe (temperature 0.7, tools, regenerates, aborted streams) logs no
 warning (`tmp/spec/gates_042.log`). Details: `docs/results/spec-sampling-041-20261001.json`.
 
+**UD-Q4_K_XL's experts on the matrix cores (0.4.2, 2026-10-03).** A reader built the patched server on Linux and
+measured both Unsloth files with llama-bench (pp2048 / tg128): UD-IQ4_XS 1254 / 27.8, as here on Windows, and
+UD-Q4_K_XL 804 / 26.0. The decode figure is what Q4_K_XL's reads allow (6.33 GB a token against 5.84, +8.5%:
+27.76 x 0.922 = 25.6 expected); the prefill one is not. Its experts - gate/up Q4_K in 47 layers, down Q5_1 in 43 - took
+the stock MMQ path, the tuned kernels covering IQ3_S, IQ4_NL and Q8_0. glu3, the fused gate/up + SwiGLU kernel, now
+dequantizes Q4_K: a 64-weight step is a quarter of a 144-byte superblock, a thread takes one nibble of 16 bytes (the
+low nibbles are one sub-block, the high ones the next) and decodes its sub-block's 6-bit scale and min at load time.
+The routed plain kernel takes Q5_1: a step is two 24-byte blocks, the fifth bit of four weights spread to their bytes
+with one multiply (b * 0x00204081). Q4_K_XL prefill, alternated in one session: 875.9 -> 1126.7 t/s at 2K tokens,
+982.6 -> 1234.3 at 9.8K, 850.4 -> 1054.1 at 95.6K (UD-IQ4_XS: 1237 at 95.6K). The numerics move from Q8_1
+activations to BF16 weights: paired perplexity on the long docs text, 40 chunks of 8192, 2.7782 -> 2.8014 (+0.84%,
+t = 1.2, lower in 17 of 40) and 80 chunks of 4096, 2.9571 -> 2.9555 (-0.05%, t = -0.6, lower in 43 of 80); the same
+switch for UD-IQ4_XS had read 0.00%. Q4_K_XL answers (Chinese, arithmetic, code, a thinking answer, a tool call) and
+finishes the 79K truncation test with MTP at temperature 0.7; UD-IQ4_XS is bitwise unchanged (the three probes).
+`STRIX_MMB_KQ=0` restores the stock path.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard
