@@ -11,9 +11,12 @@ export const request = async <T,>(op: string, data: object = {}): Promise<T> => 
 }
 
 // The provider Jan's chat side talks to. There is exactly one in this build: the local server the
-// manager starts, on the endpoint below. StrixLlamaSync registers it on first run.
+// manager starts. StrixLlamaSync registers it on first run and keeps it pointed at the server's address and
+// key (Configuration › Network); DEFAULT_ENDPOINT is where it listens unless told otherwise, and what is
+// shown before the manager has answered.
 export const PROVIDER = 'strixllama'
-export const ENDPOINT = 'http://127.0.0.1:8080/v1'
+export const DEFAULT_ENDPOINT = 'http://127.0.0.1:8080/v1'
+export const endpointOf = (s?: Status) => s?.endpoint || DEFAULT_ENDPOINT
 
 export type Profile = { thinking: string; context: number; gpu_layers: number; threads: number; batch: number; ubatch: number; mtp: boolean; draft: string; draft_max: number; draft_min: number; ngram_spec: boolean; kv: string; flash_attention: string; qsa: boolean; trunk_decode_q6k: boolean; parallel: number; kv_pool: number; vision: boolean; mmproj: string; prompt_cache_disk: boolean; prompt_cache_disk_mib: number }
 export type Model = { id: string; path: string; name: string; filename: string; architecture?: string; quant?: string; size: number; shards?: number; missing?: string[]; role: string; error?: string; context?: number }
@@ -36,6 +39,69 @@ export type Status = {
   // this server's log: answers stopped because an allocation failed (Windows commit ran out), and saves to the
   // disk tier skipped for the same reason, with the local time of the last of each
   memory_events?: { answers_stopped: number; saves_skipped: number; last_stop?: string; last_skip?: string }
+  // `endpoint` and these describe the running server, else the one the next load starts: the endpoints other devices
+  // use when it listens on the local network, and whether it asks for an API key (never the key). network_pending:
+  // the running server listens with other network settings than the saved ones, which apply when it loads again
+  lan_endpoints?: string[]; api_key_set?: boolean; network_pending?: boolean
+}
+
+// Configuration › Network, as the manager's `network` op answers: settings.json's values in `saved` (the page edits
+// them and save_network takes them), the ones in effect for the next load - an environment variable named in
+// `forced` overrides a field - this PC's IPv4 addresses for the endpoints other devices use, and in `server` the
+// endpoint and key a client of this PC uses now: the running server's, else the next load's.
+export type NetworkSettings = { port: number; lan: boolean; api_key: string }
+export type Network = NetworkSettings & {
+  saved: NetworkSettings
+  host: string
+  forced: Partial<Record<keyof NetworkSettings, string>>
+  addresses: string[]
+  server: { endpoint: string; api_key: string }
+}
+export const sameNetwork = (a?: NetworkSettings, b?: NetworkSettings) =>
+  !!a && !!b && a.port === b.port && a.lan === b.lan && a.api_key === b.api_key
+
+type NetworkState = {
+  network?: Network
+  draft?: NetworkSettings      // as edited on the Configuration page
+  refresh: () => Promise<Network | undefined>
+  edit: <K extends keyof NetworkSettings>(key: K, value: NetworkSettings[K]) => void
+  discard: () => void
+  save: () => Promise<{ network: Network; restart_required: boolean } | undefined>
+}
+
+// The network setting, shared by the Configuration page and StrixLlamaSync, which points Jan's provider at
+// `server`. Not polled with the status: this is the one answer that carries the key, so it is read when the page
+// opens, when the page saves, and when the status says the server's endpoint, process or key changed. A draft
+// being edited is kept across those reads; one that is not follows them.
+export const useStrixLlamaNetwork = create<NetworkState>((set, get) => ({
+  network: undefined,
+  draft: undefined,
+  refresh: async () => {
+    try {
+      const network = await request<Network>('network')
+      set(s => ({ network, draft: !s.draft || !s.network || sameNetwork(s.draft, s.network.saved) ? { ...network.saved } : s.draft }))
+      return network
+    } catch {
+      return undefined   // the status poll reports what is wrong
+    }
+  },
+  edit: (key, value) => set(s => (s.draft ? { draft: { ...s.draft, [key]: value } } : {})),
+  discard: () => set(s => (s.network ? { draft: { ...s.network.saved } } : {})),
+  // throws the manager's error, for the page to render
+  save: async () => {
+    const draft = get().draft
+    if (!draft) return undefined
+    const r = await request<{ network: Network; restart_required: boolean }>('save_network', draft)
+    set({ network: r.network, draft: { ...r.network.saved } })
+    return r
+  },
+}))
+
+// The server a client of this PC reaches now and the key it sends, for requests the chat does not make itself
+// (attachments.ts): what the provider holds, with the status's endpoint until the network has been read
+export const connection = () => {
+  const server = useStrixLlamaNetwork.getState().network?.server
+  return { endpoint: server?.endpoint || endpointOf(useStrixLlamaStatus.getState().status), apiKey: server?.api_key ?? '' }
 }
 
 // What the pages show: a process that answers health checks is ready, one that does not yet is

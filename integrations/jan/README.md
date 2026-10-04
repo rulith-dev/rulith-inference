@@ -27,12 +27,12 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | --- | --- |
 | `StrixLlamaPage.tsx` | the frame of the model pages: the page's name in a strip across the top, one centred column, and the alerts that persist (a failed load, little Windows commit left) above the page |
 | `ModelsView.tsx` | Model › Library: the files found, filtered by kind, with load (or switch) and configure actions, and the model-folder dialog |
-| `ConfigurationView.tsx` | Model › Configuration: the launch profile in labelled sections, a one-line description per row and the long explanation behind an (i); unsaved edits get a bar with *Discard*, *Save* and *Save and reload* |
-| `LogsView.tsx` | Model › Logs: the server's state, model (with its API id to copy), runtime (ROCm release, GPU target) and endpoint, what each conversation slot is doing, the launch parameters, and a live log with search, level filter, pause, copy and export |
+| `ConfigurationView.tsx` | Model › Configuration: the launch profile in labelled sections, a one-line description per row and the long explanation behind an (i), and the server's network setting (port, local network, API key); unsaved edits get a bar with *Discard*, *Save* and *Save and reload* |
+| `LogsView.tsx` | Model › Logs: the server's state, model (with its API id to copy), runtime (ROCm release, GPU target) and endpoints (this PC's, and the local network's when it listens there), what each conversation slot is doing, the launch parameters, and a live log with search, level filter, pause, copy and export |
 | `Welcome.tsx` | shown until the chat has a model: finds the model files or asks for their folder, and loads one |
 | `ModelState.tsx` | the strip above the chat when the model cannot answer (loading, not loaded, failed), with the action that fixes it |
 | `Sidebar.tsx` | the sidebar's brand block, the Model group (Library, Configuration, Logs), and the model server panel at its foot: state, load / unload, the model with a menu to run another, Settings and the guide |
-| `StrixLlamaSync.tsx` | the app-wide status poll, the provider registration, the optional load at startup, and the load-finished and out-of-memory toasts |
+| `StrixLlamaSync.tsx` | the app-wide status poll, the provider registration (kept pointed at the server's port and API key), the optional load at startup, and the load-finished and out-of-memory toasts |
 | `store.ts`, `status.ts`, `parts.tsx` | shared state (catalog, profile being edited), the manager request and types, the small components the views share |
 | `attachments.ts` | documents in the chat: a dropped file's text read by the app (below), and a document the model's context cannot hold refused before it is sent |
 | `compact.ts` | a conversation that outgrows the model's context folded into a summary (below) |
@@ -46,7 +46,7 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | `icons/` | the application icon, drawn by `make_icons.py` with no image library |
 
 Language follows Jan's own setting: Jan discovers i18n namespaces with `import.meta.glob`, so the
-locale files only have to be dropped in. 281 keys, identical key sets in both languages.
+locale files only have to be dropped in. 305 keys, identical key sets in both languages.
 
 ## Design
 

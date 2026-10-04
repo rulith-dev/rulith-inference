@@ -160,7 +160,8 @@ lower the context length under Model › Configuration, or give Windows a larger
 page file is the limit that runs out first; see [install.md](install.md)).
 
 The server is also an ordinary OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1` while the
-model is loaded, for any other client.
+model is loaded, for any other client. Model › Configuration › Network changes its port, lets other
+devices on your network use it and sets an API key for them; Model › Logs shows the addresses in use.
 
 ## 5. Optional: the faster draft head (+5–9% decode)
 
@@ -192,7 +193,8 @@ Building the head yourself instead needs a source checkout with the toolchain:
 - **The load starts, then dies.** Read Model › Logs. The usual causes are a GPU other than
   gfx1151, or a carve or page file too small for the context length.
 - **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running;
-  the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand.
+  the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand, or
+  the server moved to another port under Model › Configuration › Network.
 - **Where things are.** The app is in `%LOCALAPPDATA%\Rulith Inference` (in `%LOCALAPPDATA%\Strix Llama`
   when it was installed before the rename and updated since); the manager's settings, model catalog,
   prompt cache and last server log are in `runtime\config\jan\` under it; chats are in

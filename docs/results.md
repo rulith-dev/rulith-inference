@@ -942,6 +942,43 @@ switch for UD-IQ4_XS had read 0.00%. Q4_K_XL answers (Chinese, arithmetic, code,
 finishes the 79K truncation test with MTP at temperature 0.7; UD-IQ4_XS is bitwise unchanged (the three probes).
 `STRIX_MMB_KQ=0` restores the stock path.
 
+**Prompt passes, shorter (0.4.3, 2026-10-04).** A continuous GPU timeline of a prompt's pass (a timestamp kernel
+after every dispatch, `STRIX_GPU_TIMELINE_ROWS` raising the rows kept) showed what the per-node timer hides: the
+routed experts take ~40% of a 2K-token batch, 30% more than node timing reported, and around them some work needed
+no pass of its own. Each change gives 0.4.2's bits (the three probes, f16 with MTP off and on, q8_0 on eight slots):
+
+- the shared expert's gated output, sigmoid(gate) x shexp, is added inside the routed experts' weighted reduction.
+  The graph builds the shared expert between the routed down projection and the weighting, so the three nodes are
+  adjacent (built first, it let the allocator hand glu3's output the routed input's buffer), and the kernel's multiply
+  and add are separate round-to-nearest instructions, as the two ops were (`STRIX_SHEXP_TAIL`, from 512 tokens):
+  -60 to -77 ms an 8K-token batch;
+- the hyper-connection combine no longer writes its F32 normalized streams (40 KB a token, two combines a layer)
+  when their one reader is the Q8_0 gate GEMM's fused mix: the mix forms them from the combine's F32 residual, a
+  per-row scale the combine now stores and the norm's gamma - the same two products in the same order
+  (`STRIX_HC_XRES`): the combine 588 -> 439 ms, the GEMM +33, net -82 ms;
+- the delta net's q/k L2 norms, an RMS norm and a scale, are one kernel (`STRIX_NORM_SCALE`): ~-42 ms;
+- the routed GEMMs' row lists come from the sorted route from 64 tokens on (`STRIX_IDS_ROUTE_MIN`); up to 4096 a
+  helper ran one wave per expert over every token's ids, 0.62 ms of the routed down projection's 4.8 at 1984 tokens
+  and 0.68 of the gate/up's;
+- the routed down projection picks among tiles of 32, 64 and 128 tokens instead of two sizes: -5% at 2K
+  (`STRIX_MMB_DOWN_TILES=2`: the two);
+- the per-layer embedding rows a prompt chunk needs, read from the SSD, are gathered ahead for any chunk of 64 tokens
+  or more, at the size the step really takes (only chunks of 4096, sized to the whole batch, were before), once the
+  current pass has taken its own rows; a prompt's first chunk is gathered as soon as the server schedules it
+  (`STRIX_PLE_NOW`), and a chunk that follows other conversations' tokens in a batch takes the matching run of the
+  rows gathered. The last chunk of a 110K-token prompt waited 256 ms for its rows, now 3.
+
+An 8K-token batch's GPU time 5773 -> ~5590 ms. Fresh prompts (`tmp/p14/pp_bench.py`: slices of the real text sent as
+token ids, no prompt cache, the median of three a length), two rounds alternating with 0.4.2 on fresh servers: 1K
+920 -> 964 t/s (+4.9%), 2K 1072 -> 1148 (+7.1%), 4K 1122 -> 1227 (+9.4%), 8K 1267 -> 1302 (+2.7%), 16K 1245 -> 1301
+(+4.5%). In the agent harness (a main agent and five sub-agents, eight slots) the first request, 12.5K tokens, had its
+first token after 10.41 / 10.60 / 10.42 s against 10.96 / 11.17, and the sub-agents' first requests ~4% sooner; the
+later requests' times to the first token move between 1.2 and 9 s from run to run with the order the agents'
+requests meet in, with either build. 0.4.2's release checks pass: the truncation test at 79K greedy and at
+temperature 0.7, the agent probe, the fault probes, the prefix-cache agent workload (0.98x the ideal), the image
+stress (`tmp/r043/gates_043.log`). Tried and dropped: F16 weights for the routed experts, waves along the expert rows,
+BF16 copies of the Q8_0 dense weights ([dead-ends.md](dead-ends.md)).
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
-import { describeError, request, rocmLabel, serverState, useStrixLlamaStatus, type LogChunk, type SlotInfo } from './status'
+import { describeError, endpointOf, request, rocmLabel, serverState, useStrixLlamaStatus, type LogChunk, type SlotInfo } from './status'
 import { Choice, Label, StatePill, useTr } from './parts'
 
 // a server log line's level is the letter after its timestamp (`2.13.732.236 E srv ...`); a line without one -
@@ -98,6 +98,10 @@ export default function LogsView() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
   const state = serverState(status)
+  // the running server's endpoints, else the next load's: this PC's, then the ones other devices use when it listens
+  // on the local network (Configuration › Network)
+  const endpoint = endpointOf(status)
+  const endpoints = [endpoint, ...(status?.lan_endpoints ?? []).filter(u => u !== endpoint)]
   const apiModel = status?.identity ? status.served_models?.[0]?.id : undefined
   const qsa = status?.runtime_env?.LLAMA_QSA_SPARSE
   const runtime = [rocmLabel(status), status?.runtime_info?.gfx, status?.identity && qsa !== undefined && tr('logs.qsa', { state: tr(qsa === '0' ? 'state.off' : 'state.on') })].filter(Boolean).join(' · ')
@@ -123,10 +127,16 @@ export default function LogsView() {
           </Fact>
           <Fact label={tr('logs.runtime')}><span title={status?.runtime_info?.rocm ? `ROCm ${status.runtime_info.rocm}` : undefined}>{runtime}</span></Fact>
           <Fact label={tr('logs.endpoint')}>
-            <button type="button" className="flex min-w-0 items-center gap-1.5 font-mono text-xs hover:text-foreground" title={tr('actions.copy')}
-              onClick={() => void copy(status?.endpoint || '', tr('logs.endpointCopied'))}>
-              <span className="whitespace-nowrap">{status?.endpoint || 'http://127.0.0.1:8080/v1'}</span><Copy className="size-3.5 shrink-0" />
-            </button>
+            <div className="min-w-0 space-y-0.5">
+              {endpoints.map((url, i) => (
+                <button key={url} type="button" title={i ? tr('logs.endpointLan') : tr('actions.copy')}
+                  className={cn('flex min-w-0 items-center gap-1.5 font-mono text-xs hover:text-foreground', i > 0 && 'text-muted-foreground')}
+                  onClick={() => void copy(url, tr('logs.endpointCopied'))}>
+                  <span className="whitespace-nowrap">{url}</span><Copy className="size-3.5 shrink-0" />
+                </button>
+              ))}
+              {status?.api_key_set && <div className="text-xs text-muted-foreground">{tr('logs.apiKeyRequired')}</div>}
+            </div>
           </Fact>
         </div>
         {slots.length > 0 && (

@@ -27,10 +27,24 @@ let state = initial === 'commit' || initial === 'memory' ? 'ready' : initial ===
 let running = state === 'ready' || state === 'loading' ? 'm1' : ''
 let runningProfile: Record<string, unknown> = profileOf('m1')
 
+// Configuration › Network: what is saved, and what the running server was started with
+let network = { port: 8080, lan: false, api_key: '' }
+let listening = { ...network }
+const ADDRESSES = ['192.168.1.20']
+const serverNet = () => (running ? listening : network)
+const lanEndpoints = (n: typeof network) => (n.lan ? ADDRESSES.map(a => `http://${a}:${n.port}/v1`) : [])
+const networkView = () => ({
+  saved: { ...network }, ...network, host: network.lan ? '0.0.0.0' : '127.0.0.1', forced: {}, addresses: ADDRESSES,
+  server: { endpoint: `http://127.0.0.1:${serverNet().port}/v1`, api_key: serverNet().api_key },
+})
+
 const status = () => {
   const m = models.find(x => x.id === running)
+  const n = serverNet()
   return {
-    status: state === 'failed' ? 'stopped' : state, endpoint: 'http://127.0.0.1:8080/v1',
+    status: state === 'failed' ? 'stopped' : state, endpoint: `http://127.0.0.1:${n.port}/v1`,
+    api_key_set: !!n.api_key, ...(n.lan ? { lan_endpoints: lanEndpoints(n) } : {}),
+    ...(running ? { network_pending: JSON.stringify(listening) !== JSON.stringify(network) } : {}),
     runtime: 'C:\\Users\\me\\AppData\\Local\\Rulith Inference\\runtime\\bin\\hip\\llama-server.exe', runtime_available: true,
     runtime_info: { rocm: '10.2.0a20260925', gfx: 'gfx1151' },
     runtime_env: { LLAMA_QSA_SPARSE: '1', STRIX_SPEC_DRAFT_BY_SLOTS: '3,2,2,2,0' },
@@ -72,12 +86,20 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
     case 'start':
       // as the manager: one model at a time, so a switch is a stop and then a start
       if (running) throw JSON.stringify({ ok: false, error: 'Unload the current model before loading another', code: 'already_loaded' })
-      running = String(data.id); runningProfile = profileOf(running); state = 'loading'
+      running = String(data.id); runningProfile = profileOf(running); state = 'loading'; listening = { ...network }
       setTimeout(() => { state = 'ready' }, 3000)
       return { status: 'loading' } as T
     case 'stop':
       running = ''; state = 'stopped'
       return { status: 'stopped' } as T
+    case 'network': return networkView() as T
+    case 'save_network': {
+      const next = { ...network, ...(data as Partial<typeof network>) }
+      if (!Number.isInteger(next.port) || next.port < 1024 || next.port > 65535)
+        throw JSON.stringify({ ok: false, error: 'port must be between 1024 and 65535', code: 'out_of_range', params: { field: 'port', low: 1024, high: 65535 } })
+      network = next
+      return { network: networkView(), restart_required: !!running } as T
+    }
     case 'slots':
       // four slots: two generating, one processing a prompt, one idle (numbers move so the page visibly updates)
       if (!running) return { slots: [] } as T

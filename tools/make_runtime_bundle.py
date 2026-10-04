@@ -172,7 +172,7 @@ def main():
         z.extractall(out / 'python')
     record['python'] = dict(version=version, source=url, bytes=len(data))
     probe = subprocess.run([str(out / 'python' / 'python.exe'), '-c',
-                            'import ctypes, winreg, json, msvcrt, urllib.request, hashlib, uuid; print("ok")'],
+                            'import ctypes, winreg, json, msvcrt, urllib.request, hashlib, uuid, ipaddress, socket; print("ok")'],
                            capture_output=True, text=True)
     if probe.stdout.strip() != 'ok':
         sys.exit(f'embedded Python cannot import what the manager needs: {probe.stderr}')

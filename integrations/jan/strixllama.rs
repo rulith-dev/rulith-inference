@@ -105,7 +105,7 @@ fn percent_decode(s: &str) -> String {
 #[tauri::command]
 pub async fn strixllama_request(request: Value) -> Result<Value, String> {
     let op = request.get("op").and_then(Value::as_str).ok_or("Missing operation")?;
-    if !["catalog", "status", "logs", "slots", "profile", "roots", "save", "start", "stop"].contains(&op) {
+    if !["catalog", "status", "logs", "slots", "profile", "roots", "save", "start", "stop", "network", "save_network"].contains(&op) {
         return Err("Unsupported strixllama operation".into());
     }
     let input = serde_json::to_vec(&request).map_err(|e| e.to_string())?;

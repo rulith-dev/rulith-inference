@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { fetch as httpFetch } from '@tauri-apps/plugin-http'
 import i18n from '@/i18n'
-import { ENDPOINT, useStrixLlamaStatus } from './status'
+import { connection, useStrixLlamaStatus } from './status'
 
 // Documents in the chat. Jan reads an attached document either into the message ("inline") or into a vector store
 // through an embedding model its own llama.cpp engine serves; this build has no such engine (apply.py leaves it out),
@@ -29,8 +29,11 @@ export const checkDocumentFits = async (name: string, text: string) => {
   if (!context || noTauri()) return
   let tokens: number | undefined
   try {
-    const res = await httpFetch(ENDPOINT.replace(/\/v1$/, '') + '/tokenize', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: text }),
+    // where the chat reaches the server, with its key when it asks for one (Configuration › Network)
+    const { endpoint, apiKey } = connection()
+    const res = await httpFetch(endpoint.replace(/\/v1$/, '') + '/tokenize', {
+      method: 'POST', body: JSON.stringify({ content: text }),
+      headers: { 'Content-Type': 'application/json', ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
     })
     if (res.ok) tokens = ((await res.json()) as { tokens?: unknown[] }).tokens?.length
   } catch { /* not running */ }

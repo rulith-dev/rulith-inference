@@ -6,11 +6,14 @@ Model weights are read only. Only the pinned strixllama runtime can be managed.
 import ctypes
 from ctypes import wintypes
 import datetime as dt
+import errno
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -84,7 +87,12 @@ MMPROJ_NAME = 'mmproj-F16.gguf'
 # Thinking depth -> the reasoning_effort this model's chat template accepts. 'off' is handled
 # separately (enable_thinking=false). The template raises on anything outside low/medium/xhigh.
 THINKING = {'off': None, 'low': 'low', 'medium': 'medium', 'high': 'xhigh'}
-PORT = 8080
+# Where the server listens (Configuration › Network, GitHub issue #6): settings.json's `network` - the port, whether
+# other devices on the local network may use it, the API key it then asks for - over these defaults, and RULITH_PORT,
+# RULITH_HOST and RULITH_API_KEY over both (network()). settings.json stays where it is when the app updates.
+NETWORK_DEFAULTS = dict(port=8080, lan=False, api_key='')
+PORT_RANGE = (1024, 65535)
+LOOPBACK, ANY_ADDRESS = '127.0.0.1', '0.0.0.0'
 # the disk tier of the server's prompt cache: the default ceiling for config/jan/prompt-cache, and
 # what a profile that predates the setting gets. A long conversation of this model is several GiB
 # (79K tokens = 5.6 GiB, most of it context checkpoints), so this holds about three of them.
@@ -173,7 +181,10 @@ ERRORS = {
     'head_mismatch': 'The draft head {head} does not belong to {base}',
     'identity_changed': 'The process identity has changed; refusing to unload it',
     'log_path': 'The log path is outside the project directory',
-    'port_busy': 'Port 8080 is in use by another service',
+    'port_busy': 'Port {port} is in use by another service',
+    'api_key_format': '{field} must be at most 256 printable ASCII characters, without spaces, commas or quotes',
+    'host_address': 'RULITH_HOST must be an IPv4 address, such as 127.0.0.1 or 0.0.0.0',
+    'host_unavailable': 'RULITH_HOST is {host}, which is not an address of this PC',
     'runtime_missing': 'The runtime is not there: {name}',
     'roots_count': 'Choose between 1 and 12 model directories',
     'root_missing': 'A model directory does not exist',
@@ -307,6 +318,54 @@ def settings():
     if lms:
         roots.append(lms)
     return read_json(DATA / 'settings.json', {'roots': roots, 'profiles': {}})
+
+
+def api_key_valid(key):
+    # llama-server reads --api-key as a comma-separated list (a comma would make two weaker keys) and parses it as
+    # CSV, so no commas or quotes; and nothing a command line or an Authorization header would have to escape
+    return len(key) <= 256 and all('!' <= c <= '~' and c not in ',"' for c in key)
+
+
+def check_network(raw):
+    """A network setting to save or use: port 1024-65535, lan a switch, api_key empty or one api_key_valid() takes.
+    A field it does not know is refused, as validate_profile() refuses one."""
+    if not isinstance(raw, dict) or set(raw) - set(NETWORK_DEFAULTS): fail('unknown_field')
+    net = {**NETWORK_DEFAULTS, **raw}
+    if type(net['port']) is not int or not PORT_RANGE[0] <= net['port'] <= PORT_RANGE[1]:
+        fail('out_of_range', field='port', low=PORT_RANGE[0], high=PORT_RANGE[1])
+    if type(net['lan']) is not bool: fail('not_boolean', field='lan')
+    if not isinstance(net['api_key'], str) or not api_key_valid(net['api_key']): fail('api_key_format', field='api_key')
+    return net
+
+
+def saved_network():
+    """settings.json's `network` over the defaults. A file from before the setting has none; a field a later version
+    added is dropped rather than refused, as profile() drops one."""
+    raw = settings().get('network')
+    return check_network({k: v for k, v in raw.items() if k in NETWORK_DEFAULTS} if isinstance(raw, dict) else {})
+
+
+def network():
+    """The network setting in effect: saved_network(), with RULITH_PORT, RULITH_HOST (the address to bind, e.g.
+    0.0.0.0) and RULITH_API_KEY over it. host is where the server binds - 0.0.0.0 with lan on, else 127.0.0.1 - and
+    forced names the variable behind each field one sets, which the page then shows instead of offering it."""
+    net, forced = saved_network(), {}
+    port = os.environ.get('RULITH_PORT', '').strip()
+    if port:
+        if not re.fullmatch(r'\d{1,5}', port) or not PORT_RANGE[0] <= int(port) <= PORT_RANGE[1]:
+            fail('out_of_range', field='RULITH_PORT', low=PORT_RANGE[0], high=PORT_RANGE[1])
+        net['port'], forced['port'] = int(port), 'RULITH_PORT'
+    host = ANY_ADDRESS if net['lan'] else LOOPBACK
+    named = os.environ.get('RULITH_HOST', '').strip()
+    if named:
+        try: address = ipaddress.IPv4Address(named)
+        except ValueError: fail('host_address')
+        host, net['lan'], forced['lan'] = str(address), not address.is_loopback, 'RULITH_HOST'
+    key = os.environ.get('RULITH_API_KEY', '').strip()
+    if key:
+        if not api_key_valid(key): fail('api_key_format', field='RULITH_API_KEY')
+        net['api_key'], forced['api_key'] = key, 'RULITH_API_KEY'
+    return {**net, 'host': host, 'forced': forced}
 
 
 def identifier(path):
@@ -810,12 +869,16 @@ def runtime_environment(cfg):
     return env
 
 
-def argv(model, cfg):
+def argv(model, cfg, net=None):
+    net = net or network()
     pool = kv_pool_cells(cfg)
     args = [str(selected_runtime(cfg)), '-m', model['path'], '-ngl', str(cfg['gpu_layers']), '-c', str(pool),
             '-b', str(cfg['batch']), '-ub', str(cfg['ubatch']), '-t', str(cfg['threads']), '--poll', '0',
             '--fit', 'off', '-np', str(cfg.get('parallel', 1)), '-fa', cfg['flash_attention'], '-ctk', cfg['kv'], '-ctv', cfg['kv'], '--jinja',
-            '--host', '127.0.0.1', '--port', str(PORT)]
+            '--host', net['host'], '--port', str(net['port'])]
+    if net['api_key']:
+        # every endpoint but /health then wants it: the manager's own requests and the app's chat send it
+        args += ['--api-key', net['api_key']]
     if cfg.get('parallel', 1) > 1:
         # without it the pool is split evenly and each slot would see context/parallel tokens; -kvu keeps one
         # shared pool so a single conversation can still use the whole context when the others are idle
@@ -849,6 +912,15 @@ def argv(model, cfg):
         args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(cfg['draft_max']), '--spec-draft-p-min', str(cfg['draft_min'])]
     if spec_types: args += ['--spec-type', ','.join(spec_types)]
     return args
+
+
+def masked(args):
+    """A command with the API key's value replaced, for what is kept and shown: process.json, the Logs page."""
+    return [('***' if i and args[i - 1] == '--api-key' else a) for i, a in enumerate(args)]
+
+
+def masked_command(cmd):
+    return re.sub(r'(--api-key\s+)(?:"[^"]*"|\S+)', r'\g<1>***', cmd)
 
 
 class _MemoryStatus(ctypes.Structure):
@@ -902,6 +974,77 @@ def process_identity(pid, terminate=False, expected=None):
     finally: k.CloseHandle(handle)
 
 
+def listening(s):
+    """The address and API key of the server state() found, as its launch or adoption recorded them: the manager's
+    own requests go there, and the pages show it, until it stops - a network setting saved meanwhile applies to the
+    next load. A server an earlier version started has only its command line, which named the port, and no key.
+    Without a server, the next load's: network()."""
+    if not s.get('identity'):
+        return network()
+    cmd = s.get('command') or ''
+    port, host = s.get('port'), s.get('host')
+    if type(port) is not int:
+        found = re.search(r'--port\s+(\d+)', cmd)
+        port = int(found.group(1)) if found else network()['port']
+    if not isinstance(host, str):
+        found = re.search(r'--host\s+(\S+)', cmd)
+        host = found.group(1) if found else LOOPBACK
+    return {'host': host, 'port': port, 'api_key': s.get('api_key') or ''}
+
+
+def base_url(server):
+    # a server on 0.0.0.0 listens on loopback too, and this PC reaches it there
+    return f'http://{LOOPBACK if server["host"] == ANY_ADDRESS else server["host"]}:{server["port"]}'
+
+
+def auth_headers(server):
+    # with a key, llama-server answers only /health without it
+    return {'Authorization': 'Bearer ' + server['api_key']} if server.get('api_key') else {}
+
+
+def public(s):
+    """A process record without the API key it keeps for the manager's own requests: what status() and start hand
+    to the pages, which never get the key that way."""
+    return {k: v for k, v in s.items() if k != 'api_key'}
+
+
+def lan_addresses():
+    """This PC's IPv4 addresses other devices may reach it at, best effort: the one the default route leaves by
+    first, then the others its name resolves to, without loopback and link-local (169.254.x) ones. The UDP connect
+    sends nothing; it only picks the route."""
+    found = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(('192.0.2.1', 9))   # TEST-NET-1 (RFC 5737): reserved, never routed anywhere real
+            found.append(probe.getsockname()[0])
+    except OSError: pass
+    try: found += [info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError: pass
+    return [a for a in dict.fromkeys(found) if isinstance(a, str) and not a.startswith(('127.', '169.254.', '0.'))]
+
+
+def lan_endpoints(server):
+    """The endpoints other devices use for a server bound to server['host']: one per lan_addresses() for 0.0.0.0,
+    the address itself for another one, none for loopback."""
+    try:
+        if ipaddress.IPv4Address(server['host']).is_loopback: return []
+    except ValueError:
+        return []
+    addresses = lan_addresses() if server['host'] == ANY_ADDRESS else [server['host']]
+    return [f'http://{a}:{server["port"]}/v1' for a in addresses]
+
+
+def network_view(s=None):
+    """Configuration › Network: settings.json's values (`saved`, what the page edits and save_network takes); those
+    in effect for the next load, RULITH_* applied, and which fields a variable forces; this PC's addresses, for the
+    endpoints other devices use; and in `server` the endpoint and key a client of this PC uses now - the running
+    server's, else the next load's - which the app's chat follows. The one answer that carries a key."""
+    s = state() if s is None else s
+    net, srv = network(), listening(s)
+    return {'saved': saved_network(), **{k: net[k] for k in ('port', 'lan', 'host', 'api_key', 'forced')},
+            'addresses': lan_addresses(), 'server': {'endpoint': base_url(srv) + '/v1', 'api_key': srv['api_key']}}
+
+
 def persist_conversations(saved):
     """Before a stop, with the disk tier on: the conversations still in the server's slots leave memory with it,
     and the tier writes a conversation's recurrent state only when it leaves (POST /strix/persist answers once
@@ -909,8 +1052,9 @@ def persist_conversations(saved):
     stopped all the same."""
     if not (saved.get('profile') or {}).get('prompt_cache_disk'): return
     try:
-        req = urllib.request.Request(f'http://127.0.0.1:{PORT}/strix/persist', data=b'{}', method='POST',
-                                     headers={'Content-Type': 'application/json'})
+        srv = listening(saved)
+        req = urllib.request.Request(base_url(srv) + '/strix/persist', data=b'{}', method='POST',
+                                     headers={'Content-Type': 'application/json', **auth_headers(srv)})
         with HTTP.open(req, timeout=150) as res: res.read()
     except (urllib.error.URLError, TimeoutError, OSError, ValueError): pass
 
@@ -938,18 +1082,27 @@ def state():
     # Adopt a server of ours on the configured local endpoint: the exact project binary, or a
     # llama-server on our port started with our launch flags by another copy of this manager (an
     # earlier install, a checkout in another directory). Without the second case a model loaded
-    # from one copy could not be unloaded from the next, and its port stayed taken.
+    # from one copy could not be unloaded from the next, and its port stayed taken. The port is the
+    # configured one (8080 unless Configuration › Network or RULITH_PORT says otherwise), on loopback
+    # or on the network: an earlier version's server is on 127.0.0.1:8080, the defaults.
+    net = network()
+    hosts = {LOOPBACK, ANY_ADDRESS, net['host']}
     for p in discover():
         cmd = p.get('CommandLine') or ''
         ours = managed_runtime(p.get('ExecutablePath')) or (
             Path(p.get('ExecutablePath') or '').name.lower() == 'llama-server.exe' and '--lazy-mode on-direct' in cmd)
-        if ours and re.search(r'--port\s+8080(?:\s|$)', cmd) and re.search(r'--host\s+127\.0\.0\.1(?:\s|$)', cmd):
+        host = re.search(r'--host\s+(\S+)', cmd)
+        if ours and re.search(rf'--port\s+{net["port"]}(?:\s|$)', cmd) and host and host.group(1) in hosts:
             model_match = re.search(r'(?:^|\s)-m\s+(?:"([^"]+)"|(\S+))', cmd)
             log_match = re.search(r'--log-file\s+(?:"([^"]+)"|(\S+))', cmd)
+            key_match = re.search(r'--api-key\s+(?:"([^"]*)"|(\S+))', cmd)
             identity = process_identity(p['ProcessId'])
             if identity and Path(identity['exe']) == Path(p['ExecutablePath']).resolve():
+                # its key is kept for the manager's own requests, and only there: the command shown has it masked
                 saved = dict(identity=identity, model_path=next((v for v in model_match.groups() if v), '') if model_match else '',
-                             log=next((v for v in log_match.groups() if v), '') if log_match else '', command=cmd, adopted=True)
+                             log=next((v for v in log_match.groups() if v), '') if log_match else '',
+                             command=masked_command(cmd), adopted=True, host=host.group(1), port=net['port'],
+                             api_key=next((v for v in key_match.groups() if v), '') if key_match else '')
                 atomic_json(DATA/'process.json',saved)
                 return saved
     result = {'last_log':saved.get('log', saved.get('last_log',''))}
@@ -957,16 +1110,22 @@ def state():
     return result
 
 
-def http_json(path):
-    with HTTP.open(f'http://127.0.0.1:{PORT}'+path,timeout=1.5) as res: return json.load(res)
+def http_json(path, server):
+    """GET one of the server's JSON endpoints at `server` (listening(), network()), with its key."""
+    req = urllib.request.Request(base_url(server) + path, headers=auth_headers(server))
+    with HTTP.open(req, timeout=1.5) as res: return json.load(res)
 
 
 def status():
     s = state()
-    result = {**s, 'status':'stopped', 'endpoint':f'http://127.0.0.1:{PORT}/v1',
+    # the endpoint is the running server's, else the one the next load takes; never the key, only whether there is one
+    srv = listening(s)
+    result = {**public(s), 'status':'stopped', 'endpoint':base_url(srv)+'/v1', 'api_key_set':bool(srv['api_key']),
               'runtime':s.get('identity', {}).get('exe', str(RUNTIME)),
               'runtime_available': runtime_available(), 'runtime_info': runtime_info(),
               'dedicated_vram': dedicated_vram_bytes()}
+    lan = lan_endpoints(srv)
+    if lan: result['lan_endpoints'] = lan
     e = s.get('exited') or {}
     if e.get('reason') in ('oom', 'error'):
         # a plain exit with nothing in the log is not reported: the app closing takes the server
@@ -977,10 +1136,13 @@ def status():
     if s.get('identity'):
         result['status']='loading'
         result['model_name'] = next((x.get('name') for x in catalog()['models'] if x.get('path') == s.get('model_path')), None) or Path(s.get('model_path', '')).stem
+        # a network setting saved while it runs applies when it loads again; the pages say so meanwhile
+        net = network()
+        result['network_pending'] = (srv['host'], srv['port'], srv['api_key']) != (net['host'], net['port'], net['api_key'])
         try:
-            if http_json('/health').get('status')=='ok':
+            if http_json('/health', srv).get('status')=='ok':
                 result['status']='ready'
-                models=http_json('/v1/models')['data']
+                models=http_json('/v1/models', srv)['data']
                 result['served_models']=models
         except Exception: pass
         # a loaded server with little commit left fails its next allocation with "bad allocation"; say so
@@ -999,10 +1161,12 @@ def slots():
     """What each of the running server's slots is doing, for the Logs page: from llama-server's /slots, which
     answers with counters only (no prompt text unless LLAMA_SERVER_SLOTS_DEBUG is set), and the requests waiting in its
     queue. A server busy with a large batch answers late; None then, and the page keeps what it showed."""
-    if not state().get('identity'):
+    s = state()
+    if not s.get('identity'):
         return {'slots': []}
+    srv = listening(s)
     try:
-        with HTTP.open(f'http://127.0.0.1:{PORT}/slots', timeout=2) as res:
+        with HTTP.open(urllib.request.Request(base_url(srv) + '/slots', headers=auth_headers(srv)), timeout=2) as res:
             data = json.load(res)
             # requests waiting for a slot or for room in the KV pool (since 0.3.3; older runtimes do not say)
             waiting = int(res.headers.get('X-Strix-Waiting') or 0)
@@ -1042,19 +1206,24 @@ def logs(offset=0):
 def launch(m, cfg):
     """Start the runtime for model m with the already validated profile cfg: check the port, write
     the log banner, record the process identity."""
-    try: http_json('/health'); fail('port_busy')
+    net = network()
+    try: http_json('/health', net); fail('port_busy', port=net['port'])
     except (urllib.error.URLError,TimeoutError): pass
-    # Check port before allocating model memory; do not stop unrelated engines.
-    import socket
-    with socket.socket() as sock:
-        try: sock.bind(('127.0.0.1',PORT))
-        except OSError: fail('port_busy')
+    # Check port before allocating model memory; do not stop unrelated engines. A server on 0.0.0.0
+    # also answers on loopback, where the manager and the chat reach it, so both must be free.
+    for host in (net['host'], LOOPBACK) if net['host'] == ANY_ADDRESS else (net['host'],):
+        with socket.socket() as sock:
+            try: sock.bind((host, net['port']))
+            except OSError as e:
+                # RULITH_HOST naming an address this PC does not have (WSAEADDRNOTAVAIL) is not a busy port
+                if e.errno in (errno.EADDRNOTAVAIL, 10049): fail('host_unavailable', host=host)
+                fail('port_busy', port=net['port'])
     runtime = selected_runtime(cfg)
     if not runtime.is_file() or not (runtime.parent/'ggml-hip.dll').is_file():
         fail('runtime_missing', name=runtime.parent.name)
     log=ROOT/'logs'/('jan-managed-'+dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]+'.log')
     log.parent.mkdir(exist_ok=True)
-    command=argv(m,cfg)
+    command=argv(m,cfg,net)
     env=runtime_environment(cfg)
     banner = (f'[strixllama] runtime={runtime.parent.name} (HIP/ROCm); LLAMA_MMB_HC16={env["LLAMA_MMB_HC16"]} '
               f'(must stay 0 on Windows); gates={sum(1 for k in env if k.startswith("LLAMA_"))}; '
@@ -1063,18 +1232,22 @@ def launch(m, cfg):
               f'{f" (draft ubatch capped to {env['STRIX_SPEC_DRAFT_UBATCH']})" if cfg["mtp"] else ""}; '
               f'n-gram draft={"on (match=24, min=4, max=8)" if cfg["ngram_spec"] else "off"}; '
               f'vision={"on" if cfg["vision"] else "off"}; '
-              f'PLE reader=on-direct; rocm={"bundled beside the server" if bundled_rocm() else ROCM_BIN}\n')
+              f'PLE reader=on-direct; rocm={"bundled beside the server" if bundled_rocm() else ROCM_BIN}; '
+              f'listen={net["host"]}:{net["port"]}{" (API key required)" if net["api_key"] else ""}\n')
     with log.open('wb') as f:
         f.write(banner.encode('utf-8'))
         f.flush()
         proc=subprocess.Popen(command,stdout=f,stderr=subprocess.STDOUT,stdin=subprocess.DEVNULL,env=env,creationflags=HIDDEN,cwd=ROOT)
     ident=process_identity(proc.pid)
     if not ident: fail('launch_failed')
-    saved=dict(identity=ident,model_id=m['id'],model_path=m['path'],log=str(log),command=subprocess.list2cmdline(command),profile=cfg,
+    # the address and key it listens with stay recorded while it runs, for the manager's own requests: a network
+    # setting saved meanwhile is for the next load. The key itself only here, never in the command kept and shown.
+    saved=dict(identity=ident,model_id=m['id'],model_path=m['path'],log=str(log),command=subprocess.list2cmdline(masked(command)),profile=cfg,
                started_at=dt.datetime.now().astimezone().isoformat(),adopted=False,
-               runtime_env={k:v for k,v in env.items() if k.startswith(('LLAMA_','GGML_','STRIX_'))})
+               runtime_env={k:v for k,v in env.items() if k.startswith(('LLAMA_','GGML_','STRIX_'))},
+               host=net['host'],port=net['port'],api_key=net['api_key'])
     atomic_json(DATA/'process.json',saved)
-    return saved
+    return public(saved)
 
 
 def handle(op, data):
@@ -1098,7 +1271,14 @@ def handle(op, data):
     if op=='save':
         m=model_by_id(data['id']); cfg=validate_profile(data['profile'],m)
         all_cfg=settings();all_cfg['profiles'][m['id']]=cfg;atomic_json(DATA/'settings.json',all_cfg)
-        return {'profile':cfg,'restart_required':bool(state().get('identity')),'argv':argv(m,cfg)}
+        return {'profile':cfg,'restart_required':bool(state().get('identity')),'argv':masked(argv(m,cfg))}
+    if op=='network': return network_view()
+    if op=='save_network':
+        # settings.json's own values; a RULITH_* variable still overrides what it sets
+        net=check_network(data)
+        all_cfg=settings();all_cfg['network']=net;atomic_json(DATA/'settings.json',all_cfg)
+        s=state()
+        return {'network':network_view(s),'restart_required':bool(s.get('identity'))}
     if op=='stop':
         s=state()
         if s.get('identity'):

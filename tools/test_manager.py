@@ -43,6 +43,9 @@ class ManagerTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
         self.patcher=patch.object(m,'DATA',self.root/'state');self.patcher.start();self.addCleanup(self.patcher.stop)
+        # RULITH_PORT, RULITH_HOST and RULITH_API_KEY override the network setting: none unless a test sets one
+        env=patch.dict(os.environ,{k:v for k,v in os.environ.items() if not k.startswith('RULITH_')},clear=True)
+        env.start();self.addCleanup(env.stop)
         m.atomic_json(m.DATA/'settings.json',{'roots':[str(self.root/'models')],'profiles':{}})
         (self.root/'models').mkdir()
         self.file=self.root/'models'/'model-Q8_0-00001-of-00002.gguf';gguf(self.file)
@@ -205,7 +208,7 @@ class ManagerTests(unittest.TestCase):
         stack,popen=self.running([ident])
         with stack:
             m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
-            answers=lambda path:{'status':'ok'} if path=='/health' else {'data':[]}
+            answers=lambda path,server:{'status':'ok'} if path=='/health' else {'data':[]}
             with patch.object(m,'http_json',side_effect=answers):
                 for available,low in ((20<<30,False),(3<<30,True)):
                     with self.subTest(available=available),patch.object(m,'commit_bytes',return_value=(128<<30,available)):
@@ -502,7 +505,7 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'context':1},self.model)
         self.assertEqual((caught.exception.code,caught.exception.params),('out_of_range',{'field':'context','low':512,'high':262144}))
         self.assertIn('between 512 and 262144',str(caught.exception))
-        for code in m.ERRORS: m.ERRORS[code].format(**{k:'' for k in ('field','low','high','levels','name','head','base','limit','context')})
+        for code in m.ERRORS: m.ERRORS[code].format(**{k:'' for k in ('field','low','high','levels','name','head','base','limit','context','port','host')})
     def test_a_kv_pool_larger_than_the_context_holds_more_conversations_each_capped_at_the_context(self):
         cfg=m.validate_profile({'parallel':4,'vision':False,'mtp':False,'kv_pool':40000},self.model)
         args=m.argv(self.model,cfg)
@@ -587,5 +590,197 @@ class ManagerTests(unittest.TestCase):
         cfg=m.validate_profile({'mtp':False,'parallel':4},self.model)
         self.assertTrue(cfg['vision']);self.assertEqual(cfg['parallel'],4)
         self.assertTrue(m.validate_profile({'mtp':False,'parallel':1},self.model)['vision'])
+
+    # Configuration › Network (GitHub issue #6): port, local network, API key, kept in settings.json
+    def save_network(self,**net):
+        # state() would look for a running llama-server on this machine; there is none in these tests
+        with patch.object(m,'state',return_value={}),patch.object(m,'lan_addresses',return_value=[]):
+            return m.handle('save_network',net)
+    def test_without_a_network_setting_the_server_listens_on_loopback_8080_without_a_key(self):
+        # a settings.json from before the setting: where the server always listened
+        net=m.network()
+        self.assertEqual((net['host'],net['port'],net['lan'],net['api_key'],net['forced']),('127.0.0.1',8080,False,'',{}))
+        a=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
+        self.assertEqual((a[a.index('--host')+1],a[a.index('--port')+1]),('127.0.0.1','8080'));self.assertNotIn('--api-key',a)
+        with patch.object(m,'state',return_value={}):s=m.status()
+        self.assertEqual((s['endpoint'],s['api_key_set']),('http://127.0.0.1:8080/v1',False));self.assertNotIn('lan_endpoints',s)
+    def test_a_saved_network_setting_reaches_the_launch_arguments_and_the_status(self):
+        r=self.save_network(port=13305,lan=True,api_key='s3cret-Key_1')
+        self.assertFalse(r['restart_required'])
+        self.assertEqual(r['network']['saved'],{'port':13305,'lan':True,'api_key':'s3cret-Key_1'})
+        self.assertEqual(r['network']['server'],{'endpoint':'http://127.0.0.1:13305/v1','api_key':'s3cret-Key_1'})
+        saved=m.read_json(m.DATA/'settings.json',{})
+        self.assertEqual(saved['network'],{'port':13305,'lan':True,'api_key':'s3cret-Key_1'});self.assertEqual(saved['profiles'],{})
+        net=m.network();self.assertEqual((net['host'],net['port'],net['api_key']),('0.0.0.0',13305,'s3cret-Key_1'))
+        a=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
+        self.assertEqual([a[a.index(o)+1] for o in ('--host','--port','--api-key')],['0.0.0.0','13305','s3cret-Key_1'])
+        # bound to every address and reached on loopback; other devices use this PC's addresses; the key is never in it
+        with patch.object(m,'state',return_value={}),patch.object(m,'lan_addresses',return_value=['192.168.1.20']):s=m.status()
+        self.assertEqual((s['endpoint'],s['lan_endpoints'],s['api_key_set']),
+                         ('http://127.0.0.1:13305/v1',['http://192.168.1.20:13305/v1'],True))
+        self.assertNotIn('s3cret',json.dumps(s))
+    def test_rulith_variables_override_the_saved_network_setting(self):
+        self.save_network(port=13305,lan=True,api_key='filekey')
+        with patch.dict(m.os.environ,{'RULITH_PORT':'13306','RULITH_HOST':'127.0.0.1','RULITH_API_KEY':'envkey'}):
+            net=m.network()
+            self.assertEqual((net['host'],net['port'],net['lan'],net['api_key']),('127.0.0.1',13306,False,'envkey'))
+            self.assertEqual(net['forced'],{'port':'RULITH_PORT','lan':'RULITH_HOST','api_key':'RULITH_API_KEY'})
+            a=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
+            self.assertEqual([a[a.index(o)+1] for o in ('--host','--port','--api-key')],['127.0.0.1','13306','envkey'])
+            # the page edits the file's values, and shows what overrides them
+            with patch.object(m,'state',return_value={}),patch.object(m,'lan_addresses',return_value=[]):view=m.handle('network',{})
+            self.assertEqual(view['saved'],{'port':13305,'lan':True,'api_key':'filekey'})
+            self.assertEqual((view['port'],view['host'],view['api_key'],view['server']['endpoint']),(13306,'127.0.0.1','envkey','http://127.0.0.1:13306/v1'))
+        # a variable can also name the address to bind, and an empty one is not set
+        with patch.dict(m.os.environ,{'RULITH_HOST':'192.168.1.20','RULITH_PORT':'','RULITH_API_KEY':' '}):
+            net=m.network();self.assertEqual((net['host'],net['lan'],net['port'],net['api_key']),('192.168.1.20',True,13305,'filekey'))
+            self.assertEqual(m.base_url(net),'http://192.168.1.20:13305')
+        net=m.network();self.assertEqual((net['host'],net['port'],net['api_key'],net['forced']),('0.0.0.0',13305,'filekey',{}))
+    def test_network_values_are_validated_before_they_are_saved_or_used(self):
+        for raw,code in (({'port':80},'out_of_range'),({'port':65536},'out_of_range'),({'port':'8080'},'out_of_range'),
+                         ({'port':True},'out_of_range'),({'lan':'yes'},'not_boolean'),({'lan':1},'not_boolean'),
+                         ({'api_key':'two words'},'api_key_format'),({'api_key':'a,b'},'api_key_format'),
+                         ({'api_key':'say"hi'},'api_key_format'),({'api_key':'ключ'},'api_key_format'),
+                         ({'api_key':'k'*257},'api_key_format'),({'api_key':None},'api_key_format'),
+                         ({'host':'0.0.0.0'},'unknown_field'),([13305],'unknown_field')):
+            with self.subTest(raw=raw):
+                with self.assertRaises(m.ManagerError) as caught:
+                    with patch.object(m,'state',return_value={}):m.handle('save_network',raw)
+                self.assertEqual(caught.exception.code,code)
+        self.assertNotIn('network',m.read_json(m.DATA/'settings.json',{}))
+        self.assertEqual(m.check_network({'port':1024,'api_key':'k'*256}),{'port':1024,'lan':False,'api_key':'k'*256})
+        for env,code,params in ((('RULITH_PORT','http'),'out_of_range',{'field':'RULITH_PORT','low':1024,'high':65535}),
+                                (('RULITH_PORT','99999'),'out_of_range',{'field':'RULITH_PORT','low':1024,'high':65535}),
+                                (('RULITH_HOST','localhost'),'host_address',{}),(('RULITH_HOST','::'),'host_address',{}),
+                                (('RULITH_API_KEY','a b'),'api_key_format',{'field':'RULITH_API_KEY'})):
+            with self.subTest(env=env):
+                with patch.dict(m.os.environ,dict([env])),self.assertRaises(m.ManagerError) as caught:m.network()
+                self.assertEqual((caught.exception.code,caught.exception.params),(code,params))
+        # a field a later version added to the file is dropped, not refused
+        settings=m.settings();settings['network']={'port':13305,'cors':'*'};m.atomic_json(m.DATA/'settings.json',settings)
+        self.assertEqual(m.saved_network(),{'port':13305,'lan':False,'api_key':''})
+    def test_the_api_key_reaches_the_server_and_nothing_that_is_kept_or_shown(self):
+        model=first_model()
+        ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
+        self.save_network(port=13305,lan=False,api_key='s3cret')
+        stack,popen=self.running([ident])
+        with stack:
+            self.assertNotIn('s3cret',json.dumps(m.handle('save',{'id':model['id'],'profile':{'mtp':False}})))
+            result=m.handle('start',{'id':model['id']})
+            args=popen.call_args.args[0]
+            self.assertEqual(args[args.index('--api-key')+1],'s3cret')
+            kept=m.read_json(m.DATA/'process.json',{})
+            self.assertIn('--api-key ***',kept['command']);self.assertNotIn('s3cret',kept['command'])
+            self.assertNotIn('api_key',result)
+            for shown in (json.dumps(result),json.dumps(m.status()),Path(result['log']).read_text()):
+                self.assertNotIn('s3cret',shown)
+            self.assertIn('listen=127.0.0.1:13305 (API key required)',Path(result['log']).read_text())
+            self.assertTrue(m.status()['api_key_set'])
+            m.handle('stop',{})
+        self.assertNotIn('s3cret',json.dumps(m.read_json(m.DATA/'process.json',{})))
+    def test_the_manager_talks_to_the_running_server_where_it_listens_with_its_key(self):
+        ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
+        calls=[]
+        class Res:
+            headers={}
+            def __enter__(s):return s
+            def __exit__(s,*a):return False
+            def read(s,*a):return b'{"status":"ok","data":[]}'
+        def opener(req,timeout=None):
+            calls.append((req.full_url,req.get_header('Authorization')));return Res()
+        self.save_network(port=13305,lan=True,api_key='k3y')
+        m.atomic_json(m.DATA/'process.json',{'identity':ident,'adopted':False,'host':'0.0.0.0','port':13305,'api_key':'k3y',
+                                             'profile':{'prompt_cache_disk':True},'command':'llama-server.exe --host 0.0.0.0 --port 13305 --api-key ***'})
+        with patch.object(m,'process_identity',return_value=ident),patch.object(m.HTTP,'open',side_effect=opener), \
+             patch.object(m,'lan_addresses',return_value=['10.0.0.5']):
+            s=m.status();m.slots()
+            self.assertEqual((s['status'],s['endpoint'],s['lan_endpoints'],s['network_pending']),
+                             ('ready','http://127.0.0.1:13305/v1',['http://10.0.0.5:13305/v1'],False))
+            # a setting saved while it runs is for the next load: it is still reached where it listens, and the pages say so
+            r=m.handle('save_network',{'port':14000,'lan':False,'api_key':''})
+            self.assertTrue(r['restart_required'])
+            self.assertEqual((r['network']['port'],r['network']['server']),(14000,{'endpoint':'http://127.0.0.1:13305/v1','api_key':'k3y'}))
+            s=m.status()
+            self.assertEqual((s['endpoint'],s['api_key_set'],s['network_pending']),('http://127.0.0.1:13305/v1',True,True))
+            m.handle('stop',{})
+        self.assertEqual({url.split('/')[2] for url,_ in calls},{'127.0.0.1:13305'});self.assertEqual({key for _,key in calls},{'Bearer k3y'})
+        self.assertEqual([url.split('13305')[1] for url,_ in calls],['/health','/v1/models','/slots','/health','/v1/models','/strix/persist'])
+        # unloaded, the next load's address is the one shown
+        with patch.object(m,'state',return_value={}):self.assertEqual(m.status()['endpoint'],'http://127.0.0.1:14000/v1')
+    def test_a_server_an_earlier_version_started_is_still_reached_on_8080(self):
+        # its process.json has no host, port or key, only the command it was launched with
+        ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
+        m.atomic_json(m.DATA/'process.json',{'identity':ident,'adopted':False,'log':'x.log',
+                                             'command':'llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080 --jinja'})
+        self.save_network(port=13305,lan=False,api_key='')
+        with patch.object(m,'process_identity',return_value=ident),patch.object(m,'http_json',return_value={'status':'ok','data':[]}) as get:
+            s=m.status()
+        self.assertEqual(m.listening(m.read_json(m.DATA/'process.json',{})),{'host':'127.0.0.1','port':8080,'api_key':''})
+        self.assertEqual((s['endpoint'],s['network_pending']),('http://127.0.0.1:8080/v1',True))
+        self.assertEqual(get.call_args.args[1]['port'],8080)
+    def test_a_server_on_the_configured_port_is_adopted_on_either_host_with_its_key(self):
+        other=str((self.root/'elsewhere'/'hip'/'llama-server.exe').resolve())
+        ident={'pid':321,'exe':other,'birth':7}
+        flags='--load-mode none --lazy-mode on-direct'
+        self.save_network(port=13305,lan=True,api_key='')
+        for host in ('127.0.0.1','0.0.0.0'):
+            entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':f'llama-server.exe -m x.gguf --host {host} --port 13305 --api-key k3y {flags}'}
+            m.atomic_json(m.DATA/'process.json',{})
+            with self.subTest(host=host),patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
+                s=m.state()
+                self.assertEqual((s['identity'],s['host'],s['port']),(ident,host,13305))
+                self.assertIn('--api-key ***',s['command']);self.assertNotIn('k3y',s['command'])
+                # its own key, for the manager's requests to it
+                self.assertEqual(m.listening(s),{'host':host,'port':13305,'api_key':'k3y'})
+        # not on another port or another address: an earlier version's 127.0.0.1:8080 is ours while 8080 is the port
+        for cmd in ('--host 127.0.0.1 --port 8080','--host 192.168.1.9 --port 13305'):
+            entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':f'llama-server.exe -m x.gguf {cmd} {flags}'}
+            m.atomic_json(m.DATA/'process.json',{})
+            with self.subTest(cmd=cmd),patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
+                self.assertNotIn('identity',m.state())
+        self.save_network(port=8080,lan=False,api_key='')
+        with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
+            entry['CommandLine']=f'llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080 {flags}'
+            s=m.state();self.assertEqual((s['identity'],s['api_key']),(ident,''))
+    def test_a_busy_port_is_named_and_a_lan_load_needs_loopback_free_too(self):
+        model=first_model()
+        self.save_network(port=13305,lan=True,api_key='')
+        with patch.object(m,'ROOT',self.root),patch.object(m,'discover',return_value=[]),patch.object(m.subprocess,'Popen') as popen:
+            # something already answers there
+            with patch.object(m,'http_json',return_value={'status':'ok'}) as probe,self.assertRaises(m.ManagerError) as caught:
+                m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+            self.assertEqual((caught.exception.code,caught.exception.params),('port_busy',{'port':13305}))
+            self.assertIn('Port 13305 ',str(caught.exception));self.assertEqual(probe.call_args.args[1]['port'],13305)
+            # nothing answers, but the port is taken on loopback: a server on all addresses would not get its requests
+            bound=[]
+            class Sock:
+                def __init__(s,*a):pass
+                def __enter__(s):return s
+                def __exit__(s,*a):return False
+                def bind(s,addr):
+                    bound.append(addr)
+                    if addr[0]=='127.0.0.1':raise OSError(10048,'in use')
+                    if addr[0]=='192.168.1.9':raise OSError(10049,'not an address of this PC')
+            with patch.object(m,'http_json',side_effect=m.urllib.error.URLError('no listener')),patch('socket.socket',Sock):
+                with self.assertRaises(m.ManagerError) as caught:m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+                self.assertEqual((caught.exception.code,bound),('port_busy',[('0.0.0.0',13305),('127.0.0.1',13305)]))
+                # an address RULITH_HOST names that this PC does not have is not a busy port
+                bound.clear()
+                with patch.dict(m.os.environ,{'RULITH_HOST':'192.168.1.9'}),self.assertRaises(m.ManagerError) as caught:
+                    m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+                self.assertEqual((caught.exception.code,caught.exception.params,bound),('host_unavailable',{'host':'192.168.1.9'},[('192.168.1.9',13305)]))
+            popen.assert_not_called()
+    def test_lan_addresses_leave_out_loopback_and_link_local(self):
+        class Probe:
+            def __init__(s,*a):pass
+            def __enter__(s):return s
+            def __exit__(s,*a):return False
+            def connect(s,addr):pass
+            def getsockname(s):return ('192.168.1.20',50000)
+        found=[(2,2,17,'',(a,0)) for a in ('127.0.0.1','169.254.3.4','10.0.0.5','192.168.1.20')]
+        with patch('socket.socket',Probe),patch('socket.getaddrinfo',return_value=found):
+            self.assertEqual(m.lan_addresses(),['192.168.1.20','10.0.0.5'])
+        with patch('socket.socket',side_effect=OSError('no route')),patch('socket.getaddrinfo',side_effect=OSError('no name')):
+            self.assertEqual(m.lan_addresses(),[])
 
 if __name__=='__main__':unittest.main()

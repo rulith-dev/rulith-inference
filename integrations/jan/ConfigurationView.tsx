@@ -1,11 +1,12 @@
-import { useState } from 'react'
-import { ArrowLeftRight, ChevronRight, Play, RotateCw, Square } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeftRight, ChevronRight, Eye, EyeOff, Play, RotateCw, Square } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
-import { autoloadEnabled, fileName, gb, modelLabel, serverState, setAutoloadEnabled, useStrixLlamaStatus, type Model, type Profile } from './status'
+import { autoloadEnabled, fileName, gb, modelLabel, sameNetwork, serverState, setAutoloadEnabled, useStrixLlamaNetwork, useStrixLlamaStatus, type Model, type Profile } from './status'
 import { sameProfile, useModelStore } from './store'
 import { Choice, NumberField, Notice, Row, Section, StatePill, useTr } from './parts'
 
@@ -24,6 +25,11 @@ export default function ConfigurationView() {
   const { catalog, selected, profile, saved, companions, busy, select, setField, discard, save, reload } = useModelStore()
   const [autoload, setAutoload] = useState(autoloadEnabled)
   const [advanced, setAdvanced] = useState(false)
+  // the network setting is the app's, not the model's, but is saved from the same bar as the profile
+  const network = useStrixLlamaNetwork(s => s.network)
+  const netDraft = useStrixLlamaNetwork(s => s.draft)
+  const [netBusy, setNetBusy] = useState(false)
+  useEffect(() => { void useStrixLlamaNetwork.getState().refresh() }, [])
 
   const models = catalog?.models.filter(m => m.role === 'model') || []
   const model = catalog?.models.find(m => m.id === selected)
@@ -31,15 +37,37 @@ export default function ConfigurationView() {
   const projectors = catalog?.models.filter(m => m.role === 'projection') || []
   const qsaModel = model?.architecture === 'qwen4exp'
   const running = !!status?.identity && status.model_path === model?.path
-  const dirty = !!profile && !sameProfile(profile, saved)
+  const profileDirty = !!profile && !sameProfile(profile, saved)
+  const netDirty = !!network && !!netDraft && !sameNetwork(netDraft, network.saved)
+  const dirty = profileDirty || netDirty
   // saved but not in effect: the server runs this model with other settings
   const pending = running && !dirty && !!status?.profile && !sameProfile(saved, status.profile)
 
   if (!catalog) return <div className="p-10 text-center text-sm text-muted-foreground">{tr('models.loadingCatalog')}</div>
   if (!models.length) return <Notice tone="info">{tr('config.noModel')}</Notice>
 
-  const onSave = async () => { if (await save()) toast.success(tr(running ? 'notice.savedRunning' : 'notice.saved')) }
-  const onReload = async () => { if (await reload()) toast(tr('notice.loading', { model: model?.name })) }
+  // false when the manager refused it; its error goes where the page shows the profile's
+  const saveNetwork = async () => {
+    if (!netDirty) return true
+    setNetBusy(true)
+    try {
+      await useStrixLlamaNetwork.getState().save()
+      return true
+    } catch (e) {
+      useModelStore.setState({ error: String(e) })
+      return false
+    } finally {
+      setNetBusy(false)
+    }
+  }
+  // a network change waits for a reload of whichever model runs, a profile change only when it is this one
+  const applyLater = (netDirty && !!status?.identity) || (profileDirty && running)
+  const onSave = async () => {
+    if (!(await saveNetwork()) || (profileDirty && !(await save()))) return
+    toast.success(tr(applyLater ? 'notice.savedRunning' : 'notice.saved'))
+  }
+  const onReload = async () => { if ((await saveNetwork()) && (await reload())) toast(tr('notice.loading', { model: model?.name })) }
+  const onDiscard = () => { discard(); useStrixLlamaNetwork.getState().discard() }
   const set = <K extends keyof Profile>(key: K) => (v: Profile[K]) => setField(key, v)
   const p = profile
 
@@ -129,6 +157,8 @@ export default function ConfigurationView() {
             control={<Switch aria-label={tr('config.startup.autoload')} checked={autoload} onCheckedChange={v => { setAutoload(v); setAutoloadEnabled(v) }} />} />
         </Section>
 
+        <NetworkSection reload={running && !dirty && !busy ? () => void onReload() : undefined} />
+
         <Collapsible open={advanced} onOpenChange={setAdvanced}>
           <section className="rounded-lg border bg-card">
             <CollapsibleTrigger asChild>
@@ -157,14 +187,81 @@ export default function ConfigurationView() {
 
       {dirty && (
         <div className="sticky bottom-3 z-10 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-popover px-4 py-3 shadow-lg">
-          <span className="text-[13px] text-foreground">{running ? tr('config.unsavedRunning') : tr('config.unsaved')}</span>
+          <span className="text-[13px] text-foreground">{running || (netDirty && status?.identity) ? tr('config.unsavedRunning') : tr('config.unsaved')}</span>
           <div className="flex gap-2">
-            <Button size="sm" variant="ghost" className="h-8" disabled={busy} onClick={discard}>{tr('actions.discard')}</Button>
-            <Button size="sm" variant={running ? 'outline' : 'default'} className="h-8" disabled={busy} onClick={() => void onSave()}>{tr('actions.save')}</Button>
-            {running && <Button size="sm" className="h-8" disabled={busy} onClick={() => void onReload()}><RotateCw className="size-3.5" />{tr('actions.saveReload')}</Button>}
+            <Button size="sm" variant="ghost" className="h-8" disabled={busy || netBusy} onClick={onDiscard}>{tr('actions.discard')}</Button>
+            <Button size="sm" variant={running ? 'outline' : 'default'} className="h-8" disabled={busy || netBusy} onClick={() => void onSave()}>{tr('actions.save')}</Button>
+            {running && <Button size="sm" className="h-8" disabled={busy || netBusy} onClick={() => void onReload()}><RotateCw className="size-3.5" />{tr('actions.saveReload')}</Button>}
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Where the server listens, for the chat here and for other clients: its port, whether other devices on the local
+// network may use it, and the API key it then asks for. The manager keeps them in its settings.json, which updates
+// leave alone; RULITH_PORT, RULITH_HOST or RULITH_API_KEY in the environment override a field, which is then shown
+// but not offered. Saved from the profile's bar; a running server keeps its address and key until it loads again.
+function NetworkSection({ reload }: { reload?: () => void }) {
+  const tr = useTr()
+  const status = useStrixLlamaStatus(s => s.status)
+  const network = useStrixLlamaNetwork(s => s.network)
+  const draft = useStrixLlamaNetwork(s => s.draft)
+  const edit = useStrixLlamaNetwork(s => s.edit)
+  if (!network || !draft) return null
+  const forced = network.forced
+  // what the next load takes: the page's values, or what a variable sets instead
+  const port = forced.port ? network.port : draft.port
+  const lan = forced.lan ? network.lan : draft.lan
+  const key = forced.api_key ? network.api_key : draft.api_key
+  const hosts = forced.lan && network.host !== '0.0.0.0' ? [network.host] : network.addresses
+  const pending = !!status?.network_pending && sameNetwork(draft, network.saved)
+  return (
+    <Section label={tr('config.network.title')}>
+      <Row title={tr('config.network.port')}
+        description={forced.port ? tr('config.network.forced', { name: forced.port }) : tr('config.network.portHelp')}
+        control={<NumberField ariaLabel={tr('config.network.port')} value={port} onChange={v => edit('port', v)} min={1024} max={65535} disabled={!!forced.port} />} />
+      <Row title={tr('config.network.lan')} info={tr('config.network.lanInfo')}
+        description={forced.lan ? tr('config.network.forcedHost', { name: forced.lan, host: network.host })
+          : tr(lan ? 'config.network.lanOn' : 'config.network.lanOff')}
+        control={<Switch aria-label={tr('config.network.lan')} checked={lan} disabled={!!forced.lan} onCheckedChange={v => edit('lan', v)} />}
+        note={lan && (
+          <div className="space-y-2">
+            {!key && <Notice tone="warning">{tr('config.network.noKey')}</Notice>}
+            <div className="text-xs text-muted-foreground">
+              {hosts.length ? tr('config.network.endpoints') : tr('config.network.noAddress', { port })}
+              {hosts.map(h => <div key={h} className="mt-0.5 select-text font-mono text-foreground">{`http://${h}:${port}/v1`}</div>)}
+            </div>
+            <div className="text-xs text-muted-foreground">{tr('config.network.firewall')}</div>
+          </div>
+        )} />
+      <Row title={tr('config.network.apiKey')}
+        description={forced.api_key ? tr('config.network.forced', { name: forced.api_key }) : tr('config.network.apiKeyHelp')}
+        control={<KeyField ariaLabel={tr('config.network.apiKey')} value={key} onChange={v => edit('api_key', v)} disabled={!!forced.api_key} />} />
+      {pending && (
+        <div className="px-4 py-3">
+          <Notice tone="info" title={tr('config.network.pending')}
+            action={reload && <Button size="sm" className="h-7" onClick={reload}><RotateCw className="size-3.5" />{tr('actions.reload')}</Button>} />
+        </div>
+      )}
+    </Section>
+  )
+}
+
+// The API key, hidden as it is typed unless shown. Spaces cannot be part of one, so a paste loses those at its ends.
+function KeyField({ value, onChange, disabled, ariaLabel }: { value: string; onChange: (v: string) => void; disabled?: boolean; ariaLabel: string }) {
+  const tr = useTr()
+  const [shown, setShown] = useState(false)
+  const label = tr(shown ? 'config.network.hideKey' : 'config.network.showKey')
+  return (
+    <div className="flex items-center gap-1">
+      <Input type={shown ? 'text' : 'password'} aria-label={ariaLabel} autoComplete="off" spellCheck={false} disabled={disabled}
+        className="h-8 w-56 font-mono text-[13px]" placeholder={tr('config.network.apiKeyNone')} value={value}
+        onChange={e => onChange(e.target.value.trim())} />
+      <Button type="button" size="icon-sm" variant="ghost" aria-label={label} title={label} onClick={() => setShown(!shown)}>
+        {shown ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+      </Button>
     </div>
   )
 }

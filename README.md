@@ -34,7 +34,7 @@ says so rather than claiming a win — and decode figures carry their draft acce
 speculation on, throughput without acceptance describes the prompt rather than the runtime.
 
 **On Linux.** There is no Linux installer, but the patched llama.cpp builds there. A user built the
-`strixllama` branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp) with ROCm on Linux
+patched branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp) (then `strixllama`, `rulith` since 0.4.3) with ROCm on Linux
 and measured it with `llama-bench` (`-b 8192 -ub 8192 -fa 1`, with the app's switches exported):
 UD-IQ4_XS 1254 t/s prefill (pp2048) and 27.8 tok/s decode (tg128, MTP off), the same as on Windows;
 UD-Q4_K_XL 804 and 26.0 ([thread](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)): the tuned expert kernels covered only the quant types inside
@@ -74,10 +74,19 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
 `bootstrap.py` clones `pwilkin/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 83-file delta is also published on a fork, a commit per release, so it can be
-read as a plain diff: [rulith-dev/llama.cpp, branch `strixllama`](https://github.com/rulith-dev/llama.cpp/tree/strixllama). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
+against the ROCm SDK. The same 85-file delta is also published on a fork, a commit per release, so it can be
+read as a plain diff: [rulith-dev/llama.cpp, branch `rulith`](https://github.com/rulith-dev/llama.cpp/tree/rulith) (`strixllama` until 0.4.3, still kept in
+step for a few releases). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
 remembered.
+
+The server it starts is an OpenAI-compatible endpoint, by default at `http://127.0.0.1:8080/v1`. In the
+app, Model › Configuration › Network changes the port, lets other devices on the local network use the
+server (it then listens on 0.0.0.0, and Windows may ask the first time whether to let llama-server through
+the firewall) and sets an API key that requests must send as `Authorization: Bearer <key>`. The setting
+is kept in `config/jan/settings.json` (`"network": {"port": 8080, "lan": false, "api_key": ""}`), which
+updates leave in place; `RULITH_PORT`, `RULITH_HOST` (an address to bind, such as `0.0.0.0`) and
+`RULITH_API_KEY` in the environment override it.
 
 **Read [docs/install.md](docs/install.md) first.** Three things there are not optional and not
 obvious: the GPU carve must be 96 GB (at 64 GB the model does not fit and decode is 28% slower, which
@@ -93,7 +102,7 @@ and Chinese.
 
 ## What is actually in here
 
-The whole delta against upstream llama.cpp is **83 files** — 79 modified, 4 added, out of 3610. The
+The whole delta against upstream llama.cpp is **85 files** — 81 modified, 4 added, out of 3610. The
 substantial pieces:
 
 | | |
@@ -110,6 +119,7 @@ substantial pieces:
 | **Several agents at once** | Agent tools run a session per sub-agent on one long system prompt, so every slot looked 97% similar to every new session, and a new session took whichever slot scored highest, cutting another agent's history. A slot now takes a request for what it holds only when the request continues it, and eight conversations stay loaded by default. Conversations that are answering share one pass whatever their lengths, a prompt gets a pass of its own, and while conversations answer a step takes at most 2048 prompt tokens. Six agents, 0.2.6 at its four slots against 0.2.7 at its eight: 75K tokens processed → 45K, median time to the first token 10.1 → 3.4 s, the longest pause of a streaming agent 6.2 → 2.7 s; a 19K-token prompt pauses a streaming conversation for 2.2 s at a time instead of 7. |
 | **Rollback without snapshots** | A speculative verify saved the recurrent state after every checked token, 3 MB a layer, in case a draft was rejected. It now records only what it needs to recompute a rejected tail (33 KB a token) and replays it in the next step: a verify step at three / four conversations 2.8% / 4.0% shorter, output identical bit for bit. |
 | **The delta net's state, written once in nine tokens** | Three layers in four keep a 3 MB state per conversation, read and rewritten for every token: with eight conversations, 24 MB written a layer a token, which cost more than reading it. A token now writes only its 33 KB record, and the state goes back to memory once eight records are pending, from the same records and the same arithmetic; a warp also reads two of its columns at once. Eight conversations of ~20K tokens, MTP off: 89.4 → 97.1 tok/s (0.4.0); output identical bit for bit. |
+| **Shorter prompt passes** | A prompt's pass seen on one continuous GPU timeline put the routed experts at ~40% of a 2K-token batch, and around them some work that needed no pass of its own. The shared expert's gated output is now added inside the routed experts' weighted sum; the hyper-connection streams are formed where the next projection reads them instead of being written out in F32; the delta net's q/k norms take one kernel; the experts' row lists are sorted from 64 tokens on, not only above 4096; and the per-layer embedding rows a prompt chunk needs are read from the SSD before its pass asks for them. Fresh prompts of 1K / 2K / 4K / 8K / 16K tokens: 920 / 1072 / 1122 / 1267 / 1245 → 964 / 1148 / 1227 / 1302 / 1301 t/s (0.4.3); output identical bit for bit. |
 | **UD-Q4_K_XL's experts on the matrix cores** | The tuned prefill kernels were written for the quant types inside UD-IQ4_XS, so UD-Q4_K_XL's experts (Q4_K, Q5_1) fell back to llama.cpp's generic path. They have their own now: Q4_K_XL prefill 876 → 1127 t/s on 2K tokens, 850 → 1054 on 95.6K (0.4.2). Perplexity unchanged within noise; UD-IQ4_XS untouched. |
 | **Small decode kernels and BF16 copies** | A profile from timestamps captured inside the HIP graph showed ~3 ms a token in small kernels bound by latency: fused elementwise chains that fetched unrolled general indexing code at every launch (8.4 → 2.7 us), a top-k without DPP. And 264 F32 weights - routers, gates, injects - hold only bfloat16 values; BF16 copies give the same products from half the bytes. One conversation, MTP off, 25.9 → 27.3 tok/s at 3K (0.4.0), the same output. |
 | **MTP when sampling** | With a temperature above 0, a draft token counted only when the model drew that very token. The draft head now draws its proposals from its own distribution, shaped by the request's sampling settings, and speculative sampling accepts each with the probability that keeps every token distributed exactly as the model alone samples it: at temperature 0.7 the first proposal is kept 67% of the time instead of 63%. Proposals kept less often pay for fewer a step, so sampled answers draft 2 tokens for one or two conversations, 1 for three or four. At Jan's settings, one conversation 33.6 → 36.2 tok/s, three 61.3 → 67.1 (0.4.1). Greedy output unchanged bit for bit. |
@@ -132,12 +142,12 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 83 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 85 files, byte for byte
 ```
 
-It restores the 79 modified files to upstream from the clone's own git objects, addressed by the blob
+It restores the 81 modified files to upstream from the clone's own git objects, addressed by the blob
 hashes in `bootstrap/UPSTREAM.json` — so clean upstream is reconstructed rather than trusted — then
-replays the snapshot and every script and compares. It reports **83 / 83**.
+replays the snapshot and every script and compares. It reports **85 / 85**.
 
 It was not always so. Five of the 24 were owned by no script at all - including the largest measured
 win in the project, which a clean rebuild would have silently dropped - and three scripts had drifted

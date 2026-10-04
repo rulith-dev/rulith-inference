@@ -93,6 +93,7 @@ PATCH_ORDER = [
     "apply_bf16_twins_040", "apply_gpu_timeline_040",   # the second patches ggml-cuda.cu as the first leaves it
     "apply_decode_small_kernels_040", "apply_ab_switch_041", "apply_gdn_records_041", "apply_ple_wake_041",
     "apply_spec_sampling_042", "apply_mmb_kq_042",
+    "apply_prefill_043",
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

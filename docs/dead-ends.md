@@ -83,6 +83,20 @@ first of them to the last: the mixed steps' host inputs took 0.5-0.7 ms more, an
 attention read the gaps. Conversations are now packed in order with a fixed room after each - four of ~24K
 tokens sit in ~121K cells - and a batch that does not fit has the pool laid out again.
 
+**F16 weights for the routed experts (0.4.3).** gufo, the fastest prefill on this chip (Linux), dequantizes the
+expert weights to F16 for its WMMA and keeps the codes in LDS. Tried in glu3 with the same tiles: the output was fine
+(not bitwise; the same perplexity was the bar), but glu3 got 5% slower. The dequantization is ~11% of the 2K-token
+kernel (switches that skip each part, garbage output: WMMA 22%, LDS fragment reads ~1.1 ms, LDS writes and barriers
+~0.5 ms, the skeleton ~1.8 ms), so a cheaper conversion had little to win, and the F16 path's extra LDS traffic cost more.
+
+**Waves along the expert rows.** A wave owning 16 rows, its weights dequantized straight into WMMA registers and the
+half-waves' duplicate operands exchanged with `permlanex16`, as gufo's waves along M: correct, but +16% (gate/up) and
++38% (down) at 2K tokens. The activations each wave then reads again outweigh the LDS writes saved.
+
+**BF16 copies of the Q8_0 dense weights for prefill.** +10% slower: the dense GEMMs are bound by memory and LDS, not
+by the Q8_0 dequantization, and the copies double their reads. Nor did `LLAMA_MMB_TALL=1` (slower) or wave barriers
+in the MMB store epilogue (no change) help.
+
 ## Configuration
 
 **A 64 GB carve.** Worse on both axes than 96 GB and now dead: the model does not fit, ~9.8 GB spills
