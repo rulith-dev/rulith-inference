@@ -81,6 +81,11 @@ class ManagerTests(unittest.TestCase):
         args=m.argv(self.model,cfg)
         self.assertEqual(args[args.index('-m')+1],str(self.file))
         self.assertIn('f16',args);self.assertNotIn('--spec-type',args)
+        # the name API clients send: the file's, without the shard suffix (issue #9)
+        self.assertEqual(args[args.index('--alias')+1],'model-Q8_0')
+        for name,alias in (('Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf','Qwen3.8-Flash-Next-UD-IQ4_XS'),
+                           ('gpt-oss-120b-MXFP4.GGUF','gpt-oss-120b-MXFP4'),('a,b.gguf','a_b')):
+            self.assertEqual(m.api_model_name({'path':str(self.root/name)}),alias)
     def test_large_batches_survive_save_and_reach_launch_without_starting_model(self):
         model=first_model()
         with patch.object(m,'state',return_value={}),patch.object(m.subprocess,'Popen') as popen:

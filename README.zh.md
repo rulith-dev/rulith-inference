@@ -79,7 +79,8 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 llama-server 通过防火墙），还可以设置 API 密钥，请求须以 `Authorization: Bearer <密钥>` 带上它。这项设置
 保存在 `config/jan/settings.json`（`"network": {"port": 8080, "lan": false, "api_key": ""}`），更新应用时
 不会被覆盖；环境变量 `RULITH_PORT`、`RULITH_HOST`（要绑定的地址，例如 `0.0.0.0`）和 `RULITH_API_KEY`
-优先于它。
+优先于它。请求里的模型名是文件名去掉分片后缀（`"model": "Qwen3.8-Flash-Next-UD-IQ4_XS"`，即 `/v1/models`
+列出、日志页显示的名字）；只加载一个模型时，服务器对任何名字都会回答。
 
 **先读 [docs/install.md](docs/install.md)。** 有三件事不是可选的，也不显然：显存划分必须是 96 GB
 （64 GB 下模型装不下，解码慢 28%，没有任何软件设置能补回来）；ROCm SDK 必须用 TheRock 10.2 而不是

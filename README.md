@@ -88,7 +88,9 @@ server (it then listens on 0.0.0.0, and Windows may ask the first time whether t
 the firewall) and sets an API key that requests must send as `Authorization: Bearer <key>`. The setting
 is kept in `config/jan/settings.json` (`"network": {"port": 8080, "lan": false, "api_key": ""}`), which
 updates leave in place; `RULITH_PORT`, `RULITH_HOST` (an address to bind, such as `0.0.0.0`) and
-`RULITH_API_KEY` in the environment override it.
+`RULITH_API_KEY` in the environment override it. Requests name the model as its file does, without the shard
+suffix (`"model": "Qwen3.8-Flash-Next-UD-IQ4_XS"`, the name `/v1/models` lists and the Logs page shows);
+with one model loaded, the server answers any name.
 
 **Read [docs/install.md](docs/install.md) first.** Three things there are not optional and not
 obvious: the GPU carve must be 96 GB (at 64 GB the model does not fit and decode is 28% slower, which

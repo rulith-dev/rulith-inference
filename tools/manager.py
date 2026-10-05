@@ -869,13 +869,21 @@ def runtime_environment(cfg):
     return env
 
 
+def api_model_name(model):
+    """The name /v1/models lists for the loaded model, the one API clients send as "model": the file's name without
+    the shard suffix, e.g. Qwen3.8-Flash-Next-UD-IQ4_XS. Without --alias llama-server lists the full path. With one
+    model loaded it answers whatever name a request carries, but some clients check the name against that list
+    first (issue #9). --alias splits its value at commas."""
+    return re.sub(r'(-\d{5}-of-\d{5})?\.gguf$', '', Path(model['path']).name, flags=re.I).replace(',', '_')
+
+
 def argv(model, cfg, net=None):
     net = net or network()
     pool = kv_pool_cells(cfg)
     args = [str(selected_runtime(cfg)), '-m', model['path'], '-ngl', str(cfg['gpu_layers']), '-c', str(pool),
             '-b', str(cfg['batch']), '-ub', str(cfg['ubatch']), '-t', str(cfg['threads']), '--poll', '0',
             '--fit', 'off', '-np', str(cfg.get('parallel', 1)), '-fa', cfg['flash_attention'], '-ctk', cfg['kv'], '-ctv', cfg['kv'], '--jinja',
-            '--host', net['host'], '--port', str(net['port'])]
+            '--host', net['host'], '--port', str(net['port']), '--alias', api_model_name(model)]
     if net['api_key']:
         # every endpoint but /health then wants it: the manager's own requests and the app's chat send it
         args += ['--api-key', net['api_key']]
