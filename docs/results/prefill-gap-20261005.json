@@ -1,0 +1,227 @@
+{
+ "date": "2026-10-05",
+ "question": "prefill reads as capped near 1300 t/s against gufo's 1600+: where does the time actually go, on the file gufo runs (UD-Q4_K_XL)?",
+ "setup": "bin/hip = 0.4.3 (c61a2c176). Model UD-Q4_K_XL (aba157886262ab8ec9d6, 111.32 GB) unless stated; bin/hip-released llama-server, the manager's profile with the overrides shown, MTP off, freshly started server per run (tmp/kvr/with_server.py and tmp/kvr/gufo_protocol.py, neither of which touches 8080 in the with_server case). The app's own server was stopped for the whole round (a second model does not fit the 96 GB carve).",
+ "headline": "decode is at parity with gufo; the whole gap is prefill, and it is not host work: the GPU is 94-96% of a prompt's wall time. On the same file and the same protocol, pp2048 d0 1188.9 against gufo 1628.5.",
+
+ "gufo_protocol": {
+  "method": "tmp/kvr/gufo_protocol.py single --runtime bin/hip --model aba157886262ab8ec9d6 --set mtp=false --tasks prose (gufo BENCHMARKS.md single-user autoregressive, i.e. no MTP)",
+  "parallel_8": {"d0": {"pp_n": 2034, "pp": 1188.88, "tg": 25.37}, "d4096": {"pp_n": 2040, "pp": 1185.83, "tg": 25.96}},
+  "parallel_1": {"d0": {"pp_n": 2034, "pp": 1143.14, "tg": 25.39}, "note": "the protocol moves +-4% run to run; parallel is not a lever"},
+  "gufo_reported": {"d0": {"pp": 1628.52, "tg": 25.87}, "d4096": {"pp": 1523.39, "tg": 25.84}, "d8192": {"pp": 1499.13}, "d65536": {"pp": 1304.01}},
+  "reading": "prefill 73% of gufo at d0, 78% at d4096; decode 98% and 100% - the gap is prefill only",
+  "caveat": "gufo's own table puts stock llama.cpp at 489.59 t/s d0 on this file. Their engine is 3.33x that; this one is 2.43x."
+ },
+
+ "fresh_prompt_prefill": {
+  "method": "tmp/kvr/with_server.py --runtime bin/hip --set mtp=false parallel=1 -- python tmp/p14/pp_bench.py --lengths ... --reps 10 --offset 3000 (slices of tmp/realtext.txt sent as token ids, no prompt cache, the server's prompt_per_second)",
+  "Q4_K_XL": {"2048": 1118.7, "8192": 1362.1},
+  "IQ4_XS": {"2048": 1099.8, "8192": 1298.8},
+  "Q4_K_XL_by_length": {"512": 765.4, "1024": 976.7, "2048": 1118.7, "4096": 1287.8, "8192": 1362.1},
+  "reading": "throughput rises with prompt length because the expert weights are dequantized once per batch however few tokens use them: pp2048 is this architecture's worst case and is exactly the row gufo's d0 is. IQ4_XS is SLOWER than Q4_K_XL at both lengths despite 34% fewer expert bytes (59.52 against 77.02 GB): the IQ3_S/IQ4_NL dequant is the dearer one per weight."
+ },
+
+ "host_side": {
+  "method": "same server, --env LLAMA_GRAPH_TIMING=1 STRIX_INPUT_TIMING=1 STRIX_DECODE_TIMING=1, --lengths 2048 --reps 6",
+  "prompt_eval_ms": [1712.8, 1720.2, 1722.1, 1745.9, 1763.4, 1769.5],
+  "DT_breakdown_ms": {"prep": "1.4-2.1", "graph": "0.8-0.9", "inputs": "31.1-71.7", "compute": "1622.4-1665.6", "post": "0.02"},
+  "GT": {"hostgap_ms": "146.7-180.4", "submit_ms": "4.8-32.1", "gpu_wait_ms": "1617.5-1638.0"},
+  "reading": "compute is 1622-1666 ms of a 1713-1770 ms prompt: the GPU is 94-96% of it. There is no 200 ms of host work to win back - the levers are all in the graph."
+ },
+
+ "gpu_timeline_pp2048": {
+  "method": "STRIX_GPU_TIMELINE=1 STRIX_GPU_TIMELINE_ROWS=100000 on the run above; tmp/p15/sum_tl.py reads the blocks out of logs/qk_tl-server.log",
+  "span_ms": 1605, "sum_ms": 1602, "dispatches": 1939,
+  "top_ms": {
+   "MUL_MAT_ID@640/2560 (fused), routed gate/up Q4_K through glu3": 356.3,
+   "MUL_MAT_ID@2560/640, routed down Q5_1": 240.3,
+   "MUL_MAT@10240/2560": 112.6,
+   "RMS_NORM@128/128 (fused)": 110.3,
+   "SCALE@4/4 (fused), HC combine+norm": 106.4,
+   "MUL_MAT@2560/6144, GDN out projection": 104.4,
+   "GATED_DELTA_NET": 86.3,
+   "MUL_MAT@10240/320 (fused), HC up": 85.6,
+   "MUL_MAT@320/10240, HC down": 62.6,
+   "FLASH_ATTN_EXT": 50.1,
+   "MUL_MAT@12288/2560": 44.6,
+   "MUL@2560/2560 (fused)": 34.9,
+   "MUL_MAT@512/2560": 33.6,
+   "SSM_CONV": 30.2,
+   "MUL_MAT@640/2560": 22.9
+  },
+  "by_block": {
+   "routed experts (gate/up + down)": {"ms": 596.6, "share": "37.2%"},
+   "hyper-connections (combine + up + down + mix)": {"ms": 289.5, "share": "18.1%"},
+   "dense projections (incl. HC up's 10240)": {"ms": 344.0, "share": "21.5%"},
+   "delta net (q/k norm + recurrence + conv)": {"ms": 226.8, "share": "14.2%"},
+   "attention": {"ms": 50.1, "share": "3.1%"},
+   "rest": {"ms": 94.5, "share": "5.9%"}
+  },
+  "reading": "no single kernel is broken and none is a majority: the largest two are 22% and 15% of the batch."
+ },
+
+ "routed_expert_kernel": {
+  "method": "the same timeline at 1024/2048/4096/8192 tokens (--lengths 512,1024,4096 --reps 8, and the earlier 2048/8192 run), against the desc-entry counts the recorded routings imply",
+  "measured_ms": {
+   "1024": {"gate_up": 250.8, "down": 174.0},
+   "2048": {"gate_up": 356.3, "down": 240.3},
+   "4096": {"gate_up": 574.2, "down": 392.1},
+   "8192": {"gate_up": 953.6, "down": 670.0}
+  },
+  "routings": {
+   "tmp/p14/rows2k.txt": "~1984 tokens: 407 of 512 experts active, 470.2 gate/up desc entries = 0.918 x the file",
+   "tmp/p14/rows.txt": "~8156 tokens: 236 active, 815.2 entries = 1.592 x the file",
+   "why_entries_exceed_experts": "mmb_build_desc2 gives an expert of >= 32 rows BN=128 tiles (mmb.cu:996-1009): a 40-row expert still costs a whole tile's dequantization, and an expert past 128 rows a second one. mmb.cu:1012-1016 records the same measurement for the down projection (1.59 x per expert at 2K, 1.15 with the three-class desc3 that is now the default there)."
+  },
+  "fit": {
+   "model": "gate/up_ms = (entries/512 * 44.35 GB) / 196 GB/s + FLOPs / 41.5 TFLOPS, the two terms strictly added",
+   "check_1024": {"predicted": 243, "measured": 250.8},
+   "check_2048": {"predicted": 356.6, "measured": 356.3},
+   "check_4096": {"predicted": 580, "measured": 574.2},
+   "check_8192": {"predicted": 955.3, "measured": 953.6},
+   "down_projection_fit": {"dequant_GB/s": 196, "TFLOPS": 28.0, "check_2048": {"predicted": 240, "measured": 240.3}, "check_8192": {"predicted": 670, "measured": 670.0}}
+  },
+  "reading": "at pp2048 the gate/up kernel dequantizes 40.73 GB to feed ~40 WMMA columns an expert. Its own dequantization instructions are only ~11% of it (the project's own figure, apply_moe_glu3.py; the count agrees), so the kernel is weight-traffic-bound at 196 GB/s - 93% of the 211 GB/s the lm-head read reaches - and the 41.5 TFLOPS of matrix work is fully exposed on top rather than hidden under the memory waits. Same at the down projection, whose WMMA runs at only 28 TFLOPS.",
+  "pp2048_split": {"gate_up": {"memory": 208, "wmma": 149}, "down": {"memory": 126, "wmma": 114}, "total_exposed_wmma_ms": 263, "if_overlapped_total_ms": 334},
+  "occupancy_note": "the glu3 block holds Ag 9 KB + Au 9 KB + Bs 18 KB + grid16 4 KB = 40 KB of LDS (MMB_BK 64, MMB_LDS_STRIDE 72, BN 128, mmb.cu:18 and :799-802), which bounds resident blocks a CU and so the memory-level parallelism available to hide a load; worth checking against the CU's LDS size before touching the tiles.",
+  "the_two_phases_are_each_near_their_ceiling": {
+   "per_layer_ms": 8.00,
+   "stream": "0.878 GB at the fitted 166 GB/s = 5.29 ms, which is 79% of the 211 GB/s the machine reaches",
+   "wmma": "130.1 GFLOP at the fitted 47.9 TFLOPS = 2.72 ms, which is 90% of the 53 TFLOPS WMMA peak this project measured",
+   "sum": "8.01 ms against 8.00 measured - the two terms do not merely correlate, they add to the measured time",
+   "prize_if_overlapped": "5.29 ms a layer, 125 ms over the 46 layers of a 2048-token batch",
+   "reading": "there is nothing to win inside either phase: both are already at 79-90% of their own ceilings. The whole prize is that they do not overlap, which is the same thing dead-ends.md reports as a hardware property of gfx1151 (the VALU and the WMMA unit never run at the same time on a SIMD)."
+  },
+  "what_has_already_been_tried_on_this_kernel": "docs/dead-ends.md: F16 weights for the routed experts in glu3 (5% slower; the dequantization is only ~11% of the 2K-token kernel), waves along the expert rows (+16% / +38%), wider tiles (BN 256 spills at 41.5 ms against 25.2, BN 192 27.1 and BN 64 28.4, so 128 stands), and prefetching two steps ahead (nothing for the small tiles, spills the big one). Those are the obvious levers and they are spent.",
+  "the_angle_that_is_NOT_spent": "none of those removes the __syncthreads between the WMMA loop and store_lds (mmb.cu:771-773). Every warp must finish its WMMA before any warp may overwrite Ag/Au/Bs, so a warp that finished early still waits, and the barrier is where the two phases are made to add. Double-buffering those three buffers by step parity would remove that barrier; the cost is LDS, not registers, and at 40 KB a block the kernel is already at one block a CU on a 64 KB CU, so a doubled 76 KB would not fit but a BN 64 pair (2 x 27 KB + 4 KB) would. gufo's own notes reject a one-tile-ahead LDS double buffer on the dense path for register pressure, but that is their engine and this is a different tile shape; this project has tried prefetch depth and tile width, not this.",
+  "the_prefetch_hypothesis_is_dead": {
+   "tested": "__launch_bounds__(MMB_NT, 2) asks the compiler to budget registers for two resident blocks, but the block's own 40 KB of LDS leaves room for one, so the cap could have been forcing the K loop's one-step register prefetch to spill - which would explain both the additive phases and dead-ends' 'prefetching two steps ahead ... spills the big one'. Relaxing it to (MMB_NT, 1) gives the compiler 255 VGPRs instead of ~128.",
+   "method": "tmp/qk/kernel_lab.py --only gate_up,q4_k, interleaved with the revert: 2, 1, 1, 2",
+   "measured_min_us": {
+    "1984": {"lb2_r2": 8038.7, "lb1_r2": 7954.6, "lb1_r3": 8063.3, "lb2_r3": 7952.7},
+    "4096": {"lb2_r2": 12294.6, "lb1_r2": 12114.1, "lb1_r3": 12177.3, "lb2_r3": 12131.0},
+    "8156": {"lb2_r2": 21310.5, "lb1_r2": 21048.1, "lb1_r3": 21027.5, "lb2_r3": 21525.7}
+   },
+   "reading": "the sign flips with the point and with the rep count: at 1984 lb=1 is 1.4% slower, at 8156 2.3% faster, at 4096 0.4% slower, and one build moves 1.0-1.4% between 2 and 3 reps on its own. The effect is not resolved above the lab's spread, so the change is reverted. That is the result: the register cap was not costing anything measurable, so spills are not why the two phases add, and the pipeline rewrite's rationale weakens with it."
+  },
+  "the_split_is_not_a_robust_quantity": "the fitted pair moves between runs of the same binary: 168 GB/s + 46.2 TFLOPS, 170 + 46.9, 163 + 48.7, 181 + 43.1 over four firings of the three-length fit. The measured times are stable; the two parameters trade off against each other, so the 5.29 / 2.72 ms decomposition carries roughly +-10% and the 125 ms prize inherits it. Read the times, and treat the split as an illustration of what the marginal cost is made of rather than as a measurement."
+ },
+
+ "kernel_lab": {
+  "why": "the split above is derived from in-model wall times, which is slow to iterate on and cannot see one kernel at a time. patches/apply_moe_glu_kq_perf.py puts UD-Q4_K_XL's expert types into STRIX_MOE_GLU_PERF and tmp/qk/ builds and drives it, so a kernel can be A/B'd in seconds with no model loaded (about 1.5 GB of GPU, so it also runs beside the production server).",
+  "how": "python tmp/qk/build_tbo.py   # release kernels + the test target; bootstrap.py --build configures with -DLLAMA_BUILD_TESTS=OFF and build-dev is a full HIP recompile behind, so the test binary is built in the release dir",
+  "run": "python tmp/qk/record_routing.py   # one real prompt per length, then tmp/qk/kernel_lab.py --reps 3 --line 0",
+  "what_the_binary_measures": "mmb.cu.obj is not recompiled by that build - it is still the release build's own object (2026-10-04 13:10) - so the routed expert kernels timed here are the released machine code. The HIP build is not byte-reproducible in general: recompiling an unchanged ggml-cuda.cu twice gave two different ggml-hip.dll hashes.",
+  "routing_lines": "a dump line is replayed only when its n_rows (= tokens x experts_used) divides the test's token count. STRIX_MOE_IDS_LINE pins which matching line is replayed and the shuffle seed with it: without it the turn counter walks the list and a run with a different iteration count averages a different set of layers (iq3_s at 8156 tokens read 20200 and 25250 us that way).",
+  "routings_recorded": {
+   "how": "tmp/qk/send_depths.py under with_server.py with STRIX_MMB_GLU_DUMP, then tmp/qk/split_routing.py",
+   "files": "tmp/qk/rows_1984.txt, rows_4096.txt, rows_8156.txt - 46 lines each, one real prompt per length",
+   "active_experts": {"1984": 423.0, "4096": 417.6, "8156": 491.8},
+   "why_it_mattered": "the previously saved tmp/p14/rows.txt activates 237 of 512 experts at 8156 tokens where rows2k.txt activates 407 at 1984, so it is a degenerate routing and the two are not a matched pair; every fit in the section above that used it is unreliable, and the routings section there should be read with that in mind."
+  },
+  "measured_ms_a_layer": {
+   "1984_tokens": {"gate_up_q4_k": 8.00, "gate_up_iq3_s": 6.98, "down_q5_1": 4.76, "down_iq4_nl": 4.27},
+   "4096_tokens": {"gate_up_q4_k": 12.23, "gate_up_iq3_s": 11.13, "down_q5_1": 7.83, "down_iq4_nl": 7.61},
+   "8156_tokens": {"gate_up_q4_k": 21.05, "gate_up_iq3_s": 20.75, "down_q5_1": 14.29, "down_iq4_nl": 14.03},
+   "in_model_2048_reference": {"gate_up": 7.75, "down": 5.11, "note": "the in-model figures average 46-47 layers of mixed types; the lab separates them, which is why the lab's IQ4_NL down (4.27 ms) is well under the mixed average (5.11 ms)"}
+  },
+  "split": {
+   "method": "least squares over three token counts per type, so the residuals are a real check on the form rather than a two-point fit that matches by construction",
+   "gate_up_q4_k": "166 GB/s of weight stream + 47.9 TFLOPS of WMMA, added; residuals +0.4 / -0.5 / +0.1%. At 1984 tokens that is 5.29 ms of stream and 2.72 ms of matrix work, so ~34% of the kernel is WMMA that does not overlap the weight read.",
+   "gate_up_iq3_s": "201 GB/s + 37.0 TFLOPS, residuals -1.8 / +2.1 / -0.4%",
+   "down_q5_1_and_iq4_nl": "the same form fits numerically (residuals under 1%) but solves to 253 and 273 GB/s of weight stream, above the ~211 GB/s the machine reaches. That means the down projection has a third cost driver the two-term form is absorbing into an inflated byte term - per-tile overhead, LDS traffic or the barriers - so read its raw times, not its split.",
+   "exposed_share": "~34% for the gate/up, down from the ~40% the earlier unreliable fit suggested"
+  },
+  "next": "use it to A/B the gate/up kernel's ~34% of exposed matrix work: at 2048 tokens that is ~121 ms of the 356 ms the kernel takes in the model."
+ },
+
+ "delta_net_block": {
+  "why": "the one block of the pp2048 batch that was never priced against a bound: RMS_NORM + GATED_DELTA_NET + SSM_CONV = 224.4 ms of 1633.3 ms (13.7%)",
+  "method": "STRIX_NODE_TIMING=1 GGML_CUDA_DISABLE_GRAPHS=1 with tmp/p14/pp_bench.py --lengths 2048 --reps 3; node timing reports unfused per-node shapes, which the fused GPU timeline cannot, and needs graphs off so the absolute numbers are not production's",
+  "graph_total_ms": [1633.33, 1693.37, 1675.38],
+  "kernels_ms": {"RMS_NORM [128,48,2048,1] x36": 95.9, "GATED_DELTA_NET [6144,2176,1,1] x36": 81.5, "SSM_CONV [10240,2048,1,1] x36": 31.7, "RMS_NORM [128,16,2048,1] x72": 17.6, "RMS_NORM [256,24,2048,1] x12": 11.0},
+  "anomaly": "the three RMS_NORM shapes move the same bytes an element (rms_rows_f32 reads x twice and writes once, norm-gated.cu:19-52) but do not cost the same per byte in the graph: [128,48] 57 GB/s, [128,16] 206 GB/s, [256,24] 164 GB/s. [128,48] and [256,24] move the same total bytes - 151 MB - and [128,48] is 2.9x slower with twice the rows. The numbers are stable within 2% across the three prompt graphs, so it is a property of the shapes, not of the run.",
+  "the_kernel_is_not_the_problem": {
+   "measurement": "tmp/qk/norm_lab.py through STRIX_NORM_PERF (cases added by this round's patch), minimum of 3 interleaved runs. Two forms, and only the second corresponds to a node the model has: a bare RMS_NORM (rms_rows_f32<false,false>) which no qwen4exp node builds, and NORM_GATED (RMS_NORM, MUL(w), SIGMOID(z), MUL) which is exactly build_norm_gated, the delta net's output norm.",
+   "bare_rms_norm_alone_us": {"[128,48,2048]": 478.2, "[128,16,2048]": 87.0, "[256,24,2048]": 522.5},
+   "bare_rms_norm_alone_GBs": {"[128,48,2048]": 210.5, "[128,16,2048]": 385.9, "[256,24,2048]": 192.7},
+   "gated_alone_us": {"[128,48,2048]": 703.2, "[128,16,2048]": 235.4, "[256,24,2048]": 689.7},
+   "gated_alone_GBs": {"[128,48,2048]": 202.3, "[128,16,2048]": 199.9, "[256,24,2048]": 206.3},
+   "bytes": "test-backend-ops' own model for the gated case is 147456 kB for [128,48,2048] = 12 B an element (x read, z read, dst write), and the bare case 98304 kB = 8 B an element; both agree with the kernels' actual DRAM traffic",
+   "in_graph_us": {"[128,48,2048] x36": 2658, "[128,16,2048] x72": 244, "[256,24,2048] x12": 917},
+   "reading": "the gated form runs at 202 GB/s alone, i.e. the machine's measured peak, so the kernel is not the problem for the node the model actually has. [128,16,2048] in the graph (244 us) is close to the gated case alone (235 us) but that node is a different form (+SCALE, not +GATE), so treat the match as a coincidence until it is measured like for like."
+  },
+  "conclusion": "the kernel is at the machine's measured peak alone - 210.5 GB/s for the bare [128,48,2048] and 202.3 for the gated form - so the shape is not row-scheduling bound in the shipped path. The graph's 3.8x is something about that node in that graph, not the kernel, and the strides are not it either.",
+  "strides_ruled_out": {
+   "method": "the two fused-norm launches now print nb[1]/nb[2] as well (this round's patch, norm-gated.cu), read on a fresh server from src/llama.cpp/build/bin with LLAMA_NORM_GATED_DEBUG=1",
+   "printed": {"NORM_ROWS+GATE (the slow [128,48,T] one)": "ncols=128 rows=98304 strides=128/6144 nb0=1", "NORM_ROWS+SCALE (the q/k [128,16,T] one)": "ncols=128 rows=32768 strides=128/10240 nb0=1"},
+   "reading": "128/6144 are exactly the row and channel strides of a contiguous [128,48,T], so x is contiguous for the node that is 3.8x slow; the node that is NOT slow carries a 5x channel stride (10240 against the 2048 contiguous), which the kernel absorbs because consecutive warps walk rows, not channels. The debug line also confirms the matcher fired (NORM_GATED seq @72: RMS_NORM, MUL, MUL_MAT, RESHAPE, UNARY, MUL, RESHAPE), so the model runs the same single fused launch the standalone case does.",
+   "still_unexplained": "the same kernel, the same shape, a contiguous input and a successful fusion, at 703 us alone and 2658 us in the graph. Nothing else measured here separates them, and the other kernels do not show it (the routed gate/up reads 7.42 ms a call in the graph against 8.00 ms a layer alone, i.e. slightly faster)."
+  },
+  "buffers_ruled_out": {
+   "method": "the same print extended with the tensors' buffer names, on a fresh instrumented server from src/llama.cpp/build/bin",
+   "printed": "NORM_ROWS+GATE fused: ncols=128 rows=98304 strides=128/6144 nb0=1 xbuf=ROCm0 wbuf=ROCm0",
+   "reading": "x and the weight are both in the ROCm0 device buffer, so the gated form's once-an-element weight read is not going through a lazy or host mapping; and the fast +SCALE form is the one with no weight at all, so the weight was a tempting explanation for exactly the wrong reason - it is the slow one that has the weight and the slow one that is contiguous."
+  },
+  "producer_ruled_out": {
+   "method": "test_norm_gated gained a producer flag: with it, z is built by a MUL_MAT of the model's shape (a Q8_0 [2560, 6144] weight against a [2560, T] activation, reshaped to [128,48,T]) instead of being a graph input. The case now reproduces the model's node more closely than before - x, z, the weight and the fused pattern all as build_norm_gated builds them.",
+   "measured_us": {"[128,48,2048] producer=0": 696.4, "[128,48,2048] producer=1": 700.9, "[128,16,2048] producer=0": 235.3, "[128,16,2048] producer=1": 238.7, "[256,24,2048] producer=0": 691.0, "[256,24,2048] producer=1": 698.4},
+   "reading": "0.6% apart. A MUL_MAT writing z immediately before the norm does not slow it, so the kernel does not inherit a stalled memory system from its producer."
+  },
+  "no_profiler_on_this_platform": "rocprof is not in the ROCm Windows wheels - the SDK's bin holds 112 entries and none of them is a profiler (no rocprof, rocminfo, omniperf or metrix anywhere under toolchain/). Every number in this project, this round included, is therefore derived from wall time and byte counts, and this is the one question where that is not enough: five hypotheses about this node have been refuted by measurement and none of them was the answer.",
+  "verdict": "five readings refuted, each by a measurement and not by an argument: not row-scheduling bound (bare kernel 210.5 GB/s alone), not a strided view (strides 128/6144 = contiguous), not a matcher failure (the debug line shows the pattern matched), not the weight's placement (xbuf and wbuf are both ROCm0), not the producer (0.6%). What is left is that the same fused launch, same shape, contiguous input, device tensors, a real producer, takes ~700 us alone and ~2610 us inside the graph, reproducibly on both instruments, while the routed experts in the same graph read slightly faster than alone. The next step is not another hypothesis from outside: it is either a bisection of the model graph around that node or a profiler this platform does not ship.",
+  "candidate": "69 ms of the 2048-token batch, the gap between 94 ms in the graph and 25.3 ms for the same 36 calls alone"
+ },
+
+ "hyper_connections": {
+  "traffic": "4 F32 streams of hc_dim 10240 (qwen4exp.hyper_connection.count 4, low_rank 320) is 163,840 B a token a sublayer, plus the down projection's read and the up projection's write of [10240, T]: ~56 GB per 2048-token batch, 27 MB a token - more than the 21 MB a token the routed experts read.",
+  "measured_ms": 289.5,
+  "bound_ms": 266,
+  "reading": "at 92% of the 211 GB/s the lm head reaches, this block is already bandwidth-bound; what it needs is not a kernel but a narrower representation of the streams."
+ },
+
+ "what_was_ruled_out": {
+  "host_overhead": "50-100 ms of a 1730 ms prompt, not 230 (the GPU timeline's sum excludes small gaps the server's compute figure counts)",
+  "parallel": "1 against 8 on the gufo protocol: 1143.1 against 1188.9, inside the protocol's +-4%",
+  "the_model_file": "switching to UD-IQ4_XS makes prefill slower, not faster (1099.8 against 1118.7 at 2K, 1298.8 against 1362.1 at 8K)",
+  "already_tried_and_lost": "docs/dead-ends.md: F16 weights for the routed experts in glu3 (+5% slower), waves along the expert rows (+16% / +38%), wider BN tiles (BN 256 spills, 192 and 64 slower), a counting sort for expert ordering (-4%)"
+ },
+
+ "production_config": {
+  "why": "every other number in this file is the manager profile - mtp off, f16 K/V, parallel 1, ctx 262144. The app runs MTP with two drafts, a q8_0 K/V cache, four slots and ctx 768000, and none of those knobs had been measured for prefill. The app's own server cannot be reproduced beside itself (768000 x 4 slots asks for a 63.7 GiB compute buffer and does not fit a 96 GB carve while a second server exists, and the draft will not load outside the manager's environment), so the knobs are isolated one at a time on the manager profile instead.",
+  "method": "tmp/kvr/with_server.py --model ba09dd01dc9c5fd1df9d --no-disk --set <knobs> parallel=1 context=262144 -- python tmp/qk/send_depths.py --lengths 2048,8192,16384 --offset 40000, all four arms at the SAME offset: the text alone moves this bench by ~5% between offsets (1118.7 at offset 3000 against 1181.1 at 61000 for the same command), so only same-offset arms compare",
+  "t_s": {
+   "f16 K/V, mtp off (baseline)": {"2048": 1122.5, "8192": 1369.2, "16384": 1364.4},
+   "q8_0 K/V, mtp off": {"2048": 1162.3, "8192": 1377.1, "16384": 1351.0},
+   "f16 K/V, mtp on (2 drafts)": {"2048": 1064.6, "8192": 1279.8, "16384": 1295.5},
+   "f16 K/V, mtp on, STRIX_SPEC_DRAFT_UBATCH=8192": {"2048": 1034.7, "8192": 1285.0, "16384": 1297.6}
+  },
+  "reading": {
+   "kv_quant": "neutral: +3.5% / +0.6% / -1.0% against f16, no consistent direction. The 1-2% the dead-ends entry predicted is not there.",
+   "mtp": "a real cost, consistent at every length: -5.2% / -6.5% / -5.1%. The draft context prefills the whole prompt too. It is a trade, not a loss - MTP is worth ~+60% on decode - but it is the only knob of the four that moves prefill, and it explains the app's own reading: at 16384 tokens this configuration measures 1295.5 against the 1300 the user observes.",
+   "draft_ubatch": "the draft's ubatch is capped at 2048 (patches/apply_spec_draft_ubatch.py: at ctx 262144 / ubatch 8192 the draft asks for 3488 MiB and the load dies), so an 8192-token prompt is four draft passes, each re-reading the draft's weights. Raising it to 8192 is neutral to worse (-2.8% / +0.4% / +0.2%), so the draft's prefill cost is not the number of passes."
+  },
+  "verdict": "the configuration is not leaving anything on the table: the only knob that moves prefill is the one that buys decode, and the app's 1300 is exactly what this build does at 16K with MTP on. This also closes the line of enquiry that should have been opened first - the user's own settings were never the problem, and the 1300 is not a misconfiguration."
+ },
+
+ "levers": {
+  "1_the_routed_experts_additive_phases": {
+   "prize_ms": 125,
+   "share_of_a_2048_token_batch": "7.8%",
+   "confidence": "low. The additivity is measured and reproducible; the cure is not identified. docs/dead-ends.md has already spent F16 weights, waves along the expert rows, wider and narrower tiles and prefetch depth on this kernel, and this round's register-cap experiment came back inside the noise, which removes the spills explanation the LDS-double-buffer rewrite rested on. What is left is the barrier at mmb.cu:771-773, which is untried and is the only structural serialisation left in the loop.",
+   "if_attempted": "double-buffer Ag/Au/Bs by step parity and move the dequant one step earlier so it uses registers loaded two steps back; that needs BN 64 to fit 58 KB of LDS, and BN 64 costs 50% more dequant at 8156 tokens where an expert averages 160 rows."
+  },
+  "2_the_delta_net_output_norm": {
+   "prize_ms": 69,
+   "share_of_a_2048_token_batch": "4.3%",
+   "confidence": "unknown. Five hypotheses refuted by measurement, no mechanism, and this platform ships no profiler to ask the hardware directly."
+  },
+  "3_expectations": "gufo's 1628 is their own executor and kernels (their own llama.cpp baseline reads 489.59 t/s on this file), 3.33x stock; this stack is 2.43x. Everything this round measured says the two blocks that could close more of it are already at 79-90% of their own ceilings, and each remaining candidate has either been spent by the project or failed to resolve. The honest position is that the prefill is near where this design lands at 2048 tokens, and a next real step would be an angle neither this round nor dead-ends has tried - not a better version of one already here."
+ },
+
+ "not_measured": [
+  "the down projection's desc-entry count on this routing (assumed the same as gate/up)",
+  "any per-kernel hardware counter - every bandwidth and TFLOPS figure here is derived from wall time and byte counts, not from a profile counter",
+  "the CU's LDS size on gfx1151, which fixes how many glu3 blocks are resident"
+ ]
+}

@@ -979,6 +979,14 @@ temperature 0.7, the agent probe, the fault probes, the prefix-cache agent workl
 stress (`tmp/r043/gates_043.log`). Tried and dropped: F16 weights for the routed experts, waves along the expert rows,
 BF16 copies of the Q8_0 dense weights ([dead-ends.md](dead-ends.md)).
 
+**XRES and the head (0.4.4, 2026-10-05).** A reader found 0.4.3 wrong under llama-perplexity at -ub 512 and 2048
+(issue #7). XRES had the HC gate mix read the combine's residual output, which the graph does not list as its input;
+the last layer's residual has no later reader, so the head mix's down projection output could be placed over its
+first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 39516 and -ub 2048 17.48 against
+2.8755 and 2.8511 with XRES off; with the fix the two agree at -ub 512, 1024, 2048 and 4096, and the three probes
+give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
+512-row floor, and with MTP the residual is a graph output.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

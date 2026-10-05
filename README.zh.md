@@ -35,7 +35,9 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 测量（`-b 8192 -ub 8192 -fa 1`，并导出应用使用的开关）：UD-IQ4_XS 预填充 1254 t/s（pp2048）、生成
 27.8 tok/s（tg128，关闭 MTP），与 Windows 相同；UD-Q4_K_XL 为 804 和 26.0（[帖子](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)），
 当时调优过的专家内核只针对 UD-IQ4_XS 里的量化类型。0.4.2 起也覆盖了 UD-Q4_K_XL 的类型：本机 2K token 的提示
-预填充 876 → 1127 t/s，95.6K 为 850 → 1054；它的生成速度本来就到了读取量多 8.5% 所允许的水平。
+预填充 876 → 1127 t/s，95.6K 为 850 → 1054；它的生成速度本来就到了读取量多 8.5% 所允许的水平。该模型的其他量化
+版本也能加载、正常回答，但走的是 llama.cpp 原版内核，预填充相应更慢：调优内核只针对这两个文件
+（[#8](https://github.com/rulith-dev/rulith-inference/issues/8)）。
 这些开关是 [tools/manager.py](tools/manager.py) 中的 `HIP_GATES` 和 `HIP_QSA_GATES`；不设置时，服务端
 接近原版 llama.cpp。
 

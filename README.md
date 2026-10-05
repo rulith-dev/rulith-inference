@@ -39,7 +39,9 @@ and measured it with `llama-bench` (`-b 8192 -ub 8192 -fa 1`, with the app's swi
 UD-IQ4_XS 1254 t/s prefill (pp2048) and 27.8 tok/s decode (tg128, MTP off), the same as on Windows;
 UD-Q4_K_XL 804 and 26.0 ([thread](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)): the tuned expert kernels covered only the quant types inside
 UD-IQ4_XS. Since 0.4.2 they cover UD-Q4_K_XL's as well: its prefill here went 876 → 1127 t/s on a 2K-token prompt and
-850 → 1054 on 95.6K; its decode was already at what its 8.5% larger reads allow. The switches are
+850 → 1054 on 95.6K; its decode was already at what its 8.5% larger reads allow. Other quantizations of the model
+load and answer, but run on llama.cpp's stock kernels and prefill correspondingly slower: the tuned kernels target
+these two files ([#8](https://github.com/rulith-dev/rulith-inference/issues/8)). The switches are
 `HIP_GATES` and `HIP_QSA_GATES` in [tools/manager.py](tools/manager.py); without them the server runs
 close to stock llama.cpp.
 

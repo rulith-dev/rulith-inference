@@ -29,7 +29,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.4.3'
+VERSION = '0.4.4'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'

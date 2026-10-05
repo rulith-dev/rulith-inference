@@ -94,6 +94,8 @@ PATCH_ORDER = [
     "apply_decode_small_kernels_040", "apply_ab_switch_041", "apply_gdn_records_041", "apply_ple_wake_041",
     "apply_spec_sampling_042", "apply_mmb_kq_042",
     "apply_prefill_043",
+    "apply_moe_glu_kq_perf",   # last: it anchors in the norm prints apply_prefill_043 adds
+    "apply_xres_fix_044",       # after every patch that touches ggml-cuda.cu (0.4.4, issue #7)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
