@@ -987,6 +987,23 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
+### The draft head's low-rank pre-score (0.4.6)
+
+The MTP draft picks one token a step, yet read a whole output projection to do it: 338 MB for the IQ4_XS
+head, whose first choice agreed with the model's Q6_K projection on 96.5-97% of hidden states (4000 each
+from English, Chinese and held-out own conversations). Coarser copies agree less: Q3_K 92-95%, IQ3_XXS
+90-94%, Q2_K 85-91%. A rank-512 pre-score fitted on the hidden states' second moment (W L Q_r with
+Sigma = L L^T, rows Q8_0, 135 MB) picks 512 candidates instead, and only their rows of the model's own
+Q6_K projection are multiplied; the exact first choice is among them 99.98-100% of the time (99.90% on own
+conversations, which the fit did not see). Rank 256 would read 68 MB but keep 97.2-99.4%. MTP decode at the
+user's draft settings (2 / 0), three alternating pairs: greedy 42.6 -> 44.2 tok/s, sampled 42.0 -> 44.0,
+acceptance 0.705 = 0.705 greedy and 0.687 -> 0.702 sampled, greedy output identical; at 21K the two run at
+the same speed.
+
+A draft window (the draft catching up only a prompt's last 8K positions) was measured with it and left out:
+prefill at 80K rose 3.7% to the MTP-off speed, but on a 21K summary the acceptance fell 4-7 points, and with
+the disk tier on decode ran at a third of its speed.
+
 ## Correctness
 
 Two bugs that produced wrong output rather than slow output, both found late because the standard

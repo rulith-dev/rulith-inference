@@ -67,12 +67,11 @@ automatically when they are in the folder and left off when they are not, and th
 page says which of the two it did not find. Without the draft, decode is about 40% slower.
 (`mtp-…-shared-Q8_0.gguf` works in place of file 4; the two are within 1% of each other.)
 
-**One more, optional: the draft head** — [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf), 349 MB,
+**One more, optional: the draft head** — [`mtp-Qwen3.8-Flash-Next-head-lr512.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf), 149 MB,
 from this project's [releases page](https://github.com/rulith-dev/rulith-inference/releases). Put it in the
 same folder as file 4. On the next rescan the app combines the two into
-`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf` (a few seconds, once) and prefers it: decode
-is 5% faster on English and 9% on Chinese with the same acceptance rate, which is the configuration
-the numbers below were measured with. See [section 5](#5-optional-the-faster-draft-head-5-9-decode).
+`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-lr512.gguf` (a few seconds, once) and prefers it: drafting
+reads 135 MB instead of a 338-521 MB output projection, with the same or better acceptance. See [section 5](#5-optional-the-faster-draft-head-5-9-decode).
 
 ### Downloading
 
@@ -92,7 +91,7 @@ foreach ($f in
   aria2c -x 8 -s 8 -c -d $dir -o (Split-Path $f -Leaf) "$base/$f"
 }
 # optional: the draft head (section 5)
-aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf"
+aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf"
 ```
 
 If Hugging Face is slow or unreachable where you are, use the mirror: replace `huggingface.co` in
@@ -165,19 +164,25 @@ devices on your network use it and sets an API key for them; Model › Logs show
 
 ## 5. Optional: the faster draft head (+5–9% decode)
 
-The decode figures above were measured with a draft file that carries its own IQ4_XS output
-projection instead of borrowing the model's; it is 5% faster on English and 9% on Chinese, with the
-same acceptance rate. Everything else on this page works without it.
-
 Unsloth's `shared-*` drafts have no output projection of their own: every draft step streams the
-model's 521 MB one. The projection is a single tensor, so it is shipped on its own —
-`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`, 349 MB, on the
-[releases page](https://github.com/rulith-dev/rulith-inference/releases). Download it into the model's
-folder, next to file 4, and press **Rescan** under Model › Library. The app writes
-`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4_xs.gguf` beside them (a byte-for-byte splice of the
-two files, a few seconds, done once; it is the only file the app ever writes into a model folder),
-reports it in a notice, and every profile that has not chosen a draft by hand uses it from then on.
-The draft list under Model › Configuration shows all three.
+model's 521 MB one to pick a single token. Two downloads on the
+[releases page](https://github.com/rulith-dev/rulith-inference/releases) shorten that. Everything else on
+this page works without either.
+
+- `mtp-Qwen3.8-Flash-Next-head-lr512.gguf`, 149 MB (0.4.6, the one to use): a rank-512 pre-score of the
+  vocabulary picks 512 candidates, and only their rows of the model's own projection are computed. The
+  model's first choice is among them 99.9-100% of the time; decode is 3.6% faster greedy and 4.9%
+  faster sampled than with the head below, greedy output unchanged.
+- `mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`, 349 MB (0.1.2): the draft's own IQ4_XS copy of the
+  projection, 5% faster than borrowing the model's on English and 9% on Chinese. The decode figures
+  above were measured with it.
+
+Download one into the model's folder, next to file 4, and press **Rescan** under Model › Library. The
+app writes `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-<lr512 or iq4_xs>.gguf` beside them (a
+byte-for-byte splice of the two files, a few seconds, done once; it is the only file the app ever writes
+into a model folder), reports it in a notice, and every profile that has not chosen a draft by hand uses
+it from then on. With both, the lr512 one is used, and a profile saved with the iq4_xs one moves to it.
+The draft list under Model › Configuration shows them all.
 
 Building the head yourself instead needs a source checkout with the toolchain:
 [install.md, section 5](install.md#5-model-files).

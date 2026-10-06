@@ -58,6 +58,8 @@
   "ggml/src/ggml-cuda/vecdotq.cuh": "3b879a937d5143902db4cae2530529c32fd464dbfb822a7fe31875aba57707ce",
   "ggml/src/ggml.c": "36a6e56f5da3e998075f13937bb1e078729c79c4747bc917b8bc06c4dcabe950",
   "include/llama.h": "3007ca41123d654cc593386e1fe8eaedb60c07e9f126d4921d584be6bc9be282",
+  "src/llama-arch.cpp": "6de26cbeecfce19f5b45bfa128c7e318a6a557b145f52b8c07c108e95b664913",
+  "src/llama-arch.h": "45feff5722cb46554f5e8e13ecbe08969d4437a4e78d90bcd0d7946b6868c041",
   "src/llama-batch.cpp": "2e8917f6c103405d2b75b6683c37c8c60c9cd1758547451e239b7213ce27a8b5",
   "src/llama-batch.h": "568cef05377579b3db763404064155e75ddd4a18507208c1d017ae8560ea0261",
   "src/llama-context.cpp": "1a36d9692964bd25470ff552ff67f404977ae47ce23b773a9083bc78f479105d",
@@ -75,11 +77,11 @@
   "src/llama-memory-recurrent.cpp": "14d3bcf1ee970cc568fc2b884fa7a66a4afa119ad312601083580e01692c2fe1",
   "src/llama-memory-recurrent.h": "65c41019f0660104fd9fa6db01fc8a3d30948ccbb1776ae64b92439768072bbd",
   "src/llama-model.cpp": "6fce3df54968e46ce27bdbf2b1c1560f0eb4274e8ba63177665597b31f57b24a",
-  "src/llama-model.h": "f611479d23bcc4aadf2e816fab97885c2941c4f98211c8ca48000d5b709aac90",
+  "src/llama-model.h": "75ccfd047c34a47c83140faee66a756eb0d6d98bbe7862568828ab5f8b6a5138",
   "src/models/block-graph.inc": "716077d2dd61f3d7edb94945eaf1cd4aa2bb86f452eff22832d9cf279d55ec07",
   "src/models/delta-net-base.cpp": "bc3ff0fc6e312a0e848cbe19ff1772aac7ea703ee86379d7b094a522490438f9",
   "src/models/models.h": "a47d4049f2e5385a0f38465fd85d2ff99f47c3bf7629c92bf2706e10ccc56246",
-  "src/models/qwen4exp.cpp": "0eb2d2d0715d249a829c8d839b45ff6122b6e644222264c30a58435df8f7ffc3",
+  "src/models/qwen4exp.cpp": "696d693c29fa03c9f0e19d5016daf7f24cdf8f09868dd7625f5dfeed07d7a65c",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "550d8890df37065c73975b626134e78b6b2ac71d59be3c54e6c7ea18e8a1eb33",
   "tools/server/server-common.cpp": "e2a5ae4ade6846cfc872c1d4a8f60415ada01b8d659ba70bc481ded9640ad890",
@@ -286,6 +288,14 @@
   "include/llama.h": {
    "git_blob": "1a2cad1d0abef7ff8a2476721f500b2b52da0e20",
    "sha256": "9d50261c7dfa0273f7ef70fc9d10ba5f86156ca003398efec0c5a502cb5e64aa"
+  },
+  "src/llama-arch.cpp": {
+   "git_blob": "c5e06fe28993366d5221008e9968ed6c52ed4495",
+   "sha256": "2ab7d76a012ae6d764d1f409f981fe7971320541a97464a6235231c499981b37"
+  },
+  "src/llama-arch.h": {
+   "git_blob": "b8d15e7edd512a2f199c5ed8a50b9cb4fce5d580",
+   "sha256": "1486790691c400da57f2f2453cac00cde856ad387137c2cd22f0e8c825756809"
   },
   "src/llama-batch.cpp": {
    "git_blob": "2b98a552f48f73ed7c29c2e3e48383245f5d39ec",

@@ -485,11 +485,29 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(data[:40],b'A'*16+b'\0'*16+b'B'*8);self.assertEqual(data[64:96],b'H'*32)
         self.assertEqual(m.metadata(out)['general.architecture'],'qwen4exp')
         self.assertFalse(out.with_suffix('.part').exists())
-        # only a lone output.weight may be appended, and only once
+        # the low-rank head: its tensors keep their offsets within the appended data section
+        lr=self.root/'models'/'mtp-Fam-head-lr512.gguf';gguf_tensors(lr,[('blk.48.nextn.lr_proj.weight',[4],0,b'P'*16),('blk.48.nextn.lr_scores.weight',[2],0,b'S'*8)])
+        out2=self.root/'models'/'merged-lr.gguf';m.merge_draft_head(base,lr,out2)
+        lay2=m.gguf_layout(out2);data2=out2.read_bytes()[lay2['data_start']:]
+        self.assertEqual([t[0] for t in lay2['tensors']],['a','b','blk.48.nextn.lr_proj.weight','blk.48.nextn.lr_scores.weight'])
+        for t,content in zip(lay2['tensors'][2:],(b'P'*16,b'S'*8)):self.assertEqual(data2[t[3]:t[3]+len(content)],content)
+        # only output.weight or the low-rank pair may be appended, and only once
         two=self.root/'models'/'mtp-Fam-head-two.gguf';gguf_tensors(two,[('output.weight',[2],0,b'x'*8),('other',[2],0,b'y'*8)])
         with self.assertRaises(ValueError) as caught:m.merge_draft_head(base,two,self.root/'models'/'x.gguf')
         self.assertEqual(caught.exception.code,'head_mismatch')
         with self.assertRaises(ValueError):m.merge_draft_head(out,head,self.root/'models'/'y.gguf')
+    def test_low_rank_head_is_preferred_and_saved_profiles_move_to_it(self):
+        iq=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf');gguf(iq)
+        lr=self.draft.with_name(self.draft.stem+'-head-lr512.gguf');gguf(lr)
+        with patch.object(m,'DEFAULT_DRAFT',self.root/'models'/'missing-head.gguf'):
+            m.catalog(True)
+            self.assertEqual(Path(m.family_draft()).resolve(),lr.resolve())
+            model={**self.model,'path':str(self.file.with_name(m.MODEL_FAMILY+'-UD-IQ4_XS.gguf'))}
+            s=m.settings();s['profiles'][model['id']]={'draft':str(iq)};m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(Path(m.profile(model)['draft']).resolve(),lr.resolve())
+            # a draft the user picked that is not an older head stays
+            s['profiles'][model['id']]={'draft':str(self.draft)};m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(Path(m.profile(model)['draft']).resolve(),self.draft.resolve())
     def test_rescan_merges_a_downloaded_head_with_the_shared_draft_once_and_prefers_it(self):
         head=self.file.with_name('mtp-'+m.MODEL_FAMILY+'-head-iq4_xs.gguf');gguf_tensors(head,[('output.weight',[4],0,b'H'*16)])
         merged=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf')

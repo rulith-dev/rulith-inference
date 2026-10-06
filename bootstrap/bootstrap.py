@@ -96,6 +96,8 @@ PATCH_ORDER = [
     "apply_prefill_043",
     "apply_moe_glu_kq_perf",   # last: it anchors in the norm prints apply_prefill_043 adds
     "apply_xres_fix_044",       # after every patch that touches ggml-cuda.cu (0.4.4, issue #7)
+    "apply_mtp_lowrank_head",   # 0.4.6: the draft head scored through a low-rank pre-score
+    "apply_ot_host_buft",       # 0.4.6: -ot accepts ROCm_Host (weights outside the carve)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

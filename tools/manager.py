@@ -487,25 +487,29 @@ def gguf_layout(path):
 
 
 def merge_draft_head(base, head, out):
-    """Write `out` = the draft `base` (Unsloth's mtp-*-shared-*.gguf) with the one tensor of `head`
-    (output.weight, the draft's own quantised LM head) appended - the file tools/make_draft_head.py
-    produces, made here from a downloaded 340 MB head instead of a 50 GB target shard and a
-    toolchain. The base's key-value and tensor-info bytes are copied verbatim: offsets are relative
-    to the data section, whose alignment is kept, so nothing has to be re-encoded."""
+    """Write `out` = the draft `base` (Unsloth's mtp-*-shared-*.gguf) with the tensors of `head`
+    appended - the file tools/make_draft_head.py produces, made here from a downloaded head instead of
+    a 50 GB target shard and a toolchain. A head is either the draft's own quantised LM head
+    (output.weight, *-head-iq4_xs) or, since 0.4.6, the low-rank pre-score that lets the draft use the
+    target's head for a few candidates only (blk.N.nextn.lr_proj / lr_scores, *-head-lr512). The
+    base's key-value and tensor-info bytes are copied verbatim, and so is the head's data section:
+    offsets are relative to the data section, whose alignment is kept, so nothing is re-encoded."""
     base, head, out = Path(base), Path(head), Path(out)
     b, h = gguf_layout(base), gguf_layout(head)
-    if (any(t[0] == 'output.weight' for t in b['tensors']) or [t[0] for t in h['tensors']] != ['output.weight']
+    names = [t[0] for t in h['tensors']]
+    if (not names or any(t[0] in names for t in b['tensors']) or h['alignment'] != b['alignment']
+            or (names != ['output.weight'] and any(not n.startswith('blk.') or '.nextn.lr_' not in n for n in names))
             or metadata(head).get('general.architecture') != metadata(base).get('general.architecture')):
         fail('head_mismatch', head=head.name, base=base.name)
-    name, dims, ttype, _ = h['tensors'][0]
     # a file with no tensors ends before its (aligned) data section would start, hence the clamp
     align, base_bytes = b['alignment'], max(0, b['size'] - b['data_start'])
     offset = (base_bytes + align - 1) // align * align
-    info = (struct.pack('<Q', len(name.encode())) + name.encode() + struct.pack('<I', len(dims))
-            + b''.join(struct.pack('<Q', d) for d in dims) + struct.pack('<IQ', ttype, offset))
+    info = b''.join(struct.pack('<Q', len(name.encode())) + name.encode() + struct.pack('<I', len(dims))
+                    + b''.join(struct.pack('<Q', d) for d in dims) + struct.pack('<IQ', ttype, offset + off)
+                    for name, dims, ttype, off in h['tensors'])
     part = out.with_suffix('.part')
     with base.open('rb') as src, head.open('rb') as hd, part.open('wb') as dst:
-        dst.write(b'GGUF' + struct.pack('<IQQ', 3, len(b['tensors']) + 1, b['n_kv']))
+        dst.write(b'GGUF' + struct.pack('<IQQ', 3, len(b['tensors']) + len(names), b['n_kv']))
         src.seek(b['span'][0]); dst.write(src.read(b['span'][1] - b['span'][0]))
         dst.write(info); dst.write(b'\0' * (-dst.tell() % align))
         src.seek(b['data_start'])
@@ -606,7 +610,8 @@ def family_draft():
     if DEFAULT_DRAFT.is_file():
         return str(DEFAULT_DRAFT)
     drafts = [m['path'] for m in catalog()['models'] if m.get('role') == 'draft' and MODEL_FAMILY in m['filename'] and not m.get('error')]
-    drafts.sort(key=lambda p: ('-head-' not in p.lower(), 'Q4_K_M' not in p, p))
+    # the low-rank head (0.4.6) drafts the same tokens as the others, faster
+    drafts.sort(key=lambda p: ('-head-' not in p.lower(), '-head-lr' not in p.lower(), 'Q4_K_M' not in p, p))
     return drafts[0] if drafts else None
 
 
@@ -626,6 +631,11 @@ def profile(model):
     # dropped here rather than echoed to the page, which would send them straight back and have
     # validate_profile() refuse the whole profile as unknown.
     cfg = {**default, **{k: v for k, v in saved.items() if k in DEFAULTS}}
+    # a profile saved with an older merged head moves to the low-rank one once that is on disk (0.4.6): it
+    # drafts the same tokens, faster, and nobody chose the older head over it
+    if ('-head-lr' in Path(default['draft']).name.lower() and '-head-' in Path(cfg['draft'] or '').name.lower()
+            and '-head-lr' not in Path(cfg['draft']).name.lower()):
+        cfg['draft'] = default['draft']
     # thinking was a switch before it was a level. Normalise here and not only in
     # validate_profile(): this is what the configuration page displays, and a stored `true`
     # reached it as a level called "true" whose help text does not exist.

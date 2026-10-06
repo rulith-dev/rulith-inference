@@ -58,7 +58,7 @@ token 真实文本；解码为在同一文本的 86K token 之后、以及只有
 | **模型**，必需 | Unsloth 的 Qwen3.8-Flash-Next-GGUF，[`UD-IQ4_XS`，三个分片](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS) | 93.7 GB |
 | **MTP 草稿**：推测解码，解码约 +60% | [`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf) | 1.9 GB |
 | **视觉投影**：图像输入 | [`mmproj-F16.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/mmproj-F16.gguf) | 904 MB |
-| **草稿头**，本项目提供：草稿自带的 IQ4_XS 输出投影，解码 +5–9% | [`mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.1.2/mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf) | 349 MB |
+| **草稿头**，本项目提供：先用秩 512 的低秩打分挑出 512 个候选，只对它们用模型自己的输出投影精确计算；解码比 0.1.2 的 IQ4_XS 草稿头快 3.6–4.9% | [`mtp-Qwen3.8-Flash-Next-head-lr512.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf) | 149 MB |
 
 四样都平铺放进同一个文件夹：应用按文件名在模型第一个分片旁边找草稿、投影和草稿头。下载命令见
 [docs/getting-started.zh.md](docs/getting-started.zh.md)。
@@ -113,6 +113,7 @@ llama-server 通过防火墙），还可以设置 API 密钥，请求须以 `Aut
 | **更短的提示词处理** | 把一次提示词处理放在一条连续的 GPU 时间线上看，路由专家约占 2K token 批次的 40%，它周围还有一些本不必单独占一趟的工作。现在共享专家带门控的输出在路由专家的加权求和里一并加上；超连接的几路流在下一个投影读取它们的地方现算，不再以 F32 写出；delta net 的 q/k 归一化合成一个内核；专家的行列表从 64 个 token 起就排序（以前要超过 4096）；提示词分块要用的逐层嵌入行，在这一趟要用之前就从 SSD 读好。全新提示词 1K / 2K / 4K / 8K / 16K token：920 / 1072 / 1122 / 1267 / 1245 → 964 / 1148 / 1227 / 1302 / 1301 t/s（0.4.3）；输出逐位不变。 |
 | **UD-Q4_K_XL 的专家走矩阵核心** | 调优过的预填充内核是给 UD-IQ4_XS 里的量化类型写的，UD-Q4_K_XL 的专家（Q4_K、Q5_1）只能走 llama.cpp 的通用路径。现在有了专门的内核：Q4_K_XL 预填充 2K token 876 → 1127 t/s，95.6K 为 850 → 1054（0.4.2）。困惑度在误差范围内不变；UD-IQ4_XS 不受影响。 |
 | **解码小内核和 BF16 副本** | 在 HIP 图里逐个派发打时间戳的剖析显示，每个 token 有约 3 ms 花在受延迟限制的小内核上：融合的逐元素链每次启动都要取一大段展开的通用寻址代码（8.4 → 2.7 us），top-k 没用 DPP。另有 264 个 F32 权重（路由、门控、注入）的值全是 bfloat16，换成 BF16 副本，乘积不变、读的字节减半。单个对话、关闭 MTP，3K 上下文 25.9 → 27.3 tok/s（0.4.0），输出不变。 |
+| **更省的草稿头** | 草稿每一步都要读完整的输出投影才能挑出一个 token：IQ4_XS 草稿头也有 338 MB，而且它挑出的第一名和模型自己的只有 96.5–97% 一致。现在先用秩 512 的低秩打分（135 MB）在全词表里挑出 512 个候选，只对它们用模型自己的输出投影精确计算；模型的第一名落在候选里的比例为 99.9–100%（英文、中文，以及拟合时没用到的对话）。比 IQ4_XS 草稿头解码贪心 +3.6%、采样 +4.9%（接受率 0.687 → 0.702），贪心输出逐位不变（0.4.6）。 |
 | **采样时的 MTP** | 温度大于 0 时，草稿 token 只有在模型恰好抽中同一个 token 时才算数。现在草稿头按请求的采样设置从自己的分布里抽候选，再用推测采样逐个接受，接受的概率保证每个 token 仍然严格服从模型单独采样时的分布：温度 0.7 时第一个候选的保留率从 63% 提到 67%。保留率低，每步值得猜的就少，所以采样请求在一两个对话时猜 2 个、三四个对话时猜 1 个。Jan 的默认设置下，单个对话 33.6 → 36.2 tok/s，三个对话 61.3 → 67.1（0.4.1）。贪心解码的输出逐位不变。 |
 | **三个正确性修复** | 推测验证批次跑了无 causal mask 的稠密注意力，长答案会跑偏并提前结束。图像输入曾以三种不同方式在 QSA 块机制里让服务端崩溃，第二个已加载的对话收到图片时还有第四种。 |
 | **测量仪表** | 逐图、逐派发、逐阶段计时，全部默认关闭，需设环境变量才启用。 |

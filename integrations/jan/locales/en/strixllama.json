@@ -206,7 +206,7 @@
       "mtpUnsupported": "Available for qwen4exp models",
       "noDraft": "No MTP draft found beside the model, so MTP is off. Put Unsloth's mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf in the model's folder and rescan: decode is about 60% faster with it.",
       "draftModel": "Draft model",
-      "draftHelp": "Add the draft head from the releases page (mtp-…-head-iq4_xs.gguf) to the model folder for faster drafting",
+      "draftHelp": "Add the draft head from the releases page (mtp-…-head-lr512.gguf) to the model folder for faster drafting",
       "draftHelpHead": "Uses the combined draft head",
       "draftMissing": "not in a scanned directory",
       "draftMax": "Draft length",

@@ -206,7 +206,7 @@
       "mtpUnsupported": "仅 qwen4exp 架构可用",
       "noDraft": "模型旁边没有 MTP 草稿，MTP 已关闭。把 Unsloth 的 mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf 放进模型文件夹并重新扫描：有它解码快约 60%。",
       "draftModel": "草稿模型",
-      "draftHelp": "把 Releases 页面上的草稿头（mtp-…-head-iq4_xs.gguf）放进模型文件夹，起草更快",
+      "draftHelp": "把 Releases 页面上的草稿头（mtp-…-head-lr512.gguf）放进模型文件夹，起草更快",
       "draftHelpHead": "正在使用合并后的草稿头",
       "draftMissing": "不在已登记的模型目录中",
       "draftMax": "草稿长度",
