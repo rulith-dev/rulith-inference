@@ -496,6 +496,18 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:m.merge_draft_head(base,two,self.root/'models'/'x.gguf')
         self.assertEqual(caught.exception.code,'head_mismatch')
         with self.assertRaises(ValueError):m.merge_draft_head(out,head,self.root/'models'/'y.gguf')
+    def test_experts_that_do_not_fit_the_carve_go_to_system_memory_from_the_last_layer(self):
+        tb={f'blk.{i}.ffn_{k}_exps.weight':100 for i in range(4) for k in ('gate','up','down')}
+        tb['blk.0.attn_q.weight']=50
+        with patch.object(m,'tensor_bytes',return_value=tb),patch.object(m,'gpu_need_bytes',return_value=1000):
+            self.assertEqual(m.host_expert_layers(self.model,{},dedicated=2000),[])        # fits: nothing moves
+            self.assertEqual(m.host_expert_layers(self.model,{},dedicated=800),[3])        # 200 over: one layer of 300
+            self.assertEqual(m.host_expert_layers(self.model,{},dedicated=500),[2,3])      # 500 over: two
+            self.assertEqual(m.host_expert_layers(self.model,{},dedicated=500,ram=(16<<30)+400),[3])  # system memory caps it
+            self.assertEqual(m.host_expert_layers(self.model,{},dedicated=0),[])           # carve unknown: leave it to the driver
+        with patch.object(m,'host_expert_layers',return_value=[46,47]):
+            args=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
+            self.assertEqual(args[args.index('-ot')+1],r'blk\.(46|47)\.ffn_(gate|up|down)_exps\.weight=ROCm_Host')
     def test_low_rank_head_is_preferred_and_saved_profiles_move_to_it(self):
         iq=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf');gguf(iq)
         lr=self.draft.with_name(self.draft.stem+'-head-lr512.gguf');gguf(lr)

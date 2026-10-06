@@ -14,7 +14,7 @@ folder, press *Load model*, chat.
 | | |
 |---|---|
 | Machine | **Ryzen AI Max+ 395** — Radeon 8060S, `gfx1151`, 128 GB unified memory. The bundled kernels are compiled for gfx1151 only; on any other GPU the model will not load. |
-| GPU carve | **96 GB**, set in the BIOS (the option is usually called *UMA frame buffer size* or *dedicated graphics memory*). At 64 GB the 93.7 GB model spills into shared memory and decode is 28% slower; no software setting recovers that. |
+| GPU carve | **96 GB**, set in the BIOS (the option is usually called *UMA frame buffer size* or *dedicated graphics memory*). 64 GB works too since 0.4.7: the experts that do not fit are read from system memory at the same speed. |
 | Windows | 11 |
 | Disk | about 100 GB for the model files, 0.5 GB for the app |
 | Download | five files, about 97 GB, from Hugging Face |

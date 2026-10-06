@@ -20,14 +20,18 @@ the machine set up correctly, a toolchain, a build, and the model files. The bui
 |---|---|
 | GPU | Radeon 8060S / **gfx1151** (Ryzen AI Max+ 395). Other RDNA 3.5 parts are untested; the kernels are compiled for this target only. |
 | Memory | 128 GB unified |
-| **GPU carve** | **96 GB**, set in the BIOS |
+| **GPU carve** | **96 GB** (or 64 GB since 0.4.7), set in the BIOS |
 | OS | Windows 11 |
 | Disk | ~110 GB for the model, ~15 GB for the toolchain, ~10 GB for the build |
 
-**Set the carve before anything else.** At 64 GB the 93.7 GB model does not fit: about 9.8 GB spills
-into shared memory and the driver pages during decode. Measured, 64 GB against 96 GB: prefill 839 vs
-942 t/s, decode 49.6 vs 38.6 ms/token, multi-turn 17-19 vs 26-30 tok/s — and the 64 GB arm had the
-*higher* power limit. No software setting recovers this. It leaves Windows 31.6 GB, which is enough.
+**Set the carve before anything else.** Up to 0.4.6 a 64 GB carve did not hold the 93.7 GB model: about
+9.8 GB spilled into shared memory where the driver put it - the KV cache and compute buffers - and decode
+was 28% slower (prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/token, measured 09-18). Since 0.4.7 the
+app works out what a load needs and keeps the experts of the last layers that do not fit in pinned system
+memory instead, which the GPU reads as fast as the carve: at 64 GB, with 12-16 layers' experts there,
+prefill and decode match 96 GB. 96 GB leaves Windows 31.6 GB and the KV pool the most room; 64 GB leaves
+Windows 63.6 GB, of which the pinned experts take 15-25 GB. Setting `STRIX_HOST_EXPERTS=0` in the
+environment turns the placement off.
 
 Raising the carve lowers the commit limit; on this machine that is better solved with a fixed large
 page file than by shrinking the carve back.
@@ -391,7 +395,8 @@ that still has `"shared_vram"` loads as if it did not.
 
 Where an allocation lands is the driver's choice: in the carve while it has room, otherwise in
 shared GPU memory, which is system RAM (Windows lets the GPU use up to half of it). At a 64 GB carve
-~9.8 GB of the model goes there and decode is 28% slower ([results.md](results.md)). The driver can
+~9.8 GB of the model went there and decode was 28% slower before 0.4.7 ([results.md](results.md)); the
+app now places experts in system memory itself so that the rest fits the carve. The driver can
 also put allocations there while the carve still shows free space, and then they take system RAM
 directly: GitHub issue #1 saw shared memory climb to its 15.8 GB limit on 0.1.8, where on this
 machine the same growth stayed in the carve. Either way every allocation counts against commit,

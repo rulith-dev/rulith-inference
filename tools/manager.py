@@ -432,7 +432,10 @@ def metadata(path):
         meta = {}
         for _ in range(count):
             key = string()
-            keep = key.startswith(('general.', 'split.')) or key.endswith(('.context_length', '.block_count'))
+            keep = key.startswith(('general.', 'split.')) or key.endswith(('.context_length', '.block_count',
+                # what gpu_need_bytes sizes the KV pool from
+                '.attention.head_count_kv', '.attention.key_length', '.attention.value_length', '.full_attention_interval',
+                '.attention.indexer.key_length'))
             val = value(u32(), keep)
             if keep and val is not None: meta[key] = val
         return meta
@@ -764,6 +767,94 @@ def kv_pool_cells(cfg):
     return pool
 
 
+# Experts that do not fit the carve live in pinned system memory, read by the GPU in place through ROCm_Host (0.4.7).
+# Left to the display driver, the overflow lands on whatever is allocated last - the KV cache and the compute buffers,
+# which every token reads in small pieces: at the 64 GB carve decode ran 28% slower (09-18), at the 96 GB carve a KV
+# pool past the carve cost 10-12% at long context. Experts are read whole, and from system memory as fast as from the
+# carve (tmp/vram64: ~230 GB/s either way; at the 64 GB carve with 12-16 layers' experts there, prefill and decode
+# matched the 96 GB carve). The estimate below sums what a load puts on the GPU, from the GGUF and the profile, with
+# the per-slot and per-ubatch terms measured from the runtime's own buffer report (tmp/vram64, v64_cal); the experts
+# of the last layers go to system memory until the rest fits, leaving HOST_EXPERT_MARGIN of the carve.
+MIB = 1 << 20
+CPU_TENSORS = ('token_embd.weight', 'per_layer_token_embd.weight')   # llama.cpp keeps these in system memory
+HOST_EXPERT_MARGIN = 3072 * MIB          # driver and context overhead plus headroom, measured ~1.5 GiB + 1.5
+KV_ELEM_BYTES = {'f16': 2.0, 'bf16': 2.0, 'q8_0': 34 / 32, 'q5_1': 24 / 32, 'q5_0': 22 / 32, 'q4_1': 20 / 32, 'q4_0': 18 / 32,
+                 'iq4_nl': 18 / 32}
+RS_BYTES_PER_SLOT = 469 * MIB            # qwen4exp's delta-net and conv states, one conversation (3747 MiB for 8)
+COMPUTE_BYTES_PER_UBATCH_TOKEN = 3522 * MIB / 8192 * 1.1
+DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # at the draft's 2048-token ubatch (kv-pool-draft-mask)
+
+
+def model_shards(model):
+    path = Path(model['path'])
+    split = re.search(r'-(\d{5})-of-(\d{5})\.gguf$', path.name)
+    if not split: return [path]
+    return [path.with_name(path.name[:split.start()] + f'-{i:05}-of-{int(split[2]):05}.gguf') for i in range(1, int(split[2]) + 1)]
+
+
+def tensor_bytes(paths):
+    """{tensor name: bytes in the file} over a model's shards, from consecutive offsets - no type table needed."""
+    out = {}
+    for path in paths:
+        lay = gguf_layout(path)
+        ts = sorted(lay['tensors'], key=lambda t: t[3])
+        end = lay['size'] - lay['data_start']
+        for i, t in enumerate(ts):
+            out[t[0]] = (ts[i + 1][3] if i + 1 < len(ts) else end) - t[3]
+    return out
+
+
+def gpu_need_bytes(model, cfg, tb):
+    """What a load of `model` with profile `cfg` puts on the GPU: weights, KV pool, recurrent states, compute buffers
+    and the MTP draft's own. qwen4exp only (the constants above are its); None for anything else."""
+    meta = metadata(Path(model['path']))
+    arch = meta.get('general.architecture')
+    if arch != 'qwen4exp': return None
+    cells, slots = kv_pool_cells(cfg), cfg.get('parallel', 1)
+    n_attn = meta[f'{arch}.block_count'] // max(1, meta.get(f'{arch}.full_attention_interval', 1))
+    kvh, kl = meta[f'{arch}.attention.head_count_kv'], meta[f'{arch}.attention.key_length']
+    vl, il = meta.get(f'{arch}.attention.value_length', kl), meta.get(f'{arch}.attention.indexer.key_length', 0)
+    elem = KV_ELEM_BYTES.get(cfg['kv'], 2.0)
+    per_cell_layer = kvh * (kl + vl) * elem + (il * 2 if cfg.get('qsa') else 0)
+    need = sum(v for k, v in tb.items() if k not in CPU_TENSORS) * 1.01        # rows padded on the GPU
+    need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT + cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN
+    if cfg.get('mtp') and cfg.get('draft') and Path(cfg['draft']).is_file():
+        need += Path(cfg['draft']).stat().st_size * 1.1 + cells * per_cell_layer + 300 * MIB
+        need += cells * DRAFT_MASK_BYTES_PER_CELL * draft_ubatch(cells) / 2048
+    return need + HOST_EXPERT_MARGIN
+
+
+def total_ram_bytes():
+    if os.name != 'nt': return None
+    ms = _MemoryStatus(); ms.dwLength = ctypes.sizeof(ms)
+    return ms.ullTotalPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)) else None
+
+
+def host_expert_layers(model, cfg, dedicated=None, ram=None):
+    """The layers whose experts this load keeps in system memory: none when it fits the carve, else the last layers'
+    until the rest does. Bounded by system memory, leaving 16 GiB of it to Windows and everything else."""
+    if os.environ.get('STRIX_HOST_EXPERTS') == '0': return []      # leave the overflow to the display driver
+    dedicated = dedicated_vram_bytes() if dedicated is None else dedicated
+    if not dedicated: return []
+    try:
+        tb = tensor_bytes(model_shards(model))
+        need = gpu_need_bytes(model, cfg, tb)
+    except (OSError, ValueError, KeyError, struct.error):
+        return []
+    if need is None or need <= dedicated: return []
+    ram = total_ram_bytes() if ram is None else ram
+    cap = max(0, (ram or 0) - (16 << 30)) if ram else float('inf')
+    per_layer = {}
+    for name, size in tb.items():
+        m = re.match(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$', name)
+        if m: per_layer[int(m[1])] = per_layer.get(int(m[1]), 0) + size
+    moved, out = 0, []
+    for layer in sorted(per_layer, reverse=True):
+        if need - moved <= dedicated or moved + per_layer[layer] > cap: break
+        out.append(layer); moved += per_layer[layer]
+    return sorted(out)
+
+
 # How the runtime says it ran out of device memory: ggml's allocator ("cudaMalloc failed: out of
 # memory"), the KV cache and graph reserves ("failed to allocate ... buffer"), and HIP's own name.
 OOM_SIGNS = ('out of memory', 'cudamalloc failed', 'hiperroroutofmemory', 'failed to allocate')
@@ -917,6 +1008,9 @@ def argv(model, cfg, net=None):
              '--chat-template-kwargs', json.dumps(kwargs, separators=(',',':'))]
     if cfg.get('vision', False):
         args += ['--mmproj', str(mmproj_path(cfg, model))]
+    host = host_expert_layers(model, cfg)
+    if host:
+        args += ['-ot', r'blk\.(%s)\.ffn_(gate|up|down)_exps\.weight=ROCm_Host' % '|'.join(map(str, host))]
     # this runtime reads the per-layer embedding table itself with offset I/O, so it must not be
     # pinned to CPU memory
     args += ['--load-mode', 'none', '--lazy-mode', 'on-direct']

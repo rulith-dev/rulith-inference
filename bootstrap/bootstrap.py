@@ -98,6 +98,8 @@ PATCH_ORDER = [
     "apply_xres_fix_044",       # after every patch that touches ggml-cuda.cu (0.4.4, issue #7)
     "apply_mtp_lowrank_head",   # 0.4.6: the draft head scored through a low-rank pre-score
     "apply_ot_host_buft",       # 0.4.6: -ot accepts ROCm_Host (weights outside the carve)
+    "apply_host_buft_padding",  # 0.4.7: host buffers pad quantized rows (experts in system memory)
+    "apply_dense_ubatch_own_cells",  # 0.4.7: issue #10, the image ubatch bound by the batch's own cells
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

@@ -987,6 +987,31 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
+### Experts in system memory (0.4.7)
+
+The GPU reads system memory as fast as the carve: a 4 GB streaming read measured 236 GB/s from hipMalloc,
+229-232 GB/s from hipHostMalloc (coherent or not), hipHostRegister'ed memory (coarse-grained or not) and
+hipMallocManaged, and the same with 90 GB of the carve held (tmp/vram64/membw.cpp). What made a small carve
+slow was what spilled: the driver puts the last allocations - KV cache, compute buffers - into shared memory.
+
+The manager now sums what a load puts on the GPU (weights outside token_embd and the per-layer table, KV
+pool and indexer keys by type, 469 MiB of delta-net state a slot, ~0.47 MiB of compute buffer a ubatch
+token, the MTP draft's file, KV and mask, 3 GiB margin; the constants from the runtime's buffer report) and,
+when that exceeds the carve, puts the experts of the last layers into ROCm_Host with `-ot` until the rest
+fits. At the 64 GB carve, UD-IQ4_XS, default profile:
+
+| | prefill, 8K fresh | decode, MTP off | MTP 2 / 0 greedy / sampled | carve / shared |
+|---|---|---|---|---|
+| driver spill (0.4.6) | 1321-1343 t/s | 27.3-27.6 tok/s | - | 66.7 / 13.1 GB |
+| experts in system memory, 12 layers (MTP off) | 1343-1368 | 28.5-28.6 | | 63.5 / 16.2 GB |
+| 16 layers (MTP on) | | | 43.7 / 43.1 tok/s | 64.2 / 21.5 GB |
+| 96 GB carve, for reference | 1335-1391 | 28.0-28.5 | 42.6-44.6 / 42.0-44.6 | |
+
+Host buffers had no row padding: MMQ read the 640-wide down experts' last row past its end into the next
+tensor and took those bytes as block scales, so every batch it ran (17 tokens up) came out NaN while the
+8192-token prefill (MMB) and decode (MMVQ) were right. They now pad and zero quantized rows as device buffers
+do; the f16, MTP and q8_0 probes give 0.4.4's bits at 64 GB with 16 layers' experts in system memory.
+
 ### The draft head's low-rank pre-score (0.4.6)
 
 The MTP draft picks one token a step, yet read a whole output projection to do it: 338 MB for the IQ4_XS
