@@ -987,6 +987,35 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
+### Waiting for a graph (0.4.9)
+
+A decode step is one HIP graph (~2,000 kernels for one conversation), then a wait for it. Standalone programs
+(tmp/amd/graph_launch_gap.cpp, graph_loop_gap.cpp; [ROCm/TheRock#8786](https://github.com/ROCm/TheRock/issues/8786))
+show where the GPU idles. A host poll of a stamp that the graph's last kernel writes into fine-grained host memory sees
+it 20-60 us after the write. hipStreamSynchronize returns 36-60 us after that for graphs of up to 500 nodes, 222 us at
+1,000, 654 us at 2,000 and ~1,140 us at 3,000. hipStreamQuery is as late, and the device schedule flags change nothing.
+A launch's last batch is not submitted until the host synchronizes or queries. In a loop of 2,000 nodes of 15 us with
+0.9 ms of host work between launches, the GPU idles 1.80 ms between graphs with the sync and 1.11 ms with an event
+query and a poll.
+
+The backend's synchronize now does that. A kernel writes a sequence number at the end of the stream, an event is
+recorded and queried once, and the host polls the number. Past 100 ms the runtime's sync takes over (a prefill
+ubatch; it also reports faults). The scheduler synchronizes before every input it copies, so a poll's round trip
+each time cost more than the poll saved (+0.06-0.31 ms a step). A stream nothing has gone into since it was last seen
+done is therefore not waited for at all; the graph, the async copies and event waits mark it.
+
+In-run A/B (STRIX_POLL_SYNC=ab STRIX_AB=16, medians of 256 steps a side; user profile at the 64 GB carve):
+
+| | runtime's sync | poll |
+|---|---|---|
+| one conversation, MTP off, step | 35.56-35.71 ms | 34.99-35.12 ms (-0.44 to -0.66) |
+| eight conversations, MTP off, step | 83.4 / 84.1 ms | 81.7 / 83.1 ms |
+| one conversation, MTP on, 6 prompts x 700 tokens (two alternations) | 43.20 / 43.10 tok/s | 43.86 / 44.04 tok/s |
+
+Every one of the six prompts was faster with the poll. Output is bitwise unchanged (the f16, MTP and q8_0 probes), and
+the edges, evict / restore, state-leak and vision stress probes pass. The agent harness computes the same tokens, and
+prefill is unchanged (156K: 1,233 t/s). The server uses 1.13 CPU cores while one conversation decodes, against 0.74.
+
 ### Prompt cuts, the placement estimate, many layers in system memory (0.4.8)
 
 The placement estimate (tools/manager.py) left a 512K q8_0 pool with MTP short at the 64 GB carve. Three things were
