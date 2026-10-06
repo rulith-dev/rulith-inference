@@ -3,7 +3,8 @@
 在一台 AMD Strix Halo 机器上、在 Windows 下，把 125B 的 MoE 模型跑快。
 
 目标平台：**Ryzen AI Max+ 395**（Radeon 8060S，gfx1151，128 GB 统一内存），模型
-**Qwen3.8-Flash-Next**（125B-A6B，Unsloth UD-IQ4_XS，93.7 GB），经打过补丁的 llama.cpp 服务。
+**Qwen3.8-Flash-Next**（125B-A6B），经打过补丁的 llama.cpp 服务：以 Unsloth UD-IQ4_XS（93.7 GB）为基准文件，
+UD-Q4_K_XL（111.3 GB）也经过调优。
 
 *[English](README.md)*
 

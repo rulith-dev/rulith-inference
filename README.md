@@ -3,7 +3,8 @@
 Serving a 125B mixture-of-experts model fast on one AMD Strix Halo machine, on Windows.
 
 Target: **Ryzen AI Max+ 395** (Radeon 8060S, gfx1151, 128 GB unified memory) running
-**Qwen3.8-Flash-Next** (125B-A6B, Unsloth UD-IQ4_XS, 93.7 GB) through a patched llama.cpp.
+**Qwen3.8-Flash-Next** (125B-A6B) through a patched llama.cpp: Unsloth's UD-IQ4_XS (93.7 GB) is the reference file,
+and UD-Q4_K_XL (111.3 GB) is tuned too.
 
 *[中文说明](README.zh.md)*
 
