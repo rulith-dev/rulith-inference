@@ -113,9 +113,9 @@ PROMPT_CACHE_BLOCK_TOKENS = 4096
 # where the answer before it ended, for an edit of the last message. Older ones only serve a deeper rewind (an edited
 # earlier message, an agent trimming old tool output), which without one is processed again from further back.
 # llama-server keeps up to 32 at least 8192 tokens apart, 3.5 GB a slot. This keeps 8, at most 0.9 GB a slot, chosen by
-# the runtime (0.2.6): the end of the system prompt (the first user message: every conversation that starts with it
-# comes back to it), the last prompt's, and turn starts spaced by at least CHECKPOINT_MIN_STEP and a quarter of the
-# distance to the end, dropped by what their loss would cost when the list is full
+# the runtime: the last user message's start, the only place a prompt is cut for one (0.4.8; turn starts were cut
+# from 0.2.6), and where batches end anyway, spaced by at least CHECKPOINT_MIN_STEP and a quarter of the distance to
+# the end, dropped by what their loss would cost when the list is full (the last user message's never)
 CTX_CHECKPOINTS = 8
 CHECKPOINT_MIN_STEP = 4096
 # the largest KV pool a profile may ask for (kv_pool): four full-length conversations. What actually fits is the
@@ -777,11 +777,15 @@ def kv_pool_cells(cfg):
 # of the last layers go to system memory until the rest fits, leaving HOST_EXPERT_MARGIN of the carve.
 MIB = 1 << 20
 CPU_TENSORS = ('token_embd.weight', 'per_layer_token_embd.weight')   # llama.cpp keeps these in system memory
-HOST_EXPERT_MARGIN = 3072 * MIB          # driver and context overhead plus headroom, measured ~1.5 GiB + 1.5
+HOST_EXPERT_MARGIN = 2560 * MIB          # context overhead outside the buffer report (~1.5 GiB) plus headroom
+CARVE_USABLE = 0.96                      # the driver keeps the rest: at the 64 GB carve, dedicated tops out at 62.1 GiB
 KV_ELEM_BYTES = {'f16': 2.0, 'bf16': 2.0, 'q8_0': 34 / 32, 'q5_1': 24 / 32, 'q5_0': 22 / 32, 'q4_1': 20 / 32, 'q4_0': 18 / 32,
                  'iq4_nl': 18 / 32}
 RS_BYTES_PER_SLOT = 469 * MIB            # qwen4exp's delta-net and conv states, one conversation (3747 MiB for 8)
-COMPUTE_BYTES_PER_UBATCH_TOKEN = 3522 * MIB / 8192 * 1.1
+# the target's compute buffer grows with the ubatch and with the pool: 3522 MiB at 262144 cells, 5206 MiB at 512000
+# (both ub 8192), i.e. ~1755 MiB for the ubatch and ~6.74 KiB a cell
+COMPUTE_BYTES_PER_UBATCH_TOKEN = 1755 * MIB / 8192
+COMPUTE_BYTES_PER_CELL = 6.74 * 1024
 DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # at the draft's 2048-token ubatch (kv-pool-draft-mask)
 
 
@@ -817,9 +821,11 @@ def gpu_need_bytes(model, cfg, tb):
     elem = KV_ELEM_BYTES.get(cfg['kv'], 2.0)
     per_cell_layer = kvh * (kl + vl) * elem + (il * 2 if cfg.get('qsa') else 0)
     need = sum(v for k, v in tb.items() if k not in CPU_TENSORS) * 1.01        # rows padded on the GPU
-    need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT + cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN
+    need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT
+    need += cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN + cells * COMPUTE_BYTES_PER_CELL
     if cfg.get('mtp') and cfg.get('draft') and Path(cfg['draft']).is_file():
-        need += Path(cfg['draft']).stat().st_size * 1.1 + cells * per_cell_layer + 300 * MIB
+        # the draft's K/V are f16 whatever the target's type
+        need += Path(cfg['draft']).stat().st_size * 1.1 + cells * (kvh * (kl + vl) * 2 + (il * 2 if cfg.get('qsa') else 0)) + 300 * MIB
         need += cells * DRAFT_MASK_BYTES_PER_CELL * draft_ubatch(cells) / 2048
     return need + HOST_EXPERT_MARGIN
 
@@ -841,6 +847,7 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None):
         need = gpu_need_bytes(model, cfg, tb)
     except (OSError, ValueError, KeyError, struct.error):
         return []
+    dedicated = dedicated * CARVE_USABLE
     if need is None or need <= dedicated: return []
     ram = total_ram_bytes() if ram is None else ram
     cap = max(0, (ram or 0) - (16 << 30)) if ram else float('inf')

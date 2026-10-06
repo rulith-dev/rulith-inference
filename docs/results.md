@@ -987,6 +987,38 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
+### Prompt cuts, the placement estimate, many layers in system memory (0.4.8)
+
+The placement estimate (tools/manager.py) left a 512K q8_0 pool with MTP short at the 64 GB carve. Three things were
+missing from it: the target's compute buffer grows with the pool (3,522 MiB at 262,144 cells and 5,206 MiB at 512,000,
+both at ub 8192: ~1,755 MiB for the ubatch plus ~6.74 KiB a cell), the draft's K/V are f16 whatever the target's
+type, and the driver keeps ~4% of the carve (dedicated memory tops out at 62.1 GiB of 64). 0.4.7 placed 15 layers'
+experts in system memory, ~2 GB spilled, and a fresh 156,000-token prompt ran at 1,089 t/s. 0.4.8 places 18 and runs
+it at 1,237.
+
+A conversation read fresh: 151,489 tokens (a 9K system prompt, 35 turns of 2.5K / 1.5K, a 2K last message), with the
+user profile at the 64 GB carve and MTP on (tmp/cut/cut_test.py):
+
+| | fresh prefill | edit of the last message | fork at turn 21 | new conversation, same system prompt |
+|---|---|---|---|---|
+| 0.4.7, 10 cuts | 123.6 s, 1,226 t/s | 5,895 tokens computed | 8,683 | 962 |
+| 0.4.8 with the cuts back (STRIX_CKPT_ANCHORS=1) | 122.6 s, 1,236 t/s | 1,881 | 8,683 | 962 |
+| 0.4.8, 1 cut | 122.6 s, 1,236 t/s | 1,881 | 3,831 | 1,774 |
+
+The cuts cost nothing measurable. The edit of the last message is the eviction fix: by the measure the list uses
+(gap before x gap after / distance from the end), the checkpoint there was the cheapest to lose, being right next to
+the prompt end's, and it went first on any prompt long enough to fill the list. The forks restore from the nearest
+checkpoint, which used to be a turn start and is now a batch end. Agent harness (tmp/ragged/agent_sim.py): 44,829
+tokens computed against 44,833 with the cuts.
+
+Many layers' experts in system memory, with the same profile (18 layers is what the placement picks; 32 placed by hand,
+37 GiB pinned): prefill at 156K 1,236.7 vs 1,233.5 t/s; MTP decode greedy / sampled 40.39 / 41.41 vs 39.56 / 40.67
+tok/s at identical acceptance (853 / 1,381 and 794 / 1,094), ~2% slower, as a streaming read from pinned memory is
+(229-232 vs 236 GB/s). With 32 layers HIP reports 0 MiB free when the draft loads, because it counts pinned host
+buffers against the device. llama.cpp's split by free memory then divided 0 by 0 and sent every layer past the device
+list ("invalid vector subscript"); all-zero splits are even now. Windows caps shared GPU memory at 48,790 MB at this
+carve (dxdiag), about three quarters of the RAM it sees.
+
 ### Experts in system memory (0.4.7)
 
 The GPU reads system memory as fast as the carve: a 4 GB streaming read measured 236 GB/s from hipMalloc,

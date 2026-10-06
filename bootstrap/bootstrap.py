@@ -100,6 +100,8 @@ PATCH_ORDER = [
     "apply_ot_host_buft",       # 0.4.6: -ot accepts ROCm_Host (weights outside the carve)
     "apply_host_buft_padding",  # 0.4.7: host buffers pad quantized rows (experts in system memory)
     "apply_dense_ubatch_own_cells",  # 0.4.7: issue #10, the image ubatch bound by the batch's own cells
+    "apply_split_no_free_048",  # 0.4.8: an even layer split when every device reports no free memory
+    "apply_ckpt_turn_cuts_048",  # 0.4.8: prompts cut only at the last user message
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
