@@ -7,6 +7,7 @@ The result is what the installer ships under <install dir>/runtime:
     bin/hip/           llama-server and its DLLs, the ROCm DLLs it imports (found by walking the PE
                        import tables, not by a list that goes stale), the rocBLAS / hipBLASLt kernel
                        libraries for one GPU, and the Visual C++ and OpenMP runtimes
+    bin/.kpack/        the kernel packs those ROCm DLLs load their own kernels from (rocBLAS's GEMV)
     tools/manager.py   the manager, unchanged
     python/            CPython's embeddable distribution - the manager is standard library only
     BUNDLE.json        what went in, from where, and the upstream pin it was built from
@@ -20,6 +21,7 @@ import glob
 import io
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -140,6 +142,26 @@ def main():
                 dest = bin_out / lib / 'library' / f.relative_to(src)
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 take(f, dest, f'rocm sdk bin/{lib}/library')
+    # kernel packs: in this SDK a library's own kernels (not its Tensile ones) are not in its DLL but in a .kpack
+    # archive the DLL names relative to itself - "../.kpack/blas_lib_@GFXARCH@.kpack" from bin/hip, so
+    # runtime/bin/.kpack. Without it rocBLAS cannot load its GEMV, which every GEMM of one column or row takes with f32
+    # accumulation (f32, or bf16 / f16 in with f32 compute): hipErrorInvalidKernelFile, issue #11. Every archive a
+    # shipped DLL names is shipped for --gfx, except the solvers': rocsolver.dll is only there because hipblas.dll
+    # imports it, and ggml calls none of its functions (27.6 MB for gfx1151)
+    kpack_src = ROCM_BIN.parent / '.kpack'
+    not_used = {'solver_lib'}
+    named = set()
+    for dll in sorted(bin_out.glob('*.dll')):
+        named.update(m.group(1).decode() for m in re.finditer(rb'\.\./\.kpack/([A-Za-z0-9_]+)_@GFXARCH@\.kpack', dll.read_bytes()))
+    for stem in sorted(named - not_used):
+        src = kpack_src / f'{stem}_{args.gfx}.kpack'
+        if not src.is_file():
+            sys.exit(f'{src.name}: a shipped DLL loads its kernels from it, and the SDK has none in {kpack_src}')
+        dest = out / 'bin' / '.kpack' / src.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        take(src, dest, 'rocm sdk .kpack')
+    if 'blas_lib' not in named:
+        sys.exit('no shipped DLL names blas_lib: the kernel pack layout changed, check rocBLAS before shipping')
     for name in VC_RUNTIME:
         src = vs_redist(name, 'Microsoft.VC143.CRT')
         if not src:
