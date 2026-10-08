@@ -684,6 +684,25 @@ no kernel and no graph changes, so every number 0.4.3 measured still holds.
 |---|---|---|
 | `apply_moe_glu_kq_perf` | `test-backend-ops.cpp` | `STRIX_MOE_GLU_PERF` gains UD-Q4_K_XL's expert types. 0.4.2 gave glu3 a Q4_K dequantization and the routed plain kernel Q5_1, but `make_test_cases_perf` still built only IQ3_S / IQ4_NL / IQ4_XS cases, so the kernel carrying ~37% of that file's prefill (gate/up 356 ms of a 2048-token batch) could not be timed on its own. `GGML_TYPE_Q4_K` joins the fused gate/up cases and `GGML_TYPE_Q5_1` the down cases, and `STRIX_MOE_GLU_TYPES` takes a list of names (`iq3_s` `iq4_nl` `iq4_xs` `q4_k` `q5_1` `q8_0`) where it only took `all` before; the default is unchanged. A routing dump is replayed only at a token count its `n_rows` divides, so `rows2k.txt` (19840) runs at 1984 and `rows.txt` (81560) at 8156. `tmp/qk/build_tbo.py` builds the binary against the release kernels, and `tmp/qk/kernel_lab.py` drives it. `bootstrap.py --build` configures with `-DLLAMA_BUILD_TESTS=OFF` and the separate `build-dev` tree is a full HIP recompile behind, so the test binary is built in the release dir instead; only `ggml-cuda.cu` comes back out of that (its source is newer than its object) and `mmb.cu.obj` is not recompiled at all, so the routed expert kernels the lab times are the release build's own object. The HIP build is not byte-reproducible in general - recompiling an unchanged `ggml-cuda.cu` twice gives two different `ggml-hip.dll` hashes - so the claim is about that object, not about the DLL. The lab reproduces the in-model profile: Q4_K gate/up 8.00 ms a layer at 1984 tokens against 7.75 ms read off the 2048-token GPU timeline (the two rounds bracket each other; the case moves a few percent run to run, so `tmp/qk/kernel_lab.py` pins one routing line with `STRIX_MOE_IDS_LINE` and reports the minimum of interleaved runs). `STRIX_NORM_PERF` adds the delta net's narrow-row norms, the shapes the GPU timeline charges 95.9 / 17.6 / 11.0 ms to in a 2048-token prompt for the same bytes an element; alone they are 478 / 87 / 522 us, so `rms_rows_f32` runs at 210.5 GB/s for [128,48,2048] - the machine's measured peak - and the graph's 5.6x is the node's context, not the kernel (`tmp/qk/norm_lab.py`) |
 
+## Addendum 2026-10-08: 0.5.4
+
+No new files in the delta (97); replay 97 / 97, 114 patches.
+
+| patch | files | what |
+|---|---|---|
+| `apply_image_text_compact_054` | `llama-memory-hybrid-idx.cpp` | issue #13: once a conversation held an image, every later ubatch of it took the dense sparse-attention inputs (a mask and a per-block bias over n_kv x n_tokens filled on the host, the ubatch held to 2^27 cell-token pairs since #2), and the text after one image prefilled ever slower: 1,465 t/s before it, 224 t/s at 140K. `qsa_scalar_visibility` (from upstream) refused the compact inputs whenever an image cell was in the window. For a text ubatch whose conversation's image cells all lie before its first position every image cell is visible by position alone, and `set_input_qsa` already ranks the cells and fills the compact metadata in that rank space (the MTP draft context's path after every image), so such a ubatch keeps the compact inputs; the 2^27 bound applies only to batches that still take the dense ones (an image, several conversations, text an image does not wholly precede), and no longer to the MTP draft's catch-up. `STRIX_IMAGE_TEXT_COMPACT=0` restores the dense inputs. 147K tokens with a 1920x1080 image after the first 45K: 404 -> 1,259 t/s (text alone 1,351); against the dense inputs, an image question 75K tokens back answered the same and a 300-token greedy continuation came out identical. |
+
+Not a patch: `tools/manager.py` places experts by what the carve really leaves. The decode pauses of 0.4.7 - 0.5.2
+(~0.3 s every ~5.3 s on the 64 GB carve) were the display driver moving a 1.5 GiB device buffer between system memory
+and the carve: the server's shared GPU memory dropped by exactly that at every pause and came back right after
+(`tmp/stall/vram_watch.py`), with no allocation by the runtime in between. Three drafts' buffers are ~1.8 GiB more than
+one's, so with other programs holding 2.8 GiB of the carve and the estimate allowing the server 61.4 GiB less a 2.5 GiB
+margin, one buffer did not fit; 0.5.3's one-draft cap hid that. The vision projector (1.1 GiB) was not counted at all.
+The estimate now counts the projector, and the dedicated GPU memory other programs hold at load time (the "GPU Adapter
+Memory" counters less any llama-server's) beyond 0.7 GiB, plus 0.5 GiB for them to grow, comes off the server's share;
+one or two more layers' experts go to system memory, which reads as fast. Drafts are back to 3. With vision on, against
+0.5.3 as shipped: code decode 42.2 -> 63.2 tok/s, prose 38.6 -> 42.4, no pause over 250 ms in either.
+
 ## Addendum 2026-10-08: 0.5.3
 
 Eight new files in the delta (97): `common/json-schema-to-grammar.h`, `common/chat-auto-parser-generator.cpp`,

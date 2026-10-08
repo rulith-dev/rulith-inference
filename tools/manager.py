@@ -779,6 +779,15 @@ MIB = 1 << 20
 CPU_TENSORS = ('token_embd.weight', 'per_layer_token_embd.weight')   # llama.cpp keeps these in system memory
 HOST_EXPERT_MARGIN = 2560 * MIB          # context overhead outside the buffer report (~1.5 GiB) plus headroom
 CARVE_USABLE = 0.96                      # the driver keeps the rest: at the 64 GB carve, dedicated tops out at 62.1 GiB
+# The carve is not all the server's. Other programs hold part of it (the desktop, browsers, Electron apps: 2.8 GiB on
+# 2026-10-08), and a buffer of a load that does not fit what is left the driver places in system memory and tries to
+# move back every ~5 s, stalling the GPU ~0.3 s each time: the decode pauses of 0.4.7 - 0.5.2 (a 1.5 GiB buffer moving,
+# tmp/stall/vram_watch.py; three drafts' buffers are ~1.8 GiB more than one's, which is why 0.5.3's one-draft cap hid
+# them). The margin above assumed others held OTHERS_BASELINE; what they hold past that at load time, plus
+# OTHERS_GROWTH for them to grow afterwards, comes off the server's share.
+OTHERS_BASELINE = 700 * MIB
+OTHERS_GROWTH = 512 * MIB
+VISION_EXTRA = 300 * MIB                 # the projector's compute buffer and context beside its file (F16: 1.12 GiB in all)
 KV_ELEM_BYTES = {'f16': 2.0, 'bf16': 2.0, 'q8_0': 34 / 32, 'q5_1': 24 / 32, 'q5_0': 22 / 32, 'q4_1': 20 / 32, 'q4_0': 18 / 32,
                  'iq4_nl': 18 / 32}
 RS_BYTES_PER_SLOT = 469 * MIB            # qwen4exp's delta-net and conv states, one conversation (3747 MiB for 8)
@@ -823,6 +832,9 @@ def gpu_need_bytes(model, cfg, tb):
     need = sum(v for k, v in tb.items() if k not in CPU_TENSORS) * 1.01        # rows padded on the GPU
     need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT
     need += cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN + cells * COMPUTE_BYTES_PER_CELL
+    if cfg.get('vision'):
+        mm = mmproj_path(cfg, model)
+        if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
     if cfg.get('mtp') and cfg.get('draft') and Path(cfg['draft']).is_file():
         # the draft's K/V are f16 whatever the target's type
         need += Path(cfg['draft']).stat().st_size * 1.1 + cells * (kvh * (kl + vl) * 2 + (il * 2 if cfg.get('qsa') else 0)) + 300 * MIB
@@ -836,11 +848,68 @@ def total_ram_bytes():
     return ms.ullTotalPhys if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(ms)) else None
 
 
-def host_expert_layers(model, cfg, dedicated=None, ram=None):
+_PDH_ITEM = None
+
+
+def gpu_dedicated_usage():
+    """(all processes, llama-server processes) dedicated GPU memory in use now, from the counters Task Manager reads
+    ("GPU Adapter Memory" and "GPU Process Memory"); None when they cannot be read."""
+    global _PDH_ITEM
+    if os.name != 'nt': return None
+    try:
+        pdh = ctypes.windll.pdh
+        if _PDH_ITEM is None:
+            class FMT(ctypes.Structure):
+                _fields_ = [('CStatus', wintypes.DWORD), ('pad', wintypes.DWORD), ('largeValue', ctypes.c_longlong)]
+
+            class ITEM(ctypes.Structure):
+                _fields_ = [('szName', ctypes.c_wchar_p), ('FmtValue', FMT)]
+            _PDH_ITEM = ITEM
+        q = ctypes.c_void_p()
+        if pdh.PdhOpenQueryW(None, 0, ctypes.byref(q)): return None
+        try:
+            hs = []
+            for path in ('\\GPU Adapter Memory(*)\\Dedicated Usage', '\\GPU Process Memory(*)\\Dedicated Usage',
+                         '\\Process(*)\\ID Process'):
+                h = ctypes.c_void_p()
+                if pdh.PdhAddEnglishCounterW(q, path, 0, ctypes.byref(h)): return None
+                hs.append(h)
+            if pdh.PdhCollectQueryData(q): return None
+
+            def values(h):
+                size, count = wintypes.DWORD(0), wintypes.DWORD(0)
+                pdh.PdhGetFormattedCounterArrayW(h, 0x400, ctypes.byref(size), ctypes.byref(count), None)
+                if not size.value: return []
+                buf = (ctypes.c_byte * size.value)()
+                if pdh.PdhGetFormattedCounterArrayW(h, 0x400, ctypes.byref(size), ctypes.byref(count), buf): return []
+                it = ctypes.cast(buf, ctypes.POINTER(_PDH_ITEM))
+                return [(it[i].szName or '', it[i].FmtValue.largeValue) for i in range(count.value)]
+            adapter = values(hs[0])
+            if not adapter: return None
+            # the llama-server processes, by name from the Process counters (instances "llama-server", "llama-server#1")
+            servers = {'pid_%d_' % v for n, v in values(hs[2]) if n.lower().startswith('llama-server')}
+            ours = sum(v for n, v in values(hs[1]) if any(n.startswith(t) for t in servers))
+            return max(v for _, v in adapter), ours
+        finally:
+            pdh.PdhCloseQuery(q)
+    except (OSError, AttributeError, ValueError):
+        return None
+
+
+def other_programs_dedicated():
+    """Dedicated GPU memory other programs hold now (any llama-server's left out: a reload replaces it)."""
+    u = gpu_dedicated_usage()
+    return None if u is None else max(0, u[0] - u[1])
+
+
+def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     """The layers whose experts this load keeps in system memory: none when it fits the carve, else the last layers'
-    until the rest does. Bounded by system memory, leaving 16 GiB of it to Windows and everything else."""
+    until the rest does. Bounded by system memory, leaving 16 GiB of it to Windows and everything else. The carve's
+    share is less what other programs hold beyond OTHERS_BASELINE (measured now when the carve is), less OTHERS_GROWTH."""
     if os.environ.get('STRIX_HOST_EXPERTS') == '0': return []      # leave the overflow to the display driver
-    dedicated = dedicated_vram_bytes() if dedicated is None else dedicated
+    if dedicated is None:
+        dedicated = dedicated_vram_bytes()
+        if others is None: others = other_programs_dedicated()
     if not dedicated: return []
     try:
         tb = tensor_bytes(model_shards(model))
@@ -848,6 +917,8 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None):
     except (OSError, ValueError, KeyError, struct.error):
         return []
     dedicated = dedicated * CARVE_USABLE
+    if others is not None:
+        dedicated -= max(0, others - OTHERS_BASELINE) + OTHERS_GROWTH
     if need is None or need <= dedicated: return []
     ram = total_ram_bytes() if ram is None else ram
     cap = max(0, (ram or 0) - (16 << 30)) if ram else float('inf')
@@ -1028,13 +1099,7 @@ def argv(model, cfg, net=None):
         args += ['--spec-ngram-mod-n-match', '24', '--spec-ngram-mod-n-min', '4', '--spec-ngram-mod-n-max', '8']
     if cfg['mtp']:
         spec_types.append('draft-mtp')
-        # With experts in system memory (host above) one draft at most. A verify of 1 + n drafts reads n more tokens'
-        # experts there, and from two drafts on the GPU stalls ~400 ms every ~5.3 s of wall clock (since 0.4.7; gone
-        # with the experts in the carve or with one draft). Measured 2026-10-08, 64 GB carve, MTP on, greedy: 86K decode
-        # 27.1-27.7 ms/token with three drafts (stalls included) against 26.6-26.7 with one; 1500 tokens of short
-        # context 42.4 s against 40.3 s. The per-slot tables below only lower this further.
-        draft_max = 1 if host else cfg['draft_max']
-        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(draft_max), '--spec-draft-p-min', str(cfg['draft_min'])]
+        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(cfg['draft_max']), '--spec-draft-p-min', str(cfg['draft_min'])]
     if spec_types: args += ['--spec-type', ','.join(spec_types)]
     return args
 

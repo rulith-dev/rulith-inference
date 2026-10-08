@@ -108,6 +108,7 @@ PATCH_ORDER = [
     "apply_tool_schemas_052",   # 0.5.2: tool parameters as oneOf alternatives, allOf over non-object types
     "apply_tool_schemas_053",   # 0.5.3: tool parameters in any JSON Schema form; allOf requires what its parts require
     "apply_agent_compat_053",   # 0.5.3: Codex / Claude Code on /v1/responses and /v1/messages (issue #12)
+    "apply_image_text_compact_054",   # 0.5.4: text after an image keeps the compact sparse-attention inputs (issue #13)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

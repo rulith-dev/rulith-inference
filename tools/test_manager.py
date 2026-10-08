@@ -505,9 +505,19 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(m.host_expert_layers(self.model,{},dedicated=500),[2,3])      # 500 over: two
             self.assertEqual(m.host_expert_layers(self.model,{},dedicated=500,ram=(16<<30)+400),[3])  # system memory caps it
             self.assertEqual(m.host_expert_layers(self.model,{},dedicated=0),[])           # carve unknown: leave it to the driver
+            # what other programs hold past the baseline, and room for them to grow, comes off the carve's share
+            with patch.object(m,'OTHERS_BASELINE',100),patch.object(m,'OTHERS_GROWTH',50),patch.object(m,'CARVE_USABLE',1.0):
+                self.assertEqual(m.host_expert_layers(self.model,{},dedicated=1200,others=100),[])     # 1150 left: fits
+                self.assertEqual(m.host_expert_layers(self.model,{},dedicated=1200,others=300),[3])    # 950 left: one layer
+                # measured when the carve is: a reading of the counters
+                with patch.object(m,'dedicated_vram_bytes',return_value=1200),patch.object(m,'other_programs_dedicated',return_value=600):
+                    self.assertEqual(m.host_expert_layers(self.model,{}),[2,3])                       # 650 left: two
         with patch.object(m,'host_expert_layers',return_value=[46,47]):
             args=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
             self.assertEqual(args[args.index('-ot')+1],r'blk\.(46|47)\.ffn_(gate|up|down)_exps\.weight=ROCm_Host')
+            # experts in system memory no longer cap the drafts (0.5.3 drafted one; the pauses were the carve overfilled)
+            args=m.argv(self.model,m.validate_profile({'mtp':True,'draft':str(self.draft),'draft_max':3},self.model))
+            self.assertEqual(args[args.index('--spec-draft-n-max')+1],'3')
     def test_low_rank_head_is_preferred_and_saved_profiles_move_to_it(self):
         iq=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf');gguf(iq)
         lr=self.draft.with_name(self.draft.stem+'-head-lr512.gguf');gguf(lr)
