@@ -104,6 +104,8 @@ PATCH_ORDER = [
     "apply_ckpt_turn_cuts_048",  # 0.4.8: prompts cut only at the last user message
     "apply_poll_sync_049",      # 0.4.9: the stream wait polls host memory (ROCm/TheRock#8786)
     "apply_prefill_051",        # 0.5.1: delta-net records replayed on the GPU, fusions, expert kernels, MTP in place
+    "apply_request_log_052",    # 0.5.2: the server's request log (STRIX_REQUEST_LOG)
+    "apply_tool_schemas_052",   # 0.5.2: tool parameters as oneOf alternatives, allOf over non-object types
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

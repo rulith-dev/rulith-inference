@@ -1344,6 +1344,11 @@ def launch(m, cfg):
     log.parent.mkdir(exist_ok=True)
     command=argv(m,cfg,net)
     env=runtime_environment(cfg)
+    # the server's request log beside its console log: every request as received, the raw output and the parsed tool
+    # calls, for debugging (STRIX_REQUEST_LOG, since 0.5.2; repeated long parts are written once per file).
+    # RULITH_REQUEST_LOG=0 in the environment turns it off
+    if os.environ.get('RULITH_REQUEST_LOG') != '0':
+        env['STRIX_REQUEST_LOG']=str(log.with_suffix('.requests.jsonl'))
     banner = (f'[strixllama] runtime={runtime.parent.name} (HIP/ROCm); LLAMA_MMB_HC16={env["LLAMA_MMB_HC16"]} '
               f'(must stay 0 on Windows); gates={sum(1 for k in env if k.startswith("LLAMA_"))}; '
               f'QSA={"on" if cfg["qsa"] else "off"} (this runtime has no context threshold); '

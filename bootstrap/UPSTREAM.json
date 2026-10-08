@@ -9,6 +9,8 @@
   "common/chat.h": "b575be7cf92bc36d8af7711ff7e94bd767c7c3b3589c7660907e2e4c7235e88a",
   "common/common.cpp": "eb8755df4b79449339cb860e3ba929c5821c1dc32e7c07f9bd4f7e35cac5ddac",
   "common/common.h": "8f6972940e6677ef3b1b2a5f5f84dad93ce3c51269a961a2cce139725b39d475",
+  "common/json-schema-to-grammar.cpp": "4328cdf577169576e0ce6d6613132ab509ff69b47ee6f74a8a92d2a55bea89aa",
+  "common/parsers/parsers.cpp": "78a874ac7676bef678baa855f72c13cbba24a469093f0e67d450ecadc2254ac3",
   "common/sampling.cpp": "4e783c3085a969bdb76f49af6cbbf59d6ca855b7708fe2f97007a42059ab6cf0",
   "common/sampling.h": "e5cba84f679bbdbd0b435919541cc1e79a80b5968be4e06d4baa407b368d568b",
   "common/speculative.cpp": "dc65acd370a185a3af0e23c15997d8ec6e5a7cdc12db1ad2d39d181f0b133411",
@@ -86,10 +88,10 @@
   "tests/test-backend-ops.cpp": "709752dffa66f842633b78faf634156f8ef72e9b8c72514284a452a6e81cd75a",
   "tools/server/server-common.cpp": "e2a5ae4ade6846cfc872c1d4a8f60415ada01b8d659ba70bc481ded9640ad890",
   "tools/server/server-common.h": "ce3d4154d51f7d44fcd57e9cb5228f72f240fc4094366562b4e9ab5a7e94e813",
-  "tools/server/server-context.cpp": "265c4fd60a64ee1eaf34836020a3bccd78ec6e89e45c5e54218ca3a85fa86848",
+  "tools/server/server-context.cpp": "9415a7a32c1e6cff5d39fce5daa2993bae52aad7acd7e726bc15924c5aa589a7",
   "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
-  "tools/server/server-queue.cpp": "3a2a196c19bb758c3ce55f2c983dafcddb91d71fd87ce02cf081f2b55dad80b8",
-  "tools/server/server-queue.h": "39d958942e30e8b02db6bdd9bfa7687178bb199ebb616e7d3e88881b5565d592",
+  "tools/server/server-queue.cpp": "b00492a47d6dffed92dfa604ce2b1a4b8936df8b4acfbad6f683802e9c0c2e02",
+  "tools/server/server-queue.h": "b3784032052cc7505420b038f1c53a1dc471bc91b4aa43b3cb6c9a92e7c3e3c9",
   "tools/server/server-task.cpp": "ffbd63c03949a3b191bffd0b69e4f6d40dc0e1df3b25e628af5d1f0ecdb33a13",
   "tools/server/server-task.h": "0d09d27ef17ad90eee41f5092e60bce2b78ada62ac922abc83f06c89ffe375f8",
   "tools/server/server.cpp": "5e2e8284457fac873a7871bb0201e0e17494025213b0be50cfeb02be2f377daa"
@@ -108,6 +110,14 @@
   "common/common.h": {
    "git_blob": "63d0badd0f7465b804b62128b64c5cc8dd115862",
    "sha256": "7cfcc6a57122702ea35d04ed20861aef162bd94f55cfbbf9fd23ee3127fe6cb4"
+  },
+  "common/json-schema-to-grammar.cpp": {
+   "git_blob": "a7a18857d7137ac936b44ab1b2787219529bf314",
+   "sha256": "e2a1bf7024256d5e5f8a306b40512d397e2814d48751d407b994ae108b98d9e9"
+  },
+  "common/parsers/parsers.cpp": {
+   "git_blob": "0a4d5cfbb522b6e08379917900e00734f1d7360a",
+   "sha256": "bf0445e77529bb3ce223ec008a6f9c8a08cfc26fa626f240544671c3ef8408c8"
   },
   "common/sampling.cpp": {
    "git_blob": "06dea1e1ccea368f685fdcd1fcb57774aea9ff24",
