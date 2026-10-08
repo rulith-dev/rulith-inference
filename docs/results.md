@@ -987,7 +987,7 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
-### Prefill at depth, gufo's fusions, the last experts off MMQ (0.5.1)
+### Prefill at depth, three fusions, the last experts off MMQ (0.5.1)
 
 A turn start saves a checkpoint of the conversation's delta-net state. With deferred rollback (0.2.6) a cell keeps the
 last tokens' updates as pending records, and the checkpoint first had to apply them: on the host, in AVX2, 108.8 ms at
@@ -996,7 +996,7 @@ address) runs the forward pass's own replay kernel on the cell's state rows inst
 the state copies themselves (113 MB a checkpoint, ~30 ms) measured no faster than the runtime's copy on this APU and
 was dropped.
 
-Three fusions from reading gufo's source, each bitwise: the router's F32 product [2560 -> 512] as a two-term F16 tile
+Three fusions, each bitwise: the router's F32 product [2560 -> 512] as a two-term F16 tile
 kernel (2.0 -> 1.4 ms at 2K tokens), the delta net's beta and alpha products in one pass over F16 copies of their F32
 weights (0.83 + 0.84 -> 0.65 ms), and the attention gate GEMM fused with the gated RMS norm. The fused norm needed an
 inline v_mul for the square: HIP compiles with -ffp-contract=fast, and the compiler had folded xi*xi into the first add
@@ -1032,7 +1032,7 @@ of 8K (twolong text): 2.8134 -> 2.8070, per-chunk dNLL -0.0023 +- 0.0033. On the
 the same, but the probability of ending the turn at once (`<|im_end|>`, which the template does not emit there) moved
 from 97% to 46% with f16 K/V; the following tokens' distributions match to ~0.01.
 
-0.5.0 against 0.5.1, UD-IQ4_XS, MTP off, gufo's protocol (a 2K-token turn after a cached history; two alternations):
+0.5.0 against 0.5.1, UD-IQ4_XS, MTP off, a 2K-token turn after a cached history (two alternations):
 
 | history | 0.5.0 | 0.5.1 |
 |---|---|---|
@@ -1042,7 +1042,8 @@ from 97% to 46% with f16 K/V; the following tokens' distributions match to ~0.01
 | 16K | 1145.6 / 1145.1 | 1231.3 / 1230.1 (+7.4%) |
 | 32K | 1123.1 / 1124.3 | 1201.4 / 1201.2 (+6.9%) |
 
-Decode is unchanged (27.3-27.7 tok/s). The long pair read back from disk: 172.7K tokens 146.4 -> 135.3 s, 155.6K
+Decode is unchanged (27.3-27.7 tok/s). In the app on 10-08 (two slots of 256K, MTP off) a 156,420-token prompt took
+115.1 s, 1,359 t/s; long prompts run in 8K-token batches, cheaper per token than these 2K turns. The long pair read back from disk: 172.7K tokens 146.4 -> 135.3 s, 155.6K
 132.2 -> 122.5 s, the same tokens recomputed and restored as before. MTP's catch-up reads the target's rows in place
 (no 335 MB shift copy an 8K batch) and a long prompt chunk keeps only its last verify row; acceptance and decode speed
 are unchanged.

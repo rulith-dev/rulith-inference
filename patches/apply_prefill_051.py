@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""0.5.1 prefill: the delta net's pending records replayed on the GPU, gufo-style fusions, expert kernels with LDS-only barriers, the last UD-IQ4_XS experts off MMQ, MTP catch-up in place.
+"""0.5.1 prefill: the delta net's pending records replayed on the GPU, three fusions, expert kernels with LDS-only barriers, the last UD-IQ4_XS experts off MMQ, MTP catch-up in place.
 
 - Delta-net records: a turn start's checkpoint replayed a cell's pending records on the host (AVX2, 108.8 ms at
   depth). ggml_backend_cuda_gdn_replay (gated_delta_net.cu, reached through ggml_backend_reg_get_proc_address) runs
   the graph's own replay kernel on the cell's state rows instead (~3 ms); rec_flatten uses it, state_write_data
   flattens cells with records first. STRIX_GDN_DEV_REPLAY=0 restores the host replay.
-- Fusions after gufo's source (bitwise): the router's F32 product as a two-term F16 tile kernel (STRIX_MMB_F32_TILE2=0),
+- Fusions (bitwise): the router's F32 product as a two-term F16 tile kernel (STRIX_MMB_F32_TILE2=0),
   the delta net's beta and alpha products side by side in one pass over F16 copies of their weights
   (STRIX_MMB_NARROW_PAIR=0, STRIX_MMB_F16W=0), the attention gate GEMM fused with the gated RMS norm
   (STRIX_GNORM_FUSE=0; an inline v_mul keeps xi*xi out of an FMA, as rms_rows_f32 computes it).
