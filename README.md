@@ -14,19 +14,19 @@ same data: an installed Strix Llama updates in place.*
 
 ## Where it stands
 
-Measured on the target machine with 0.4.0 (2026-10-01), speculative decoding on, at the app's default
-settings (eight conversation slots, MTP, images on): prefill over 95.6K tokens of real text; 400 tokens
-decoded after 86K tokens of that text, and after a one-line question; and at four slots, several
-conversations of ~4K tokens each decoding together, with a new sampling seed every round. The last row
-is MTP off; its 0.3.9 figures were measured alternately with 0.4.0 the same day:
+Measured on the target machine with 0.5.1 (2026-10-08, 64 GB VRAM carve), speculative decoding on, at the
+app's default settings (eight conversation slots, MTP, images on): prefill over 95.6K tokens of real text;
+400 tokens decoded after 86K tokens of that text, and after a one-line question; and at four slots, several
+conversations of ~4K tokens each decoding together, with a new sampling seed every round. The last row is
+MTP off. In brackets, 0.4.0 measured the same way (2026-10-01, 96 GB carve):
 
 | | |
 | --- | --- |
-| prefill | **1237 t/s** |
-| decode, 86K context | **23.9 ms/token** (41.8 tok/s at 65% draft acceptance; 0.3.1: 27.3 at 63%) |
-| decode, short context | **21.7 ms/token** (46.1 tok/s at 65% acceptance; 0.3.1: 22.5 at 67%) |
-| decode, 3 / 4 conversations at once | **59.8 / 69.1 tok/s** summed (1.42× / 1.64× one conversation measured the same way, 42.1; 0.3.1: 55.4 / 62.5 and 39.7; the sum moves ±10% with the sampled rounds' acceptance) |
-| decode with MTP off, 8 conversations of ~40K tokens at once | **91.0 tok/s** summed in a 512K-token q8_0 pool (0.3.9: 85.7 the same day, 0.3.3: 58.8); eight of ~20K with the f16 cache 95.6 (0.3.9: 89.4); one conversation 27.5 / 27.0 / 26.5 tok/s at 3K / 50K / 110K (0.3.9: 25.9 / 25.5 / 25.0) |
+| prefill | **1328 t/s** (0.4.0: 1237) |
+| decode, 86K context | **25.9 ms/token** (38.6 tok/s at 60% draft acceptance; 0.4.0: 23.9 at 65%, the same ~70 ms a pass) |
+| decode, short context | **20.7 ms/token** (48.2 tok/s at 67% acceptance; 0.4.0: 21.7 at 65%) |
+| decode, 3 / 4 conversations at once | **66.9 / 75.1 tok/s** summed (1.59× / 1.78× one conversation measured the same way, 42.1; 0.4.0: 59.8 / 69.1 and 42.1; the sum moves ±10% with the sampled rounds' acceptance) |
+| decode with MTP off, 8 conversations of ~40K tokens at once | **95.0 tok/s** summed in a 512K-token q8_0 pool (0.4.0: 91.0); eight of ~20K with the f16 cache 97.7 (0.4.0: 95.6); one conversation 27.8 / 27.5 / 27.0 tok/s at 3K / 50K / 110K (0.4.0: 27.5 / 27.0 / 26.5) |
 | image input | supported (Qwen3-VL projector) |
 
 Every number in this repository comes with the command that produced it, in

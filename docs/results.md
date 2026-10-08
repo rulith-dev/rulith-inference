@@ -23,6 +23,26 @@ the driver pages during decode: prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/t
 
 ## Headline
 
+Measured 2026-10-08 on 0.5.1 with the same protocol (tmp/rel051/headline_051.sh, log tmp/rel051/headline_051.log), now
+at the 64 GB VRAM carve (0.4.0 was measured at 96 GB):
+
+| | | |
+|---|---|---|
+| prefill, 95.6K tokens of real text | **1328 t/s** | 1331.8 / 1325.6 / 1326.4 over 3 runs |
+| decode, 86K context | **25.9 ms/token** (38.6 tok/s) | 25.68 / 25.85 / 26.25, draft acceptance 60%, 2.70 tokens per pass (a pass ~70 ms, as 0.4.0's 69.4) |
+| decode, short context | **20.7 ms/token** (48.2 tok/s) | 20.75 / 20.73 / 20.77, acceptance 67%, 2.96 tokens per pass |
+| decode, 3 / 4 conversations at once | **66.9 / 75.1 tok/s** summed | four slots, ~4K tokens each, a new seed every round, nine rounds each; one conversation 42.1 |
+| decode with MTP off, 8 conversations of ~40K at once | **95.0 tok/s** summed | 95.7 / 94.2, a 512K-token q8_0 pool, greedy (`tmp/rel051/multi_probe2.py --n 8 --words 12000 --gen 384`) |
+| decode with MTP off, 8 conversations of ~20K at once | **97.7 tok/s** summed | 97.7 / 97.7, f16 in a 256K pool (`--words 6000`) |
+| decode with MTP off, one conversation | **27.8 / 27.5 / 27.0 tok/s** | at 3K / 50K / 110K, three runs each (`tools/decode_lab.py --set mtp=false parallel=4 --words 900,14700,32400 --n 256`) |
+
+The 86K row decodes a different text than 0.4.0: greedy output follows 0.5.1's six re-routed expert layers, and this
+passage drafts at 60% where 0.4.0's drafted at 65%. With `STRIX_MMB_Q8=0`, and on 0.5.0, it is 24.6 ms/token at 64%.
+The MTP-off rows of several conversations use `multi_probe2.py`, which continues each conversation from the cache by
+token ids. `tmp/dec034/multi_probe.py` re-sent the identical text prompt; 0.5.0 and 0.5.1 keep no checkpoint at a raw
+prompt's end, so seven of eight conversations recomputed ~7.7K tokens inside the timed decode and the sum read 67.0
+(66.5 on 0.5.0; 0.4.0 recomputed none). At 64 GB the q8_0 512K profile keeps 16 layers' experts in system memory, the f16 256K one 14.
+
 Measured 2026-10-01 on 0.4.0, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
 **on a freshly started server** (see the image note below — that qualifier is load-bearing), with the
 model files of [the README's list](../README.md#model-files) and the app's default settings (eight
