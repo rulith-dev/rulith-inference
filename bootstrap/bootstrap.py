@@ -103,6 +103,7 @@ PATCH_ORDER = [
     "apply_split_no_free_048",  # 0.4.8: an even layer split when every device reports no free memory
     "apply_ckpt_turn_cuts_048",  # 0.4.8: prompts cut only at the last user message
     "apply_poll_sync_049",      # 0.4.9: the stream wait polls host memory (ROCm/TheRock#8786)
+    "apply_prefill_051",        # 0.5.1: delta-net records replayed on the GPU, fusions, expert kernels, MTP in place
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

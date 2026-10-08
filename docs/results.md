@@ -987,6 +987,66 @@ first 64 rows. Reproduced on the docs text (4 chunks of 4096, -b 4096): -ub 512 
 give 0.4.2's bits. The server was not exposed in its own use: a prompt asks the head for one row, below XRES's
 512-row floor, and with MTP the residual is a graph output.
 
+### Prefill at depth, gufo's fusions, the last experts off MMQ (0.5.1)
+
+A turn start saves a checkpoint of the conversation's delta-net state. With deferred rollback (0.2.6) a cell keeps the
+last tokens' updates as pending records, and the checkpoint first had to apply them: on the host, in AVX2, 108.8 ms at
+4K-32K of history. `ggml_backend_cuda_gdn_replay` (gated_delta_net.cu, reached through the backend registry's proc
+address) runs the forward pass's own replay kernel on the cell's state rows instead: ~3 ms. A pinned staging ring for
+the state copies themselves (113 MB a checkpoint, ~30 ms) measured no faster than the runtime's copy on this APU and
+was dropped.
+
+Three fusions from reading gufo's source, each bitwise: the router's F32 product [2560 -> 512] as a two-term F16 tile
+kernel (2.0 -> 1.4 ms at 2K tokens), the delta net's beta and alpha products in one pass over F16 copies of their F32
+weights (0.83 + 0.84 -> 0.65 ms), and the attention gate GEMM fused with the gated RMS norm. The fused norm needed an
+inline v_mul for the square: HIP compiles with -ffp-contract=fast, and the compiler had folded xi*xi into the first add
+of the reduction, which rms_rows_f32 does not do (1 ULP off in ~3% of outputs until the device assembly was diffed).
+
+The routed expert kernels: `__syncthreads()` is a release fence on gfx1151 and puts `s_waitcnt vmcnt(0)` before every
+barrier, so a step's weight loads could only hide behind one step of compute. The tile loops now wait on LDS only
+(`s_waitcnt lgkmcnt(0); s_barrier`), weight fields sit in whole registers (sub-dword fields made each load wait where it
+was issued), and Q4_K scales are decoded at dequantization (indexing the register array went to scratch, 2x slower).
+Q4_K gate/up 7.77 -> 6.80-6.95 ms at 2,040 tokens, IQ3_S 6.98 -> 6.76-6.89, the down projection unchanged. Ablations
+on the routed kernels at 2,040 tokens (routing recorded from the model) show where the rest goes:
+
+| removed | Q4_K gate/up | IQ3_S gate/up | IQ4_NL down | Q5_1 down |
+|---|---|---|---|---|
+| nothing | 6.79 ms | 6.78 ms | 4.24 ms | 4.65 ms |
+| activation loads | -1.5% | -4% | -2.4% | -3% |
+| the epilogue | -2% | -3% | -10% | -13% |
+| DRAM weights (every expert reads expert 0) | -15% | -8% | -10% | -22% |
+| dequantization and WMMA | -20% | -30% | -14% | -9% |
+| everything but the weight loads | 4.69 ms (186 GB/s) | 4.15 ms (160 GB/s) | 2.16 ms (202 GB/s) | 2.71 ms (214 GB/s) |
+
+The weight stream alone runs near the machine's bandwidth; the kernels add their compute on top of it instead of under
+it (98-128 GB/s whole). Two weight steps in flight for the 128-token tile (now 220 VGPRs, no spill) were 5% slower,
+for the down projection the same, and activations reordered ahead of the weights in the two-step loop changed nothing.
+Re-reading activations across the M tiles, the obvious suspect, is worth 1.5-4%.
+
+UD-IQ4_XS had six expert layers on llama.cpp's MMQ: the Q8_0 down projections of layers 2, 4, 30, 46, 47 and the IQ4_XS
+gate/up of layer 2. The routed kernel takes Q8_0 (the dense Q8_0 GEMMs' dequantization) and glu3 IQ4_XS (dl * kv is
+exact in F32, one fma): 12.1 -> 5.7 ms and 11.3 -> 7.1 ms at 2K tokens; test-backend-ops matches the CPU at 17 to 4,096
+tokens (Q8_0) and 17 to 2,040 (IQ4_XS). Those layers now compute bf16 x bf16 like the other 90 instead of MMQ's int8 x q8_1, so the output is not bit
+for bit 0.5.0's; with `STRIX_MMB_Q8=0` the f16, MTP and q8_0 probes give 0.5.0's bits. Paired perplexity over 40 chunks
+of 8K (twolong text): 2.8134 -> 2.8070, per-chunk dNLL -0.0023 +- 0.0033. On the probe prompt the first answer token is
+the same, but the probability of ending the turn at once (`<|im_end|>`, which the template does not emit there) moved
+from 97% to 46% with f16 K/V; the following tokens' distributions match to ~0.01.
+
+0.5.0 against 0.5.1, UD-IQ4_XS, MTP off, gufo's protocol (a 2K-token turn after a cached history; two alternations):
+
+| history | 0.5.0 | 0.5.1 |
+|---|---|---|
+| 0 | 1329.0 / 1314.8 t/s | 1362.6 / 1359.4 (+3.0%) |
+| 4K | 1189.1 / 1186.4 | 1268.4 / 1272.6 (+7.0%) |
+| 8K | 1167.2 / 1155.9 | 1247.4 / 1247.4 (+7.4%) |
+| 16K | 1145.6 / 1145.1 | 1231.3 / 1230.1 (+7.4%) |
+| 32K | 1123.1 / 1124.3 | 1201.4 / 1201.2 (+6.9%) |
+
+Decode is unchanged (27.3-27.7 tok/s). The long pair read back from disk: 172.7K tokens 146.4 -> 135.3 s, 155.6K
+132.2 -> 122.5 s, the same tokens recomputed and restored as before. MTP's catch-up reads the target's rows in place
+(no 335 MB shift copy an 8K batch) and a long prompt chunk keeps only its last verify row; acceptance and decode speed
+are unchanged.
+
 ### Waiting for a graph (0.4.9)
 
 A decode step is one HIP graph (~2,000 kernels for one conversation), then a wait for it. Standalone programs
