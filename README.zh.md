@@ -84,6 +84,25 @@ llama-server 通过防火墙），还可以设置 API 密钥，请求须以 `Aut
 优先于它。请求里的模型名是文件名去掉分片后缀（`"model": "Qwen3.8-Flash-Next-UD-IQ4_XS"`，即 `/v1/models`
 列出、日志页显示的名字）；只加载一个模型时，服务器对任何名字都会回答。
 
+编程智能体也可以用这个服务器。0.5.3 起它对 OpenAI Responses 接口（`/v1/responses`）的支持足以运行 Codex：
+自由格式（`custom`）工具、归在 `namespace` 里的工具、对话中途插入的 developer 消息都能用。`web_search`
+这类托管工具不会执行，响应头 `X-Rulith-Unsupported-Tools` 会列出它们。Codex 在 `~/.codex/config.toml` 里这样配：
+
+```toml
+model = "Qwen3.8-Flash-Next-UD-IQ4_XS"
+model_provider = "rulith"
+
+[model_providers.rulith]
+name = "Rulith Inference"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+# env_key = "RULITH_API_KEY"   # 服务器设了 API 密钥时
+```
+
+Claude Code 走 Anthropic Messages 接口（`/v1/messages`，含流式输出和 `tool_use` / `tool_result`）。用环境变量
+指向服务器：`ANTHROPIC_BASE_URL=http://127.0.0.1:8080`，`ANTHROPIC_AUTH_TOKEN` 设为 API 密钥（没有密钥时随便填），
+`ANTHROPIC_MODEL` 和 `ANTHROPIC_SMALL_FAST_MODEL` 设为模型名。两者都用 Codex 0.160 和 Claude Code 2.1.247 验证过。
+
 **先读 [docs/install.md](docs/install.md)。** 有三件事不是可选的，也不显然：显存划分应为 96 GB，0.4.7 起
 64 GB 也可以（放不下的专家权重从系统内存读取，速度不变；96 GB 给 KV 池留的空间更大）；ROCm SDK 必须用 TheRock 10.2 而不是
 系统的 7.1（同样的源码，预填充 +60%）；而实测所用的 SDK 版本来自一个约 27 天滚动窗口的 nightly
@@ -95,7 +114,7 @@ llama-server 通过防火墙），还可以设置 API 密钥，请求须以 `Aut
 
 ## 里面到底有什么
 
-相对上游 llama.cpp 的全部改动是 **85 个文件**——3610 个里改了 81 个、新增 4 个。主要几项：
+相对上游 llama.cpp 的全部改动是 **97 个文件**——3610 个里改了 93 个、新增 4 个。主要几项：
 
 | | |
 | --- | --- |
@@ -141,7 +160,7 @@ python bootstrap/bootstrap.py --verify    # 当前树是否仍然完全一致
 是配方今天还能不能从零重建出这棵树，这有单独的工具：
 
 ```bash
-python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 85 个文件，逐字节相同
+python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 97 个文件，逐字节相同
 ```
 
 它按 `bootstrap/UPSTREAM.json` 里记的 blob 哈希，从克隆自带的 git 对象里取回那 81 个文件的上游版

@@ -1028,7 +1028,13 @@ def argv(model, cfg, net=None):
         args += ['--spec-ngram-mod-n-match', '24', '--spec-ngram-mod-n-min', '4', '--spec-ngram-mod-n-max', '8']
     if cfg['mtp']:
         spec_types.append('draft-mtp')
-        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(cfg['draft_max']), '--spec-draft-p-min', str(cfg['draft_min'])]
+        # With experts in system memory (host above) one draft at most. A verify of 1 + n drafts reads n more tokens'
+        # experts there, and from two drafts on the GPU stalls ~400 ms every ~5.3 s of wall clock (since 0.4.7; gone
+        # with the experts in the carve or with one draft). Measured 2026-10-08, 64 GB carve, MTP on, greedy: 86K decode
+        # 27.1-27.7 ms/token with three drafts (stalls included) against 26.6-26.7 with one; 1500 tokens of short
+        # context 42.4 s against 40.3 s. The per-slot tables below only lower this further.
+        draft_max = 1 if host else cfg['draft_max']
+        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(draft_max), '--spec-draft-p-min', str(cfg['draft_min'])]
     if spec_types: args += ['--spec-type', ','.join(spec_types)]
     return args
 

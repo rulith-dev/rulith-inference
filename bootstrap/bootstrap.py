@@ -106,6 +106,8 @@ PATCH_ORDER = [
     "apply_prefill_051",        # 0.5.1: delta-net records replayed on the GPU, fusions, expert kernels, MTP in place
     "apply_request_log_052",    # 0.5.2: the server's request log (STRIX_REQUEST_LOG)
     "apply_tool_schemas_052",   # 0.5.2: tool parameters as oneOf alternatives, allOf over non-object types
+    "apply_tool_schemas_053",   # 0.5.3: tool parameters in any JSON Schema form; allOf requires what its parts require
+    "apply_agent_compat_053",   # 0.5.3: Codex / Claude Code on /v1/responses and /v1/messages (issue #12)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

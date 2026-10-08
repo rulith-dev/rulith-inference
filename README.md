@@ -77,9 +77,9 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
 `bootstrap.py` clones `pwilkin/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 85-file delta is also published on a fork, a commit per release, so it can be
-read as a plain diff: [rulith-dev/llama.cpp, branch `rulith`](https://github.com/rulith-dev/llama.cpp/tree/rulith) (`strixllama` until 0.4.3, still kept in
-step for a few releases). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
+against the ROCm SDK. The same 97-file delta is also published on a fork, a commit per release, so it can be
+read as a plain diff: [rulith-dev/llama.cpp, branch `rulith`](https://github.com/rulith-dev/llama.cpp/tree/rulith) (`strixllama` until 0.4.3, kept in
+step up to 0.5.2). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
 remembered.
 
@@ -92,6 +92,27 @@ updates leave in place; `RULITH_PORT`, `RULITH_HOST` (an address to bind, such a
 `RULITH_API_KEY` in the environment override it. Requests name the model as its file does, without the shard
 suffix (`"model": "Qwen3.8-Flash-Next-UD-IQ4_XS"`, the name `/v1/models` lists and the Logs page shows);
 with one model loaded, the server answers any name.
+
+Coding agents can use the same server. Since 0.5.3 it serves OpenAI's Responses API (`/v1/responses`) well
+enough for Codex: freeform (`custom`) tools, tools grouped in a `namespace` and developer messages between
+turns all work. Hosted tools such as `web_search` are not run; the response names them in an
+`X-Rulith-Unsupported-Tools` header. For Codex, in `~/.codex/config.toml`:
+
+```toml
+model = "Qwen3.8-Flash-Next-UD-IQ4_XS"
+model_provider = "rulith"
+
+[model_providers.rulith]
+name = "Rulith Inference"
+base_url = "http://127.0.0.1:8080/v1"
+wire_api = "responses"
+# env_key = "RULITH_API_KEY"   # when the server has an API key
+```
+
+Claude Code talks to the Anthropic Messages route (`/v1/messages`, streaming and `tool_use` / `tool_result`
+included). Point it at the server through the environment: `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`,
+`ANTHROPIC_AUTH_TOKEN` set to the API key (any text when there is none), and `ANTHROPIC_MODEL` and
+`ANTHROPIC_SMALL_FAST_MODEL` set to the model's name. Both were checked with Codex 0.160 and Claude Code 2.1.247.
 
 **Read [docs/install.md](docs/install.md) first.** Three things there are not optional and not
 obvious: the GPU carve should be 96 GB or, since 0.4.7, 64 GB (the experts that do not fit it are read
@@ -107,7 +128,7 @@ and Chinese.
 
 ## What is actually in here
 
-The whole delta against upstream llama.cpp is **85 files** — 81 modified, 4 added, out of 3610. The
+The whole delta against upstream llama.cpp is **97 files** — 93 modified, 4 added, out of 3610. The
 substantial pieces:
 
 | | |
@@ -155,7 +176,7 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 85 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 97 files, byte for byte
 ```
 
 It restores the 81 modified files to upstream from the clone's own git objects, addressed by the blob
