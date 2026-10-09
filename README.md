@@ -8,9 +8,7 @@ and UD-Q4_K_XL (111.3 GB) is tuned too.
 
 *[中文说明](README.zh.md)*
 
-*Formerly **Strix Llama**, renamed in 0.3.6 so as not to be confused with the community fork
-[halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp), which had the name first. Same app,
-same data: an installed Strix Llama updates in place.*
+*Formerly **Strix Llama**, renamed in 0.3.6.*
 
 ## Where it stands
 

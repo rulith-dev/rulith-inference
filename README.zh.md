@@ -8,9 +8,7 @@ UD-Q4_K_XL（111.3 GB）也经过调优。
 
 *[English](README.md)*
 
-*原名 **Strix Llama**，0.3.6 起改为现名，以免和更早用这个名字的社区分支
-[halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp) 混淆。应用和数据都不变：
-已安装的 Strix Llama 会原地更新过来。*
+*原名 **Strix Llama**，0.3.6 起改为现名。*
 
 ## 当前水平
 
