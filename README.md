@@ -221,3 +221,4 @@ If these patches are useful in your project, please credit Rulith Inference with
 ---
 
 Rulith Inference is made by [Rulith](https://rulith.ai): verifiable execution infrastructure for AI agents.
+Questions, ideas and help: the [Rulith community discussions](https://github.com/rulith-dev/community/discussions).

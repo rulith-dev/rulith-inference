@@ -199,3 +199,4 @@ MIT，见 [LICENSE](LICENSE)。第三方署名见 [NOTICE.md](NOTICE.md)——�
 ---
 
 Rulith Inference 由 [Rulith](https://rulith.ai) 开发。Rulith 做面向 AI 智能体的可验证执行基础设施。
+提问、建议和交流：[Rulith 社区讨论区](https://github.com/rulith-dev/community/discussions)。
