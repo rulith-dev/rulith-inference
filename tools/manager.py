@@ -84,8 +84,8 @@ DEFAULT_DRAFT = ROOT / 'models' / 'mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-iq4
 # Vision projector shipped alongside the model (clip, projector_type qwen3vl, 904 MB F16). Without it
 # llama-server has no multimodal capability at all and rejects any request carrying an image.
 MMPROJ_NAME = 'mmproj-F16.gguf'
-# Thinking depth -> the reasoning_effort this model's chat template accepts. 'off' is handled
-# separately (enable_thinking=false). The template raises on anything outside low/medium/xhigh.
+# Thinking depth -> the reasoning_effort this model's chat template accepts, given as --reasoning-effort. 'off' is
+# --reasoning off. The template raises on anything outside low/medium/xhigh, so the UI level never goes through as is.
 THINKING = {'off': None, 'low': 'low', 'medium': 'medium', 'high': 'xhigh'}
 # Where the server listens (Configuration › Network, GitHub issue #6): settings.json's `network` - the port, whether
 # other devices on the local network may use it, the API key it then asks for - over these defaults, and RULITH_PORT,
@@ -1074,16 +1074,18 @@ def argv(model, cfg, net=None):
             # a pool larger than one conversation (kv_pool): each conversation is still capped at the context
             args += ['--kv-unified-per-slot', str(cfg['context'])]
     think = cfg['thinking'] if not isinstance(cfg['thinking'], bool) else ('high' if cfg['thinking'] else 'off')
-    kwargs = ({'enable_thinking': False} if think == 'off'
-              else {'enable_thinking': True, 'reasoning_effort': THINKING[think]})
+    # --reasoning / --reasoning-effort (issue #15): what --chat-template-kwargs '{"enable_thinking":...}' used to set,
+    # without upstream's deprecation warning. They set the same template kwargs, and a request's own
+    # chat_template_kwargs or reasoning_effort still override them.
+    reasoning = (['--reasoning', 'off'] if think == 'off'
+                 else ['--reasoning', 'on', '--reasoning-effort', THINKING[think]])
     # --no-cache-idle-slots: upstream saves AND clears every idle slot on each new task when the KV is unified
     # (-kvu, i.e. more than one slot), so talking to A, then B, then A read A back from disk and wrote B out,
     # ~6 s a switch for long conversations, although the cells were already allocated. Without it they stay
     # in their slots until the pool is actually full, and the disk tier, when it is on, writes their rows as they
     # are computed and their state when they leave.
     args += ['--cache-prompt', '--cache-ram', str(PROMPT_CACHE_RAM_MIB), '--no-cache-idle-slots',
-             '--ctx-checkpoints', str(CTX_CHECKPOINTS), '--checkpoint-min-step', str(CHECKPOINT_MIN_STEP),
-             '--chat-template-kwargs', json.dumps(kwargs, separators=(',',':'))]
+             '--ctx-checkpoints', str(CTX_CHECKPOINTS), '--checkpoint-min-step', str(CHECKPOINT_MIN_STEP)] + reasoning
     if cfg.get('vision', False):
         args += ['--mmproj', str(mmproj_path(cfg, model))]
     host = host_expert_layers(model, cfg)

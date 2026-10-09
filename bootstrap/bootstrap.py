@@ -109,6 +109,8 @@ PATCH_ORDER = [
     "apply_tool_schemas_053",   # 0.5.3: tool parameters in any JSON Schema form; allOf requires what its parts require
     "apply_agent_compat_053",   # 0.5.3: Codex / Claude Code on /v1/responses and /v1/messages (issue #12)
     "apply_image_text_compact_054",   # 0.5.4: text after an image keeps the compact sparse-attention inputs (issue #13)
+    "apply_own_tokens_055",   # 0.5.5: a conversation's next request keeps the tokens the model generated
+    "apply_kb_uncached_f16_055",   # 0.5.5: uncached block keys rounded to F16 as the cache holds them (issue #16)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

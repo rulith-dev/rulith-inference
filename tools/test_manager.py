@@ -154,20 +154,22 @@ class ManagerTests(unittest.TestCase):
                         self.assertIn('n-gram draft=on' if ngram else 'n-gram draft=off',Path(result['log']).read_text())
                         m.handle('stop',{})
     def kwargs_for(self,thinking):
-        import json
+        # issue #15: --reasoning / --reasoning-effort, never the deprecated enable_thinking template kwarg
         cfg=m.validate_profile({'mtp':False,'thinking':thinking},self.model)
         args=m.argv(self.model,cfg)
         self.assertIn('--cache-prompt',args)
-        return json.loads(args[args.index('--chat-template-kwargs')+1])
+        self.assertNotIn('--chat-template-kwargs',args)
+        out={'reasoning':args[args.index('--reasoning')+1]}
+        if '--reasoning-effort' in args: out['effort']=args[args.index('--reasoning-effort')+1]
+        return out
     def test_thinking_levels_map_to_the_template_s_reasoning_effort(self):
         # the chat template raises on anything outside low/medium/xhigh, so these are not free-form
-        self.assertEqual(self.kwargs_for('off'),{'enable_thinking':False})
+        self.assertEqual(self.kwargs_for('off'),{'reasoning':'off'})
         for level,effort in (('low','low'),('medium','medium'),('high','xhigh')):
-            self.assertEqual(self.kwargs_for(level),
-                             {'enable_thinking':True,'reasoning_effort':effort})
+            self.assertEqual(self.kwargs_for(level),{'reasoning':'on','effort':effort})
     def test_thinking_still_accepts_the_boolean_it_used_to_be(self):
-        self.assertEqual(self.kwargs_for(False),{'enable_thinking':False})
-        self.assertEqual(self.kwargs_for(True),{'enable_thinking':True,'reasoning_effort':'xhigh'})
+        self.assertEqual(self.kwargs_for(False),{'reasoning':'off'})
+        self.assertEqual(self.kwargs_for(True),{'reasoning':'on','effort':'xhigh'})
     def test_thinking_rejects_a_level_the_template_would_raise_on(self):
         for bad in ('false','xhigh','extra-high',3):
             with self.assertRaises(ValueError):m.validate_profile({'thinking':bad},self.model)
