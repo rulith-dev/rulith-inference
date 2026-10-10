@@ -210,7 +210,7 @@
       "draftHelpHead": "Uses the combined draft head",
       "draftMissing": "not in a scanned directory",
       "draftMax": "Draft length",
-      "draftMaxHelp": "Tokens drafted per step; 3 is fastest here",
+      "draftMaxHelp": "Most tokens drafted per step; 3 is fastest here. Values up to 3 apply without a reload",
       "draftMin": "Stop threshold",
       "draftMinHelp": "Drafting stops below this confidence"
     },

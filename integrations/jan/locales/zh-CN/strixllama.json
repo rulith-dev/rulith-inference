@@ -210,7 +210,7 @@
       "draftHelpHead": "正在使用合并后的草稿头",
       "draftMissing": "不在已登记的模型目录中",
       "draftMax": "草稿长度",
-      "draftMaxHelp": "每步起草的 token 数，本机 3 最快",
+      "draftMaxHelp": "每步最多起草的 token 数，本机 3 最快；改为 3 以内的值立即生效，无需重新加载",
       "draftMin": "停止阈值",
       "draftMinHelp": "置信度低于这个值时停止起草"
     },

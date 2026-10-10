@@ -498,6 +498,61 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:m.merge_draft_head(base,two,self.root/'models'/'x.gguf')
         self.assertEqual(caught.exception.code,'head_mismatch')
         with self.assertRaises(ValueError):m.merge_draft_head(out,head,self.root/'models'/'y.gguf')
+    def test_placement_uses_what_the_last_load_with_these_settings_took(self):
+        cfg=m.validate_profile({'mtp':False},self.model)
+        with patch.object(m,'gpu_need_raw',return_value=50<<30):
+            self.assertEqual(m.gpu_need_bytes(self.model,cfg,{}),(50<<30)+m.HOST_EXPERT_MARGIN)     # never measured
+            s={'mem':{'key':m.mem_key(self.model,cfg),'est':40<<30,'host_layers':3},'started_at':'2000-01-01T00:00:00+00:00'}
+            # it ran with 4 GiB more on the GPU than estimated, in a carve with room left
+            with patch.object(m,'gpu_dedicated_usage',return_value=(50<<30,44<<30)),patch.object(m,'dedicated_vram_bytes',return_value=64<<30):
+                self.assertFalse(m.note_gpu_use(s))
+            self.assertEqual(m.gpu_need_bytes(self.model,cfg,{}),(54<<30)+m.MEASURED_HEADROOM)
+            # a lower reading later does not lower the record; another profile has its own
+            with patch.object(m,'gpu_dedicated_usage',return_value=(50<<30,42<<30)),patch.object(m,'dedicated_vram_bytes',return_value=64<<30):
+                m.note_gpu_use(s)
+            self.assertEqual(m.gpu_need_bytes(self.model,cfg,{}),(54<<30)+m.MEASURED_HEADROOM)
+            self.assertEqual(m.gpu_need_bytes(self.model,dict(cfg,ubatch=4096),{}),(50<<30)+m.HOST_EXPERT_MARGIN)
+            # a carve full as the load becomes ready: replace it once, soon after the start only
+            import datetime as dt
+            now=dt.datetime.now().astimezone().isoformat()
+            with patch.object(m,'gpu_dedicated_usage',return_value=((64<<30)-(256<<20),44<<30)),patch.object(m,'dedicated_vram_bytes',return_value=64<<30):
+                self.assertTrue(m.note_gpu_use(dict(s,started_at=now)))
+                self.assertFalse(m.note_gpu_use(dict(s,started_at=now,replaced=True)))
+                self.assertFalse(m.note_gpu_use(s))                                                # long after the start
+    def test_a_new_draft_length_goes_to_the_running_server_without_a_reload(self):
+        run=m.validate_profile({'mtp':True,'draft_max':2},self.model)
+        env=m.runtime_environment(run)
+        self.assertEqual(env['STRIX_SPEC_DRAFT_CAP'],'2')                       # the cap under a limit of 3
+        args=m.argv(self.model,run)
+        self.assertEqual(args[args.index('--spec-draft-n-max')+1],'3')
+        s={'identity':{'pid':1},'model_id':self.model['id'],'profile':run,'host':'127.0.0.1','port':8080}
+        sent=[]
+        class R:
+            def __enter__(self):return self
+            def __exit__(self,*a):return False
+            def read(self):return b'{}'
+        def fake_open(req,timeout=None):
+            sent.append((req.full_url,json.loads(req.data)));return R()
+        with patch.object(m.HTTP,'open',side_effect=fake_open),patch.object(m,'atomic_json'):
+            self.assertTrue(m.apply_live(dict(s),self.model,dict(run,draft_max=3)))   # within the limit
+            self.assertTrue(sent[-1][0].endswith('/strix/spec') and sent[-1][1]=={'draft_max':3})
+            self.assertFalse(m.apply_live(dict(s),self.model,dict(run,draft_max=4)))  # above it: a reload
+            self.assertFalse(m.apply_live(dict(s),self.model,dict(run,draft_max=3,parallel=2)))  # something else too
+            self.assertFalse(m.apply_live(dict(s,identity=None),self.model,dict(run,draft_max=3)))  # nothing runs
+        self.assertEqual(len(sent),1)
+    def test_the_q6k_trunk_copies_count_in_the_estimate_only_when_switched_on(self):
+        # Q6_K copies of the 2-D Q8_0 weights but the token embedding: 210 bytes per 256 weights (issue #18)
+        f=self.root/'models'/'trunk.gguf'
+        gguf_tensors(f,[('blk.0.attn_q.weight',[512,4],8,b'q'*16),('token_embd.weight',[512,4],8,b'e'*16),
+                        ('blk.0.ffn_down_exps.weight',[512,4,2],8,b'x'*16),('blk.0.hc_attn_up.weight',[640,2],8,b'h'*16),
+                        ('blk.0.attn_gate.weight',[512,4],12,b'k'*16)])
+        self.assertEqual(m.trunk_twin_bytes([f]),2*4*210)
+        with patch.object(m,'metadata',return_value={'general.architecture':'qwen4exp','qwen4exp.block_count':4,
+                          'qwen4exp.attention.head_count_kv':1,'qwen4exp.attention.key_length':8}), \
+             patch.object(m,'model_shards',return_value=[f]):
+            cfg={'kv':'f16','ubatch':8,'parallel':1,'kv_pool':0,'context':16}
+            self.assertAlmostEqual(m.gpu_need_bytes(self.model,dict(cfg,trunk_decode_q6k=True),{})-
+                                   m.gpu_need_bytes(self.model,dict(cfg,trunk_decode_q6k=False),{}),2*4*210*1.01,places=3)
     def test_experts_that_do_not_fit_the_carve_go_to_system_memory_from_the_last_layer(self):
         tb={f'blk.{i}.ffn_{k}_exps.weight':100 for i in range(4) for k in ('gate','up','down')}
         tb['blk.0.attn_q.weight']=50

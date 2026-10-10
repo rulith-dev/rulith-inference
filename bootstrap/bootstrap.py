@@ -111,6 +111,9 @@ PATCH_ORDER = [
     "apply_image_text_compact_054",   # 0.5.4: text after an image keeps the compact sparse-attention inputs (issue #13)
     "apply_own_tokens_055",   # 0.5.5: a conversation's next request keeps the tokens the model generated
     "apply_kb_uncached_f16_055",   # 0.5.5: uncached block keys rounded to F16 as the cache holds them (issue #16)
+    "apply_server_056",   # 0.5.6: images in the splice, draft length by acceptance (#18), live draft length, MTP-off entries kept
+    "apply_chat_056",   # 0.5.6: no thinking when asked for none (#17), one leading system message (#12)
+    "apply_tool_params_056",   # 0.5.6: alternatives that each require a parameter: at least one in the grammar
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
@@ -140,6 +143,23 @@ VCVARS = [r"C:\Program Files\Microsoft Visual Studio\2022\%s\VC\Auxiliary\Build\
           for ed in ("Community", "Professional", "Enterprise", "BuildTools")]
 
 
+def find_vcvars():
+    """vcvars64.bat of the newest Visual Studio with the C++ x64 tools, as vswhere (installed with every edition, the
+    Build Tools included) reports it. The Build Tools install under Program Files (x86), which the list above missed
+    (issue #17); the list stays as the fallback."""
+    vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                           "Microsoft Visual Studio", "Installer", "vswhere.exe")
+    if os.path.isfile(vswhere):
+        out = subprocess.run([vswhere, "-latest", "-products", "*", "-requires",
+                              "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"],
+                             capture_output=True, text=True, errors="replace").stdout
+        for line in out.splitlines():
+            vc = os.path.join(line.strip(), "VC", "Auxiliary", "Build", "vcvars64.bat")
+            if line.strip() and os.path.isfile(vc):
+                return vc
+    return next((p for p in VCVARS if os.path.isfile(p)), None)
+
+
 def run(cmd, cwd=None, label="", env=None):
     print("  $ %s" % " ".join(str(c) for c in cmd))
     p = subprocess.run([str(c) for c in cmd], cwd=cwd, env=env)
@@ -159,9 +179,9 @@ def build_env():
     from a developer prompt, ask vcvars for its environment and merge it.
     """
     env = dict(os.environ)
-    vc = next((p for p in VCVARS if os.path.isfile(p)), None)
+    vc = find_vcvars()
     if not vc:
-        sys.exit("build: no Visual Studio 2022 vcvars64.bat found - see docs/install.md")
+        sys.exit("build: no Visual Studio vcvars64.bat found - see docs/install.md")
     out = subprocess.run(["cmd", "/c", "call", vc, ">nul", "&&", "set"],
                          capture_output=True, text=True, errors="replace").stdout
     for line in out.splitlines():

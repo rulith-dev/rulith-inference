@@ -117,8 +117,13 @@ export const useModelStore = create<Store>((set, get) => {
       const { selected, profile, saved } = get()
       if (!selected) return
       if (profile && !sameProfile(profile, saved)) {
-        const r = await request<{ profile: Profile }>('save', { id: selected, profile })
+        const r = await request<{ profile: Profile; applied_live?: boolean }>('save', { id: selected, profile })
         set({ profile: r.profile, saved: { ...r.profile } })
+        // a new draft length goes to the running server as it is: no reload, the conversations stay in memory
+        if (r.applied_live) {
+          await refreshStatus()
+          return
+        }
       }
       if (useStrixLlamaStatus.getState().status?.identity) await request('stop')
       await request('start', { id: selected })

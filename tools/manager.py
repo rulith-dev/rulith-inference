@@ -255,7 +255,7 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # Ignored with one slot, whose pool is its context.
                 kv_pool=0,
                 # trunk_decode_q6k: Q6_K in-memory copies of the Q8_0 trunk for decode-sized batches (HIP);
-                # +2.9 GB VRAM, prefill untouched, decode -9%. Off by default so smaller carves still load.
+                # +2.6 GB VRAM (UD-IQ4_XS), prefill untouched, decode -9%. Off by default so smaller carves still load.
                 trunk_decode_q6k=False,
                 # prompt_cache_disk: the server's prompt cache gets a disk tier (config/jan/prompt-cache,
                 # PROMPT_CACHE_DISK_MIB). A conversation's attention rows - ~29 KB per token for this model,
@@ -795,7 +795,24 @@ RS_BYTES_PER_SLOT = 469 * MIB            # qwen4exp's delta-net and conv states,
 # (both ub 8192), i.e. ~1755 MiB for the ubatch and ~6.74 KiB a cell
 COMPUTE_BYTES_PER_UBATCH_TOKEN = 1755 * MIB / 8192
 COMPUTE_BYTES_PER_CELL = 6.74 * 1024
-DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # at the draft's 2048-token ubatch (kv-pool-draft-mask)
+DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # the draft's compute buffer, a cell (kv-pool-draft-mask)
+# Measured 10-10 (64 GB carve, q8_0, 4 slots, MTP): the estimate held within ~1 GiB up to 512K cells and fell ~3.9 GiB
+# short at 768000. Of that, ~1.3 GiB was the draft's compute buffer, which the smaller draft ubatch past 512K does not
+# shrink (2687 -> 3812 MiB from 512000 to 768000 cells, against a capped estimate); the rest is GPU memory the server
+# holds beyond its buffer report once the pool passes 2^19 cells, ~10.9 KiB a cell above that. What a load really
+# takes corrects the next one with the same settings (placement.json).
+CELLS_RESIDENT_FROM = 1 << 19
+RESIDENT_BYTES_PER_CELL_ABOVE = 10.9 * 1024
+
+
+# The server starts with drafts of up to draft_limit(cfg) tokens and caps them at the profile's draft_max
+# (STRIX_SPEC_DRAFT_CAP), so a draft length up to the limit applies to a running server (POST /strix/spec) instead of
+# taking a reload, which empties the slots and the RAM cache. The per-slot tables are the limit's, under the cap.
+DRAFT_LIMIT_MIN = 3
+
+
+def draft_limit(cfg):
+    return max(int(cfg.get('draft_max') or 0), DRAFT_LIMIT_MIN)
 
 
 def model_shards(model):
@@ -817,9 +834,56 @@ def tensor_bytes(paths):
     return out
 
 
+GGML_Q8_0 = 8
+
+
+def trunk_twin_bytes(paths):
+    """What trunk_decode_q6k adds on the GPU: a Q6_K copy (210 bytes per 256 weights against Q8_0's 272) of every 2-D
+    Q8_0 weight but the token embedding, beside its original (build_decode_twins in the fork); 2.6 GB for
+    Qwen3.8-Flash-Next UD-IQ4_XS. The estimate left it out, so the switch put that much more on the carve than
+    placement allowed for (issue #18)."""
+    n = 0
+    for path in paths:
+        for name, dims, ttype, _ in gguf_layout(path)['tensors']:
+            if ttype == GGML_Q8_0 and name not in CPU_TENSORS and dims and dims[0] % 256 == 0 and all(d == 1 for d in dims[2:]):
+                n += (dims[0] // 256) * (dims[1] if len(dims) > 1 else 1) * 210
+    return n
+
+
 def gpu_need_bytes(model, cfg, tb):
-    """What a load of `model` with profile `cfg` puts on the GPU: weights, KV pool, recurrent states, compute buffers
-    and the MTP draft's own. qwen4exp only (the constants above are its); None for anything else."""
+    """What a load of `model` with profile `cfg` puts on the GPU, with room to spare: the estimate (gpu_need_raw) and
+    what loads with these settings took beyond it when they ran (placement.json), else HOST_EXPERT_MARGIN."""
+    raw = gpu_need_raw(model, cfg, tb)
+    if raw is None: return None
+    err = measured_error(model, cfg)
+    return raw + (max(err, -1024 * MIB) + MEASURED_HEADROOM if err is not None else HOST_EXPERT_MARGIN)
+
+
+# What loads really put on the GPU, against the estimate, by model and the settings that change it: the server's
+# dedicated GPU memory as Windows counts it (GPU Process Memory), its peak while it ran - it grows by ~1 GiB with the
+# first long prompt. Measured 10-10 on the 64 GB carve, the estimate was within 1.2 GiB at the defaults but 4.7 GiB
+# short at ubatch 16384, a 768K pool and image input, enough to overfill the carve and bring back the decode pauses.
+# The next load with the same settings places the experts by the measurement, with MEASURED_HEADROOM to spare.
+MEASURED_HEADROOM = 768 * MIB
+MEM_KEYS = ('kv', 'kv_pool', 'parallel', 'context', 'batch', 'ubatch', 'mtp', 'draft', 'vision', 'mmproj', 'qsa',
+            'trunk_decode_q6k', 'gpu_layers', 'flash_attention')
+# a load that already fills the carve to within this when it is ready overfills it with its first long prompt: it is
+# replaced once, placed by what was just measured
+OVERFULL_SLACK = 768 * MIB
+
+
+def mem_key(model, cfg):
+    return model['id'] + ' ' + json.dumps({k: cfg.get(k) for k in MEM_KEYS}, sort_keys=True)
+
+
+def measured_error(model, cfg):
+    rec = read_json(DATA / 'placement.json', {}).get(mem_key(model, cfg))
+    return rec.get('error') if isinstance(rec, dict) and isinstance(rec.get('error'), (int, float)) else None
+
+
+def gpu_need_raw(model, cfg, tb):
+    """The estimate: weights, KV pool, recurrent states, compute buffers and the MTP draft's own. qwen4exp only (the
+    constants above are its); None for anything else."""
     meta = metadata(Path(model['path']))
     arch = meta.get('general.architecture')
     if arch != 'qwen4exp': return None
@@ -832,14 +896,17 @@ def gpu_need_bytes(model, cfg, tb):
     need = sum(v for k, v in tb.items() if k not in CPU_TENSORS) * 1.01        # rows padded on the GPU
     need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT
     need += cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN + cells * COMPUTE_BYTES_PER_CELL
+    need += max(0, cells - CELLS_RESIDENT_FROM) * RESIDENT_BYTES_PER_CELL_ABOVE
     if cfg.get('vision'):
         mm = mmproj_path(cfg, model)
         if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
     if cfg.get('mtp') and cfg.get('draft') and Path(cfg['draft']).is_file():
         # the draft's K/V are f16 whatever the target's type
         need += Path(cfg['draft']).stat().st_size * 1.1 + cells * (kvh * (kl + vl) * 2 + (il * 2 if cfg.get('qsa') else 0)) + 300 * MIB
-        need += cells * DRAFT_MASK_BYTES_PER_CELL * draft_ubatch(cells) / 2048
-    return need + HOST_EXPERT_MARGIN
+        need += cells * DRAFT_MASK_BYTES_PER_CELL
+    if cfg.get('trunk_decode_q6k'):
+        need += trunk_twin_bytes(model_shards(model)) * 1.01
+    return need
 
 
 def total_ram_bytes():
@@ -1019,7 +1086,7 @@ def runtime_environment(cfg):
     # eight 70.7 without, 64.0 with 2 (greedy). Before 0.2.3's small-batch router and expert kernels four had been
     # better without.
     if cfg.get('mtp') and cfg.get('parallel', 1) > 1:
-        dm = int(cfg['draft_max'])
+        dm = draft_limit(cfg)
         env['STRIX_SPEC_DRAFT_BY_SLOTS'] = ','.join(str(x) for x in (dm, min(dm, 2), min(dm, 2), min(dm, 2), 0))
     # A request that samples (temperature above 0) has its drafts drawn and verified by speculative sampling since 0.4.1
     # and accepted less often than a greedy one's - at temperature 0.7 on prose ~67% at the first position, ~86% greedy -
@@ -1029,8 +1096,9 @@ def runtime_environment(cfg):
     # 67.6 with 1 against 63.5 with 2; four 77.0 with 1 against 71.2 with 2 and 70.7 without; six 87.0 with 1 against
     # 89.2 without.
     if cfg.get('mtp'):
-        dm = int(cfg['draft_max'])
+        dm = draft_limit(cfg)
         env['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'] = ','.join(str(x) for x in (min(dm, 2), min(dm, 2), min(dm, 1), min(dm, 1), 0))
+        env['STRIX_SPEC_DRAFT_CAP'] = str(int(cfg['draft_max']))
     # Several conversations decoding together: from seven tokens a step the routed experts leave the vector kernel's
     # single pass - for chunks of it up to 16 tokens since 0.2.3, for the tiled kernel past that, which dequantizes an
     # expert once for all its tokens (eight conversations +6% summed, measured before the chunks). Not with one slot,
@@ -1101,7 +1169,7 @@ def argv(model, cfg, net=None):
         args += ['--spec-ngram-mod-n-match', '24', '--spec-ngram-mod-n-min', '4', '--spec-ngram-mod-n-max', '8']
     if cfg['mtp']:
         spec_types.append('draft-mtp')
-        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(cfg['draft_max']), '--spec-draft-p-min', str(cfg['draft_min'])]
+        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(draft_limit(cfg)), '--spec-draft-p-min', str(cfg['draft_min'])]
     if spec_types: args += ['--spec-type', ','.join(spec_types)]
     return args
 
@@ -1237,6 +1305,26 @@ def network_view(s=None):
             'addresses': lan_addresses(), 'server': {'endpoint': base_url(srv) + '/v1', 'api_key': srv['api_key']}}
 
 
+def apply_live(s, m, cfg):
+    """A saved profile that differs from the running server's only in the draft length, within the limit the server
+    started with, goes to the server (POST /strix/spec) and the record of what runs: True. Anything else waits for a
+    reload: False."""
+    run = s.get('profile') or {}
+    if not s.get('identity') or s.get('model_id') != m['id'] or not run.get('mtp') or not cfg.get('mtp'): return False
+    changed = {k for k in set(cfg) | set(run) if cfg.get(k) != run.get(k)}
+    if changed != {'draft_max'} or int(cfg['draft_max']) > draft_limit(run): return False
+    try:
+        srv = listening(s)
+        req = urllib.request.Request(base_url(srv) + '/strix/spec', data=json.dumps({'draft_max': int(cfg['draft_max'])}).encode(),
+                                     method='POST', headers={'Content-Type': 'application/json', **auth_headers(srv)})
+        with HTTP.open(req, timeout=10) as res: res.read()
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+    s['profile'] = {**run, 'draft_max': int(cfg['draft_max'])}
+    atomic_json(DATA / 'process.json', s)
+    return True
+
+
 def persist_conversations(saved):
     """Before a stop, with the disk tier on: the conversations still in the server's slots leave memory with it,
     and the tier writes a conversation's recurrent state only when it leaves (POST /strix/persist answers once
@@ -1346,6 +1434,18 @@ def status():
         events = memory_events(s.get('log'))
         if events:
             result['memory_events'] = events
+        if result['status'] == 'ready' and note_gpu_use(s):
+            # the carve is full as the load becomes ready: its first long prompt would overfill it and the driver
+            # would move buffers to system memory every few seconds. Reloaded once, placed by what was just measured
+            m = next((x for x in catalog()['models'] if x.get('id') == s.get('model_id')), None)
+            if m and isinstance(s.get('profile'), dict):
+                persist_conversations(s)
+                process_identity(s['identity']['pid'], True, s['identity'])
+                atomic_json(DATA/'process.json', {'last_log': s.get('log', '')})
+                launch(m, s['profile'])
+                n = state(); n['replaced'] = True; atomic_json(DATA/'process.json', n)
+                result['status'] = 'loading'
+                result['replaced'] = 'placement'
     return result
 
 
@@ -1395,6 +1495,42 @@ def logs(offset=0):
         return {'text':text,'offset':offset+len(b)-tail,'file':str(path),'reset':reset}
 
 
+def gpu_share_estimate(m, cfg):
+    """{key, est}: the estimate of what this load puts on the GPU (experts in system memory left out), to set against
+    what it takes once it runs (note_gpu_use). None when there is no estimate for the model."""
+    try:
+        tb = tensor_bytes(model_shards(m))
+        raw = gpu_need_raw(m, cfg, tb)
+        if raw is None: return None
+        host = set(host_expert_layers(m, cfg))
+        moved = sum(v for k, v in tb.items() if (x := re.match(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$', k)) and int(x[1]) in host)
+        return {'key': mem_key(m, cfg), 'est': raw - moved, 'host_layers': len(host)}
+    except (OSError, ValueError, KeyError, struct.error):
+        return None
+
+
+def note_gpu_use(s):
+    """While a load runs: its dedicated GPU memory against the estimate, the peak kept in placement.json for the next
+    load with these settings. True when the load fills the carve already as it becomes ready - replace it once."""
+    mem = s.get('mem')
+    if not isinstance(mem, dict) or 'est' not in mem: return False
+    u = gpu_dedicated_usage()
+    if not u or not u[1]: return False
+    adapter, server = u
+    err = server - mem['est']
+    rec = read_json(DATA / 'placement.json', {})
+    old = rec.get(mem['key']) if isinstance(rec.get(mem['key']), dict) else None
+    if old is None or err > old.get('error', err) + 128 * MIB:
+        rec[mem['key']] = {'error': err if old is None else max(err, old['error']), 'peak': server,
+                           'host_layers': mem.get('host_layers'), 'at': dt.datetime.now().astimezone().isoformat()}
+        try: atomic_json(DATA / 'placement.json', rec)
+        except OSError: pass
+    carve = dedicated_vram_bytes()
+    try: age = (dt.datetime.now().astimezone() - dt.datetime.fromisoformat(s.get('started_at'))).total_seconds()
+    except (TypeError, ValueError): age = 1e9
+    return bool(carve) and adapter >= carve - OVERFULL_SLACK and not s.get('replaced') and age < 300
+
+
 def launch(m, cfg):
     """Start the runtime for model m with the already validated profile cfg: check the port, write
     the log banner, record the process identity."""
@@ -1442,7 +1578,7 @@ def launch(m, cfg):
     saved=dict(identity=ident,model_id=m['id'],model_path=m['path'],log=str(log),command=subprocess.list2cmdline(masked(command)),profile=cfg,
                started_at=dt.datetime.now().astimezone().isoformat(),adopted=False,
                runtime_env={k:v for k,v in env.items() if k.startswith(('LLAMA_','GGML_','STRIX_'))},
-               host=net['host'],port=net['port'],api_key=net['api_key'])
+               host=net['host'],port=net['port'],api_key=net['api_key'],mem=gpu_share_estimate(m,cfg))
     atomic_json(DATA/'process.json',saved)
     return public(saved)
 
@@ -1468,7 +1604,8 @@ def handle(op, data):
     if op=='save':
         m=model_by_id(data['id']); cfg=validate_profile(data['profile'],m)
         all_cfg=settings();all_cfg['profiles'][m['id']]=cfg;atomic_json(DATA/'settings.json',all_cfg)
-        return {'profile':cfg,'restart_required':bool(state().get('identity')),'argv':masked(argv(m,cfg))}
+        s=state(); live=apply_live(s,m,cfg)
+        return {'profile':cfg,'restart_required':bool(s.get('identity')) and not live,'applied_live':live,'argv':masked(argv(m,cfg))}
     if op=='network': return network_view()
     if op=='save_network':
         # settings.json's own values; a RULITH_* variable still overrides what it sets

@@ -10,7 +10,7 @@
   "common/chat.h": "b575be7cf92bc36d8af7711ff7e94bd767c7c3b3589c7660907e2e4c7235e88a",
   "common/common.cpp": "eb8755df4b79449339cb860e3ba929c5821c1dc32e7c07f9bd4f7e35cac5ddac",
   "common/common.h": "8f6972940e6677ef3b1b2a5f5f84dad93ce3c51269a961a2cce139725b39d475",
-  "common/json-schema-to-grammar.cpp": "ddeedf26917e28d81c3f4286fabcb54be63cdbd322fb482b8907eace499ca270",
+  "common/json-schema-to-grammar.cpp": "b23c0fc64581997dd43b7fd88d7c0e9ca6d857f252e61ead3e76a89cdff8d8d5",
   "common/json-schema-to-grammar.h": "45f685244fe311fb4db25e9aad9702653e4b9005f16e8dd25429b49495fae579",
   "common/parsers/deepseek.cpp": "17ffed4a6a61e0e889bb04427ebc554891ecb59c3647807a855f4c7582c0c71d",
   "common/parsers/kimi-k3.cpp": "2d4df03a0c9269844810fb6eb33407cdfd2052c644678bfba239aa0bfe28a8df",
@@ -18,6 +18,7 @@
   "common/parsers/minimax-m3.cpp": "9b6bfaa1fb2e1860fea8825e847242a6c4378911af835f11539b39adb4e040b9",
   "common/parsers/muse-glimmer.cpp": "3ed2d47181d706dbcd3e679e3aa45f9cb564d02c75feb6e2ae8477725ea4bb30",
   "common/parsers/parsers.cpp": "abfcaa113de0eb32504e418df3c1cb3dbd6b30a302b304da826edb48d1efe485",
+  "common/parsers/qwen3-coder.cpp": "59222e72f269d2cc84aefe48cadfd98394d50becf66f57534806bbec90914809",
   "common/sampling.cpp": "4e783c3085a969bdb76f49af6cbbf59d6ca855b7708fe2f97007a42059ab6cf0",
   "common/sampling.h": "e5cba84f679bbdbd0b435919541cc1e79a80b5968be4e06d4baa407b368d568b",
   "common/speculative.cpp": "dc65acd370a185a3af0e23c15997d8ec6e5a7cdc12db1ad2d39d181f0b133411",
@@ -93,16 +94,16 @@
   "src/models/qwen4exp.cpp": "75e268460257a1d34ddec78764e07995ea0763335faf82996e57c46954ffcdbb",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "709752dffa66f842633b78faf634156f8ef72e9b8c72514284a452a6e81cd75a",
-  "tools/server/server-chat.cpp": "fecee189c9470244de37b538ad741d5871053288dbd314b6a3afc98b502b42e0",
-  "tools/server/server-common.cpp": "a1066cbe194921c43066eab124342cacf833659098c34eac5bcbfcad79a7c591",
+  "tools/server/server-chat.cpp": "2cd103d121effed1b5ffaa758dbf6d07115c19ba174f357c2b853f94f4423165",
+  "tools/server/server-common.cpp": "0158ff8bd1b2ef49defd69658a40d4109a3e6202c66cf44cd73b519fe8e44d2c",
   "tools/server/server-common.h": "ce3d4154d51f7d44fcd57e9cb5228f72f240fc4094366562b4e9ab5a7e94e813",
-  "tools/server/server-context.cpp": "70b918ee85afde28c8319a2ec58d5dbf7a99034f4de7a943a6c61814afb465d0",
-  "tools/server/server-context.h": "9961ba75727e421993b1a4be35900487bd4b527e5b85c6b6496b852d17172f3c",
+  "tools/server/server-context.cpp": "c6f1e0e40089b4f8d24e90d7dbd682f004dfd31e9ee29320b6f3bd1e454a8688",
+  "tools/server/server-context.h": "8623e1596a3634d2ebc491138803e8375de649b67c5bdf020146032bad598d80",
   "tools/server/server-queue.cpp": "b00492a47d6dffed92dfa604ce2b1a4b8936df8b4acfbad6f683802e9c0c2e02",
   "tools/server/server-queue.h": "b3784032052cc7505420b038f1c53a1dc471bc91b4aa43b3cb6c9a92e7c3e3c9",
-  "tools/server/server-task.cpp": "743cf2168b9706038a20c2a44e15cbf2505f622ca479b7a6bfbfd7ecb364f5a6",
+  "tools/server/server-task.cpp": "93167b3d44c3b924769a20428cf1ca925ffcc971e3081293a95f791b798f522b",
   "tools/server/server-task.h": "4f5b62f6aecea5b54f729897510aaee5fd39414a9adaffd6fb9844801308ddde",
-  "tools/server/server.cpp": "5e2e8284457fac873a7871bb0201e0e17494025213b0be50cfeb02be2f377daa"
+  "tools/server/server.cpp": "481c3ef9d253c7dfd16252aed49216dcf84bddd9ebca9df7334be2f5a1e00690"
  },
  "repo": "https://github.com/pwilkin/llama.cpp",
  "revision": "f5daaa3cfa6358e5dd398911ec741813745a5440",
@@ -154,6 +155,10 @@
   "common/parsers/parsers.cpp": {
    "git_blob": "0a4d5cfbb522b6e08379917900e00734f1d7360a",
    "sha256": "bf0445e77529bb3ce223ec008a6f9c8a08cfc26fa626f240544671c3ef8408c8"
+  },
+  "common/parsers/qwen3-coder.cpp": {
+   "git_blob": "8a1e5213700f5d2389eeaa27c6444f465b43f31f",
+   "sha256": "cdcf4d97564b189f93aeca71a15d2ad46fea2d2440b55ba007ab72ddfc85b5f3"
   },
   "common/sampling.cpp": {
    "git_blob": "06dea1e1ccea368f685fdcd1fcb57774aea9ff24",
