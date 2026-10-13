@@ -114,6 +114,10 @@ PATCH_ORDER = [
     "apply_server_056",   # 0.5.6: images in the splice, draft length by acceptance (#18), live draft length, MTP-off entries kept
     "apply_chat_056",   # 0.5.6: no thinking when asked for none (#17), one leading system message (#12)
     "apply_tool_params_056",   # 0.5.6: alternatives that each require a parameter: at least one in the grammar
+    "apply_brand_057",         # 0.5.7: README, LICENSE, build info and the server start name Rulith Inference
+    "apply_spec_adapt_057",    # 0.5.7: the draft length for several generating conversations measured on the server
+    "apply_gdn_conv_norm_057", # 0.5.7: conv + q/k L2 norms in one pass; the conv's inputs kept from being overwritten
+    "apply_ubatch_embd_057",   # 0.5.7: a ubatch of consecutive tokens reads the batch's embedding rows in place
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

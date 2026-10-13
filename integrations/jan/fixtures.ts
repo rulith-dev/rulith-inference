@@ -19,7 +19,7 @@ const models = [
 
 const saved: Record<string, Record<string, unknown>> = {}
 let tick = 0
-const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 8, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536 }
+const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 8, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536, host_experts: true }
 const profileOf = (id: string) => ({ ...baseProfile, ...(saved[id] || {}) })
 
 const initial = new URLSearchParams(location.search).get('state') || 'ready'

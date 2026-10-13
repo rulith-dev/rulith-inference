@@ -126,6 +126,8 @@ DRAFT_UBATCH_FULL_POOL = 524288
 # profile fields an earlier version had: a page or a saved profile that still sends one is not refused for it.
 # shared_vram forced GGML_HIP_ENABLE_UNIFIED_MEMORY, which nothing reads (see runtime_environment).
 RETIRED_FIELDS = ('shared_vram',)
+# written with every saved profile; profile() moves the old defaults of earlier versions (2: draft_min 0.3 -> 0)
+PROFILE_VERSION = 2
 # the K/V cache types the runtime's sparse attention takes (the profile's `kv`)
 KV_TYPES = ('f16', 'q8_0')
 # a loaded server is flagged (status()['commit_low']) when Windows has less commit than this left: four
@@ -208,7 +210,13 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # A fourth position costs 18.5 ms of an 86 ms pass (7.4 draft step + 11.2 target verify,
                 # the latter being one more token's worth of expert bandwidth) and returned 0.56 tokens
                 # per pass where it needed 0.64. 3 -> 27.9 ms/token, 4 -> 28.7, 5 -> 30.2.
-                mtp=True, draft=str(DEFAULT_DRAFT), draft_max=3, draft_min=0.3,
+                # draft_min=0: the drafter stopped at a position whose top token it gave less than draft_min (0.3 until
+                # 2026-10-12). Cut short like that, the drafts' lengths varied from step to step and each new verify
+                # length rebuilt the target's graph, while the cut positions were often accepted. Measured on eight real
+                # tasks (tmp/mtpm/mixed.py, 256 tokens), tok/s: one conversation 49.5 -> 50.9 greedy, 47.5 -> 50.8 at
+                # temperature 0.7 (with the sampled table below); four 81.5 -> 85.5, eight 85.6 -> 96.7 greedy (with the
+                # server's own draft length for several conversations, STRIX_SPEC_ADAPT)
+                mtp=True, draft=str(DEFAULT_DRAFT), draft_max=3, draft_min=0,
                 # ngram_spec off: it was measured free on prose and +27% on a coding turn, but those
                 # runs had MTP off. Alongside the MTP draft it is neutral at best and costs real
                 # throughput at depth - an 84K chat measured 25.50 tok/s with MTP alone against
@@ -268,6 +276,13 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # tokens, which took this machine to its commit limit when two long conversations swapped:
                 # GitHub issue #1).
                 prompt_cache_disk=False,
+                # host_experts: the experts that do not fit the GPU carve go to system memory (ROCm_Host), placed by
+                # the estimate and what loads really took; off leaves the overflow to the display driver. Measured
+                # 10-10 at the 64 GB carve (768K pool, image input, MTP), quiet machine: placed 1357 t/s prefill, 38.5
+                # greedy and 34.1 sampled tok/s; the driver 1220, 34.4 and 32.8, its GPU memory full and 4.7 GB less
+                # system memory taken. With another program holding the CPU the placed run fell to 1095 / 31.7, the
+                # driver's barely moved. Neither paused.
+                host_experts=True,
                 # prompt_cache_disk_mib: the ceiling for that directory. Oldest goes first once it is
                 # reached, so the only cost of a larger number is disk; 200 GiB of a 1 TB drive keeps
                 # every conversation this machine can hold.
@@ -643,6 +658,8 @@ def profile(model):
     # validate_profile(): this is what the configuration page displays, and a stored `true`
     # reached it as a level called "true" whose help text does not exist.
     if type(cfg['thinking']) is bool: cfg['thinking'] = 'high' if cfg['thinking'] else 'off'
+    # draft_min 0.3 in a profile saved before PROFILE_VERSION 2 is the old default, not a choice (see DEFAULTS)
+    if saved.get('version', 1) < 2 and saved.get('draft_min') == 0.3: cfg['draft_min'] = DEFAULTS['draft_min']
     return cfg
 
 
@@ -654,7 +671,7 @@ def validate_profile(raw, model):
                   prompt_cache_disk_mib=(1024,262144), kv_pool=(0,KV_POOL_MAX))
     for field, (low, high) in bounds.items():
         if type(cfg[field]) is not int or not low <= cfg[field] <= high: fail('out_of_range', field=field, low=low, high=high)
-    for field in ('mtp', 'ngram_spec', 'qsa', 'trunk_decode_q6k', 'vision', 'prompt_cache_disk'):
+    for field in ('mtp', 'ngram_spec', 'qsa', 'trunk_decode_q6k', 'vision', 'prompt_cache_disk', 'host_experts'):
         if type(cfg[field]) is not bool: fail('not_boolean', field=field)
     # thinking was a switch before it was a level; a profile saved back then still loads
     if type(cfg['thinking']) is bool: cfg['thinking'] = 'high' if cfg['thinking'] else 'off'
@@ -866,14 +883,16 @@ def gpu_need_bytes(model, cfg, tb):
 # The next load with the same settings places the experts by the measurement, with MEASURED_HEADROOM to spare.
 MEASURED_HEADROOM = 768 * MIB
 MEM_KEYS = ('kv', 'kv_pool', 'parallel', 'context', 'batch', 'ubatch', 'mtp', 'draft', 'vision', 'mmproj', 'qsa',
-            'trunk_decode_q6k', 'gpu_layers', 'flash_attention')
+            'trunk_decode_q6k', 'gpu_layers', 'flash_attention', 'host_experts')
 # a load that already fills the carve to within this when it is ready overfills it with its first long prompt: it is
 # replaced once, placed by what was just measured
 OVERFULL_SLACK = 768 * MIB
 
 
 def mem_key(model, cfg):
-    return model['id'] + ' ' + json.dumps({k: cfg.get(k) for k in MEM_KEYS}, sort_keys=True)
+    # host_experts only when off, so that the measurements 0.5.6 recorded before the switch keep their keys
+    keys = {k: cfg.get(k) for k in MEM_KEYS if k != 'host_experts' or cfg.get(k) is False}
+    return model['id'] + ' ' + json.dumps(keys, sort_keys=True)
 
 
 def measured_error(model, cfg):
@@ -973,7 +992,8 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     """The layers whose experts this load keeps in system memory: none when it fits the carve, else the last layers'
     until the rest does. Bounded by system memory, leaving 16 GiB of it to Windows and everything else. The carve's
     share is less what other programs hold beyond OTHERS_BASELINE (measured now when the carve is), less OTHERS_GROWTH."""
-    if os.environ.get('STRIX_HOST_EXPERTS') == '0': return []      # leave the overflow to the display driver
+    # leave the overflow to the display driver: the profile's switch, or STRIX_HOST_EXPERTS=0 for every profile
+    if os.environ.get('STRIX_HOST_EXPERTS') == '0' or cfg.get('host_experts') is False: return []
     if dedicated is None:
         dedicated = dedicated_vram_bytes()
         if others is None: others = other_programs_dedicated()
@@ -1094,10 +1114,12 @@ def runtime_environment(cfg):
     # Measured 2026-10-01 on Chinese prose at Jan's sampling (temperature 0.7, top_k 20, top_p 0.8), tok/s summed:
     # one conversation 36.3 with 2 drafts against 35.5 with 3 (three seed sets); two 55.6 with 2, 54.6 with 1; three
     # 67.6 with 1 against 63.5 with 2; four 77.0 with 1 against 71.2 with 2 and 70.7 without; six 87.0 with 1 against
-    # 89.2 without.
+    # 89.2 without. With draft_min 0 (2026-10-12, eight real tasks) one sampled conversation drafts draft_max: 50.3 tok/s
+    # with 3, 48.0 with 4, 46.4 as before (2, or 3 by issue #18's choice, at 0.3). For two and more the server measures
+    # the draft lengths itself (STRIX_SPEC_ADAPT) and the table is where it starts.
     if cfg.get('mtp'):
         dm = draft_limit(cfg)
-        env['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'] = ','.join(str(x) for x in (min(dm, 2), min(dm, 2), min(dm, 1), min(dm, 1), 0))
+        env['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'] = ','.join(str(x) for x in (dm, min(dm, 2), min(dm, 1), min(dm, 1), 0))
         env['STRIX_SPEC_DRAFT_CAP'] = str(int(cfg['draft_max']))
     # Several conversations decoding together: from seven tokens a step the routed experts leave the vector kernel's
     # single pass - for chunks of it up to 16 tokens since 0.2.3, for the tiled kernel past that, which dequantizes an
@@ -1497,7 +1519,9 @@ def logs(offset=0):
 
 def gpu_share_estimate(m, cfg):
     """{key, est}: the estimate of what this load puts on the GPU (experts in system memory left out), to set against
-    what it takes once it runs (note_gpu_use). None when there is no estimate for the model."""
+    what it takes once it runs (note_gpu_use). None when there is no estimate for the model, or the driver places the
+    overflow: the carve is full then by design, and nothing is learnt about the app's placement."""
+    if os.environ.get('STRIX_HOST_EXPERTS') == '0' or cfg.get('host_experts') is False: return None
     try:
         tb = tensor_bytes(model_shards(m))
         raw = gpu_need_raw(m, cfg, tb)
@@ -1603,7 +1627,7 @@ def handle(op, data):
         return catalog(True)
     if op=='save':
         m=model_by_id(data['id']); cfg=validate_profile(data['profile'],m)
-        all_cfg=settings();all_cfg['profiles'][m['id']]=cfg;atomic_json(DATA/'settings.json',all_cfg)
+        all_cfg=settings();all_cfg['profiles'][m['id']]={**cfg,'version':PROFILE_VERSION};atomic_json(DATA/'settings.json',all_cfg)
         s=state(); live=apply_live(s,m,cfg)
         return {'profile':cfg,'restart_required':bool(s.get('identity')) and not live,'applied_live':live,'argv':masked(argv(m,cfg))}
     if op=='network': return network_view()

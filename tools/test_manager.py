@@ -519,6 +519,18 @@ class ManagerTests(unittest.TestCase):
                 self.assertTrue(m.note_gpu_use(dict(s,started_at=now)))
                 self.assertFalse(m.note_gpu_use(dict(s,started_at=now,replaced=True)))
                 self.assertFalse(m.note_gpu_use(s))                                                # long after the start
+    def test_the_overflow_can_be_left_to_the_driver(self):
+        tb={f'blk.{i}.ffn_{k}_exps.weight':100 for i in range(4) for k in ('gate','up','down')}
+        cfg=m.validate_profile({'mtp':False},self.model)
+        self.assertTrue(cfg['host_experts'])                                                   # the app places by default
+        with patch.object(m,'tensor_bytes',return_value=tb),patch.object(m,'gpu_need_bytes',return_value=1000):
+            self.assertEqual(m.host_expert_layers(self.model,cfg,dedicated=800),[3])
+            off=m.validate_profile({'mtp':False,'host_experts':False},self.model)
+            self.assertEqual(m.host_expert_layers(self.model,off,dedicated=800),[])             # the driver's then
+            self.assertNotIn('-ot',m.argv(self.model,off))
+        # nothing measured, nothing replaced: the carve is full by design
+        self.assertIsNone(m.gpu_share_estimate(self.model,off))
+        self.assertNotEqual(m.mem_key(self.model,cfg),m.mem_key(self.model,off))
     def test_a_new_draft_length_goes_to_the_running_server_without_a_reload(self):
         run=m.validate_profile({'mtp':True,'draft_max':2},self.model)
         env=m.runtime_environment(run)
@@ -652,11 +664,22 @@ class ManagerTests(unittest.TestCase):
         self.assertNotIn('STRIX_SPEC_DRAFT_BY_SLOTS',env({'parallel':4,'mtp':False}))
     def test_sampled_requests_draft_less(self):
         env=lambda raw: m.runtime_environment(m.validate_profile(dict({'vision':False},**raw),self.model))
-        # their own table, also with one slot: 2 drafts for one or two generating, 1 for three or four, none from five
+        # their own table, also with one slot: draft_max for one, 2 for two, 1 for three or four, none from five
         if m.validate_profile({'vision':False},self.model)['mtp']:
-            self.assertEqual(env({'parallel':1})['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'],'2,2,1,1,0')
+            self.assertEqual(env({'parallel':1})['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'],'3,2,1,1,0')
             self.assertEqual(env({'parallel':4,'draft_max':1})['STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED'],'1,1,1,1,0')
         self.assertNotIn('STRIX_SPEC_DRAFT_BY_SLOTS_SAMPLED',env({'parallel':4,'mtp':False}))
+    def test_draft_min_0_3_saved_before_profile_version_2_moves_to_the_new_default(self):
+        model=first_model()
+        s=m.settings();s['profiles'][model['id']]={'draft_min':0.3};m.atomic_json(m.DATA/'settings.json',s)
+        self.assertEqual(m.profile(model)['draft_min'],0)
+        # another value, or 0.3 saved by this version, is the user's
+        s['profiles'][model['id']]={'draft_min':0.35};m.atomic_json(m.DATA/'settings.json',s)
+        self.assertEqual(m.profile(model)['draft_min'],0.35)
+        with patch.object(m,'state',return_value={}):
+            m.handle('save',{'id':model['id'],'profile':{'vision':False,'mtp':False,'draft_min':0.3}})
+        self.assertEqual(m.settings()['profiles'][model['id']]['version'],m.PROFILE_VERSION)
+        self.assertEqual(m.profile(model)['draft_min'],0.3)
     def test_the_kv_cache_is_f16_or_q8_0_and_reaches_both_type_flags(self):
         for kv in m.KV_TYPES:
             a=m.argv(self.model,m.validate_profile({'vision':False,'kv':kv},self.model))

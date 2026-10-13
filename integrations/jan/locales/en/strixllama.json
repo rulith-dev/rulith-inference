@@ -186,7 +186,10 @@
       "promptCacheDiskHelp": "A conversation that comes back is read from disk instead of processed again",
       "promptCacheDiskInfo": "Off by default. When on, a conversation's attention rows are written to disk once each, as they are computed, and its recurrent state - the part that changes - only when the conversation leaves memory: another conversation needs its room, or the model is unloaded (about 0.3 GB each time). When it returns it is read back instead of processed again: a 173K-token conversation in about 1.6 seconds instead of three minutes of prefill. Survives restarts; conversations saved by older versions are removed. Applies on the next load.",
       "promptCacheDiskMib": "Disk space for conversations",
-      "promptCacheDiskMibHelp": "Beyond this the oldest conversation is removed; a long one takes several GB"
+      "promptCacheDiskMibHelp": "Beyond this the oldest conversation is removed; a long one takes several GB",
+      "hostExperts": "Place what does not fit the GPU",
+      "hostExpertsHelp": "On: faster. Off: leaves it to the graphics driver, which takes less system memory",
+      "hostExpertsInfo": "When the model does not fit the GPU memory carved out in the BIOS, part of it has to live in system memory. On (the default), the app moves only the experts that do not fit there and keeps everything read at every step on the GPU. Off, the graphics driver decides when memory runs out. Measured on the 64 GB carve with a 768K context pool and image input: with this on, prompts read about 10% faster and answers come about 4-11% faster; with it off, the GPU memory is used to the full and about 5 GB more system memory stays free for other programs. When another program keeps the CPU busy, the app's placement slows down more than the driver's. Applies on the next load."
     },
     "concurrency": {
       "title": "Concurrency",

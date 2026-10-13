@@ -111,6 +111,8 @@ export default function ConfigurationView() {
             <Row title={tr('config.context.promptCacheDiskMib')} description={tr('config.context.promptCacheDiskMibHelp')}
               control={<NumberField ariaLabel={tr('config.context.promptCacheDiskMib')} value={p.prompt_cache_disk_mib} onChange={set('prompt_cache_disk_mib')} min={1024} max={262144} step={1024} suffix="MB" />} />
           )}
+          <Row title={tr('config.context.hostExperts')} description={tr('config.context.hostExpertsHelp')} info={tr('config.context.hostExpertsInfo')}
+            control={<Switch aria-label={tr('config.context.hostExperts')} checked={p.host_experts !== false} onCheckedChange={set('host_experts')} />} />
         </Section>
 
         <Section label={tr('config.concurrency.title')}>
