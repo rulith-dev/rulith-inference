@@ -118,6 +118,11 @@ PATCH_ORDER = [
     "apply_spec_adapt_057",    # 0.5.7: the draft length for several generating conversations measured on the server
     "apply_gdn_conv_norm_057", # 0.5.7: conv + q/k L2 norms in one pass; the conv's inputs kept from being overwritten
     "apply_ubatch_embd_057",   # 0.5.7: a ubatch of consecutive tokens reads the batch's embedding rows in place
+    "apply_hc_cn_whole_058",   # 0.5.8: the HC combine + norm without per-iteration guards on 2560-wide streams
+    "apply_mmvq_rows4_058",    # 0.5.8: four rows a workgroup for the single-column IQ4_NL product on RDNA3.5
+    "apply_gdn_conv_decode_058",  # 0.5.8: the fused GDN conv + q/k norms for decode batches, state copies in the kernel
+    "apply_topk_moe_spec_058", # 0.5.8: the softmax + top-k + norm router kernel as a compile-time instance
+    "apply_dev_measure_058",   # 0.5.8: measurement only - STRIX_AB_MIN_NODES, STRIX_GPU_TIMELINE_PRINT
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
