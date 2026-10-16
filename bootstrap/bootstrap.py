@@ -123,6 +123,12 @@ PATCH_ORDER = [
     "apply_gdn_conv_decode_058",  # 0.5.8: the fused GDN conv + q/k norms for decode batches, state copies in the kernel
     "apply_topk_moe_spec_058", # 0.5.8: the softmax + top-k + norm router kernel as a compile-time instance
     "apply_dev_measure_058",   # 0.5.8: measurement only - STRIX_AB_MIN_NODES, STRIX_GPU_TIMELINE_PRINT
+    "apply_nemotron_h_059",    # 0.5.9: Nemotron 3.5 Super loads (RMS eps fallback); its MTP block's latent MoE
+    "apply_nemotron_omni_059", # 0.5.9: the nemotron_omni image projector (+ patches/nemotron-omni/nemotron-omni.cpp)
+    "apply_mamba2_scan_059",   # 0.5.9: the Mamba-2 prompt scan from a state row per thread pair; new states into the cache
+    "apply_concat_gaps_059",   # 0.5.9: CONCAT dim 0 from transposed views with gaps
+    "apply_mmvq_q4k_i8_059",   # 0.5.9: Q4_K products of 2-8 columns through a lane-ordered y
+    "apply_mtp_pos_jumps_059", # 0.5.9: an MTP draft context lets positions jump forward over a prompt's images
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

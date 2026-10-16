@@ -178,7 +178,7 @@ ERRORS = {
     'mmproj_missing': 'No vision projector ({name}) beside the model: add it, pick a file, or turn image input off',
     'qsa_architecture': 'Sparse attention (QSA) applies to Qwen3.8 Flash Next (qwen4exp) only',
     'qsa_needs_fa': 'Sparse attention (QSA) needs Flash Attention on',
-    'mtp_architecture': 'MTP is enabled for qwen4exp models only',
+    'mtp_architecture': 'MTP is enabled for qwen4exp models and models with their own MTP layer only',
     'draft_missing': "No MTP draft model found: put Unsloth's mtp-*.gguf beside the model, or turn MTP off",
     'head_mismatch': 'The draft head {head} does not belong to {base}',
     'identity_changed': 'The process identity has changed; refusing to unload it',
@@ -398,13 +398,26 @@ def checked_file(value):
     return path
 
 
+# the projector's type in its file name, by preference when a folder holds several (LM Studio's mmproj-<model>-<type>.gguf)
+MMPROJ_TYPES = ('-F16', '-BF16', '-F32', '-Q8_0')
+
+
 def mmproj_path(cfg, model):
-    """The vision projector to load: the profile's own path, else the one beside THIS model.
+    """The vision projector to load: the profile's own path, else the one beside THIS model - MMPROJ_NAME (Unsloth's
+    name), else another mmproj*.gguf there, by MMPROJ_TYPES; MMPROJ_NAME when there is none.
 
     Beside the model actually being loaded, not beside a default one — a model kept in a second
     directory would otherwise silently load the first model's projector.
     """
-    return Path(cfg['mmproj']) if cfg.get('mmproj') else Path(model['path']).parent / MMPROJ_NAME
+    if cfg.get('mmproj'): return Path(cfg['mmproj'])
+    folder = Path(model['path']).parent
+    if (folder / MMPROJ_NAME).is_file(): return folder / MMPROJ_NAME
+    try:
+        found = [p for p in folder.glob('*.gguf') if p.name.lower().startswith('mmproj') and p.is_file()]
+    except OSError:
+        found = []
+    rank = lambda p: (next((i for i, t in enumerate(MMPROJ_TYPES) if p.stem.upper().endswith(t)), len(MMPROJ_TYPES)), p.name.lower())
+    return min(found, key=rank) if found else folder / MMPROJ_NAME
 
 
 def metadata(path):
@@ -435,7 +448,11 @@ def metadata(path):
                 item, n = u32(), u64()
                 if n > 10_000_000: fail('gguf_array')
                 if item in fmt:
-                    f.seek(n * struct.calcsize('<' + fmt[item]), 1)
+                    size = struct.calcsize('<' + fmt[item])
+                    # per-layer values are kept (hybrid models give their recurrent layers no K/V heads)
+                    if keep and n <= 65536:
+                        return list(struct.unpack('<%d%s' % (n, fmt[item]), exact(n * size)))
+                    f.seek(n * size, 1)
                 else:
                     for _ in range(n): value(item, False, depth+1)
                 return None
@@ -450,7 +467,11 @@ def metadata(path):
             keep = key.startswith(('general.', 'split.')) or key.endswith(('.context_length', '.block_count',
                 # what gpu_need_bytes sizes the KV pool from
                 '.attention.head_count_kv', '.attention.key_length', '.attention.value_length', '.full_attention_interval',
-                '.attention.indexer.key_length'))
+                '.attention.indexer.key_length',
+                # and for other architectures (gpu_need_generic): their states, experts and appended MTP blocks
+                '.embedding_length', '.attention.head_count', '.feed_forward_length', '.attention.sliding_window',
+                '.ssm.conv_kernel', '.ssm.inner_size', '.ssm.state_size', '.ssm.group_count',
+                '.expert_used_count', '.expert_feed_forward_length', '.nextn_predict_layers'))
             val = value(u32(), keep)
             if keep and val is not None: meta[key] = val
         return meta
@@ -639,7 +660,7 @@ def profile(model):
     # refuses to start because a companion file is missing is the wrong first experience; the
     # switch turns itself on once the file appears and the directories are rescanned.
     default['draft'] = family_draft() or ''
-    default['mtp'] = MODEL_FAMILY in Path(model['path']).name and bool(default['draft'])
+    default['mtp'] = (MODEL_FAMILY in Path(model['path']).name and bool(default['draft'])) or builtin_mtp(model)
     default['vision'] = mmproj_path({}, model).is_file()
     # sparse attention is this architecture's, and above 64K context it is what makes the load fit
     default['qsa'] = model.get('architecture') == 'qwen4exp'
@@ -688,13 +709,14 @@ def validate_profile(raw, model):
         # a path the user picked goes through the full check (it must sit in a registered model root);
         # the automatic one ships beside the model, so only its existence matters
         if cfg['mmproj']: checked_file(cfg['mmproj'])
-        elif not mmproj_path(cfg, model).is_file(): fail('mmproj_missing', name=MMPROJ_NAME)
+        elif not mmproj_path(cfg, model).is_file(): fail('mmproj_missing', name='mmproj*.gguf')
     if cfg['qsa']:
         if model.get('architecture') != 'qwen4exp':
             fail('qsa_architecture')
         if cfg['flash_attention'] != 'on': fail('qsa_needs_fa')
-    if cfg['mtp']:
-        if model['architecture'] != 'qwen4exp': fail('mtp_architecture')
+    if cfg['mtp'] and model['architecture'] != 'qwen4exp':
+        if not builtin_mtp(model): fail('mtp_architecture')
+    elif cfg['mtp']:
         if not cfg['draft'] or not Path(cfg['draft']).is_file(): fail('draft_missing')
         checked_file(cfg['draft'])
     return cfg
@@ -901,11 +923,11 @@ def measured_error(model, cfg):
 
 
 def gpu_need_raw(model, cfg, tb):
-    """The estimate: weights, KV pool, recurrent states, compute buffers and the MTP draft's own. qwen4exp only (the
-    constants above are its); None for anything else."""
+    """The estimate: weights, KV pool, recurrent states, compute buffers and the MTP draft's own. The constants above
+    are qwen4exp's; other architectures get gpu_need_generic's."""
     meta = metadata(Path(model['path']))
     arch = meta.get('general.architecture')
-    if arch != 'qwen4exp': return None
+    if arch != 'qwen4exp': return gpu_need_generic(model, meta, arch, cfg, tb)
     cells, slots = kv_pool_cells(cfg), cfg.get('parallel', 1)
     n_attn = meta[f'{arch}.block_count'] // max(1, meta.get(f'{arch}.full_attention_interval', 1))
     kvh, kl = meta[f'{arch}.attention.head_count_kv'], meta[f'{arch}.attention.key_length']
@@ -926,6 +948,88 @@ def gpu_need_raw(model, cfg, tb):
     if cfg.get('trunk_decode_q6k'):
         need += trunk_twin_bytes(model_shards(model)) * 1.01
     return need
+
+
+def appended_blocks(meta, arch):
+    """The blocks a GGUF appends past its trunk for its own MTP head (nextn_predict_layers). This server never loads
+    them - its drafts come from a file of their own - so they take no GPU memory and moving their experts frees none."""
+    n, k = meta.get(f'{arch}.block_count'), meta.get(f'{arch}.nextn_predict_layers')
+    return set(range(n - k, n)) if isinstance(n, int) and isinstance(k, int) and 0 < k < n else set()
+
+
+# Other architectures: the same terms from the GGUF's own shape keys. The compute buffers and the MoE's scratch grow
+# with the ubatch by what a token holds there - rows of the residual stream and of its experts' FFN - fitted to
+# Nemotron 3.5 Super Q4_K_M (10-15, 262144 cells, 8 slots, 12 layers' experts in system memory: 59.7 GiB at its peak
+# with ub 8192 and image input, 59.3 estimated; 51.4 with ub 2048, 51.8 estimated). Approximate; what a load really
+# takes corrects the next one with the same settings (placement.json).
+GENERIC_EMBD_ROWS = 16
+GENERIC_FFN_ROWS = 3
+# and the draft context of a model's own MTP block, at its ubatch: with it Nemotron peaked at 57.9 GiB against 55.8
+# estimated at five rows (18 layers' experts in system memory, image input)
+GENERIC_DRAFT_FFN_ROWS = 6
+
+
+def gpu_need_generic(model, meta, arch, cfg, tb):
+    if not arch or not isinstance(meta.get(f'{arch}.block_count'), int): return None
+    mtp_blocks = appended_blocks(meta, arch) if cfg.get('mtp') else set()
+    skip = appended_blocks(meta, arch) - mtp_blocks
+    block = lambda name: int(name.split('.')[1]) if re.match(r'blk\.\d+\.', name) else -1
+    need = sum(v for k, v in tb.items() if k not in CPU_TENSORS and block(k) not in skip) * 1.01
+    n_layer = meta[f'{arch}.block_count'] - len(appended_blocks(meta, arch))
+
+    def per_layer(key):
+        v = meta.get(f'{arch}.{key}')
+        return (list(v[:n_layer]) + [0] * (n_layer - len(v))) if isinstance(v, list) else [v or 0] * n_layer
+
+    def biggest(key):
+        v = meta.get(f'{arch}.{key}')
+        return max(v or [0]) if isinstance(v, list) else (v or 0)
+    kvh, ff = per_layer('attention.head_count_kv'), per_layer('feed_forward_length')
+    interval = meta.get(f'{arch}.full_attention_interval')
+    if interval and not isinstance(meta.get(f'{arch}.attention.head_count_kv'), list):
+        kvh = [h if (i + 1) % interval == 0 else 0 for i, h in enumerate(kvh)]
+    n_embd, n_head = biggest('embedding_length'), biggest('attention.head_count')
+    kl = meta.get(f'{arch}.attention.key_length') or (n_embd // n_head if n_head else 0)
+    vl = meta.get(f'{arch}.attention.value_length') or kl
+    cells, slots, elem = kv_pool_cells(cfg), cfg.get('parallel', 1), KV_ELEM_BYTES.get(cfg['kv'], 2.0)
+    # sliding-window layers (every other one) keep a window per conversation and a ubatch
+    window = meta.get(f'{arch}.attention.sliding_window')
+    for i, h in enumerate(kvh):
+        n = min(cells, slots * window + cfg['ubatch']) if window and i % 2 == 0 else cells
+        need += n * h * (kl + vl) * elem
+    # recurrent layers (Mamba-2, gated delta net): no K/V heads, and no FFN where the model sizes FFNs per layer
+    d_inner, d_state = meta.get(f'{arch}.ssm.inner_size'), meta.get(f'{arch}.ssm.state_size')
+    if d_inner and d_state:
+        per_ff = isinstance(meta.get(f'{arch}.feed_forward_length'), list)
+        n_rec = sum(1 for h, f in zip(kvh, ff) if not h and not (per_ff and f))
+        conv = ((meta.get(f'{arch}.ssm.conv_kernel') or 4) - 1) * (d_inner + 2 * (meta.get(f'{arch}.ssm.group_count') or 1) * d_state)
+        need += (slots + 1) * n_rec * (conv + d_inner * d_state) * 4
+    used, ff_exp = biggest('expert_used_count'), biggest('expert_feed_forward_length')
+    ffn_rows = used * ff_exp if used and ff_exp else max(ff or [0])
+    need += cfg['ubatch'] * (n_embd * GENERIC_EMBD_ROWS + ffn_rows * GENERIC_FFN_ROWS) * 4
+    # the model's own MTP block: its weights are counted above; its draft context keeps f16 K/V for the block's
+    # attention, a mask over the pool (DRAFT_MASK_BYTES_PER_CELL) and compute buffers at the draft ubatch
+    if mtp_blocks:
+        all_kvh = meta.get(f'{arch}.attention.head_count_kv')
+        for b in mtp_blocks:
+            h = all_kvh[b] if isinstance(all_kvh, list) and b < len(all_kvh) else (all_kvh or 0)
+            need += cells * h * (kl + vl) * 2
+        need += draft_ubatch(cells) * (n_embd * GENERIC_EMBD_ROWS + ffn_rows * GENERIC_DRAFT_FFN_ROWS) * 4 + cells * DRAFT_MASK_BYTES_PER_CELL
+    if cfg.get('vision'):
+        mm = mmproj_path(cfg, model)
+        if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
+    return need
+
+
+def builtin_mtp(model):
+    """Whether the model carries its own MTP block (nextn_predict_layers), which the server drafts from with no draft
+    file - the draft context on the model's weights. qwen4exp drafts from a file of its own (family_draft)."""
+    if model.get('architecture') == 'qwen4exp': return False
+    try:
+        meta = metadata(Path(model['path']))
+    except (OSError, ValueError):
+        return False
+    return bool(appended_blocks(meta, meta.get('general.architecture')))
 
 
 def total_ram_bytes():
@@ -1001,6 +1105,9 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     try:
         tb = tensor_bytes(model_shards(model))
         need = gpu_need_bytes(model, cfg, tb)
+        meta = metadata(Path(model['path']))
+        skip = appended_blocks(meta, meta.get('general.architecture'))
+        if cfg.get('mtp') and builtin_mtp(model): skip = set()   # loaded: its experts move first
     except (OSError, ValueError, KeyError, struct.error):
         return []
     dedicated = dedicated * CARVE_USABLE
@@ -1012,7 +1119,7 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     per_layer = {}
     for name, size in tb.items():
         m = re.match(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$', name)
-        if m: per_layer[int(m[1])] = per_layer.get(int(m[1]), 0) + size
+        if m and int(m[1]) not in skip: per_layer[int(m[1])] = per_layer.get(int(m[1]), 0) + size
     moved, out = 0, []
     for layer in sorted(per_layer, reverse=True):
         if need - moved <= dedicated or moved + per_layer[layer] > cap: break
@@ -1191,7 +1298,10 @@ def argv(model, cfg, net=None):
         args += ['--spec-ngram-mod-n-match', '24', '--spec-ngram-mod-n-min', '4', '--spec-ngram-mod-n-max', '8']
     if cfg['mtp']:
         spec_types.append('draft-mtp')
-        args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers']), '--spec-draft-n-max', str(draft_limit(cfg)), '--spec-draft-p-min', str(cfg['draft_min'])]
+        # a model with its own MTP block drafts from it, the draft context on the model's weights (no -md)
+        if model['architecture'] == 'qwen4exp' or not builtin_mtp(model):
+            args += ['-md', cfg['draft'], '-ngld', str(cfg['gpu_layers'])]
+        args += ['--spec-draft-n-max', str(draft_limit(cfg)), '--spec-draft-p-min', str(cfg['draft_min'])]
     if spec_types: args += ['--spec-type', ','.join(spec_types)]
     return args
 
@@ -1616,7 +1726,8 @@ def handle(op, data):
         m=model_by_id(data['id'])
         # what the companion switches can be turned on with: the page explains an off switch by it
         companions={'draft':family_draft(),'mmproj':mmproj_path({},m).is_file(),
-                    'draft_head':any('-head-' in Path(p).name.lower() for p in [family_draft() or ''])}
+                    'draft_head':any('-head-' in Path(p).name.lower() for p in [family_draft() or '']),
+                    'mtp_builtin':builtin_mtp(m)}
         return {'model':m,'profile':profile(m),'companions':companions}
     if op=='roots':
         roots=data['roots']

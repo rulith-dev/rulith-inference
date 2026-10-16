@@ -24,7 +24,7 @@ export type Model = { id: string; path: string; name: string; filename: string; 
 export type Catalog = { models: Model[]; roots: string[]; scanned_at: string; merged?: string[]; merge_errors?: Record<string, string> }
 // what the companion switches have to work with: the draft the profile would use (null when none is
 // on disk), whether it is a merged *-head-* one, and whether the projector sits beside the model
-export type Companions = { draft: string | null; draft_head: boolean; mmproj: boolean }
+export type Companions = { draft: string | null; draft_head: boolean; mmproj: boolean; mtp_builtin?: boolean }
 export type LogChunk = { text: string; offset: number; file: string; reset: boolean }
 export type Status = {
   status: string; endpoint: string; runtime: string; runtime_available?: boolean; runtime_env?: Record<string, string>

@@ -587,6 +587,50 @@ class ManagerTests(unittest.TestCase):
             # experts in system memory no longer cap the drafts (0.5.3 drafted one; the pauses were the carve overfilled)
             args=m.argv(self.model,m.validate_profile({'mtp':True,'draft':str(self.draft),'draft_max':3},self.model))
             self.assertEqual(args[args.index('--spec-draft-n-max')+1],'3')
+    def test_a_projector_under_another_name_beside_the_model_is_found(self):
+        self.mmproj.unlink()
+        self.assertFalse(m.profile(self.model)['vision'])                                  # none: image input off
+        f32=self.file.with_name('mmproj-Model-F32.gguf');gguf(f32)
+        bf16=self.file.with_name('mmproj-Model-BF16.gguf');gguf(bf16)
+        self.assertEqual(m.mmproj_path({},self.model),bf16)                                # LM Studio's names, BF16 before F32
+        self.assertTrue(m.profile(self.model)['vision'])
+        args=m.argv(self.model,m.validate_profile({'mtp':False},self.model))
+        self.assertEqual(Path(args[args.index('--mmproj')+1]),bf16)
+        gguf(self.mmproj)
+        self.assertEqual(m.mmproj_path({},self.model),self.mmproj)                         # Unsloth's name first
+        self.assertEqual(m.mmproj_path({'mmproj':str(f32)},self.model),f32)                # a picked file wins
+    def test_other_architectures_are_estimated_from_their_shape_keys(self):
+        # a Nemotron-H-like hybrid: 4 blocks (recurrent, MoE, attention, MoE) and one appended MTP block
+        meta={'general.architecture':'nemo','nemo.block_count':5,'nemo.nextn_predict_layers':1,'nemo.embedding_length':64,
+              'nemo.attention.head_count':4,'nemo.attention.head_count_kv':[0,0,2,0,2],'nemo.attention.key_length':16,
+              'nemo.feed_forward_length':[0,32,0,32,32],'nemo.ssm.inner_size':128,'nemo.ssm.state_size':8,
+              'nemo.ssm.group_count':2,'nemo.ssm.conv_kernel':4,'nemo.expert_used_count':2,'nemo.expert_feed_forward_length':32}
+        tb={'token_embd.weight':1000,'blk.0.ssm_in.weight':100,'blk.1.ffn_up_exps.weight':300,'blk.2.attn_q.weight':100,
+            'blk.3.ffn_up_exps.weight':300,'blk.4.ffn_up_exps.weight':300}
+        cfg={'kv':'f16','ubatch':8,'parallel':2,'kv_pool':0,'context':256,'vision':False}
+        self.assertEqual(m.appended_blocks(meta,'nemo'),{4})
+        with patch.object(m,'metadata',return_value=meta):
+            weights=800*1.01                                                               # no embedding, no MTP block
+            kv=256*2*(16+16)*2.0                                                           # block 2 only (4 is the MTP's)
+            states=3*1*((4-1)*(128+2*2*8)+128*8)*4                                         # block 0, slots + 1
+            compute=8*(64*m.GENERIC_EMBD_ROWS+2*32*m.GENERIC_FFN_ROWS)*4
+            self.assertAlmostEqual(m.gpu_need_raw(self.model,cfg,tb),weights+kv+states+compute,places=3)
+            # moving the MTP block's experts frees nothing: placement starts at the last trunk layer
+            with patch.object(m,'tensor_bytes',return_value=tb),patch.object(m,'gpu_need_bytes',return_value=1000):
+                self.assertEqual(m.host_expert_layers(self.model,{},dedicated=800),[3])
+    def test_a_model_with_its_own_mtp_layer_drafts_from_it_without_a_draft_file(self):
+        model={**self.model,'id':'nemo','architecture':'nemo'}
+        meta={'general.architecture':'nemo','nemo.block_count':5,'nemo.nextn_predict_layers':1}
+        with patch.object(m,'metadata',return_value=meta):
+            self.assertTrue(m.builtin_mtp(model))
+            self.assertTrue(m.profile(model)['mtp'])                                       # on by default, as Qwen's
+            args=m.argv(model,m.validate_profile({'draft':''},model))
+            self.assertNotIn('-md',args)                                                   # the draft context is the model's
+            self.assertEqual(args[args.index('--spec-type')+1],'draft-mtp')
+            self.assertFalse(m.builtin_mtp(self.model))                                    # qwen4exp drafts from its file
+        with patch.object(m,'metadata',return_value={'general.architecture':'nemo','nemo.block_count':5}):
+            self.assertFalse(m.profile(model)['mtp'])
+            with self.assertRaises(m.ManagerError): m.validate_profile({'mtp':True},model)
     def test_low_rank_head_is_preferred_and_saved_profiles_move_to_it(self):
         iq=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf');gguf(iq)
         lr=self.draft.with_name(self.draft.stem+'-head-lr512.gguf');gguf(lr)

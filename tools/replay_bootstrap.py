@@ -42,7 +42,7 @@ sys.path.insert(0, os.path.join(ROOT, "bootstrap"))
 from bootstrap import SNAPSHOT, PATCH_ORDER, TREE  # noqa: E402
 
 # the patches only touch these; copying the rest of upstream would be minutes of I/O for nothing
-SUBS = ["ggml/src/ggml-cuda", "ggml/include", "src", "common", "tools/server"]
+SUBS = ["ggml/src/ggml-cuda", "ggml/include", "src", "common", "tools/server", "tools/mtmd"]
 
 
 def sha256(path):

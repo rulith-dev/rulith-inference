@@ -3,7 +3,8 @@
   "ggml/src/ggml-cuda/strixllama-chain.cu",
   "ggml/src/ggml-cuda/strixllama-chain.cuh",
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cu",
-  "ggml/src/ggml-cuda/strixllama-getrows-cast.cuh"
+  "ggml/src/ggml-cuda/strixllama-getrows-cast.cuh",
+  "tools/mtmd/models/nemotron-omni.cpp"
  ],
  "produces": {
   "LICENSE": "67d55e45873521c96368ece032171dca08c6dedeef2d9ee1872e10f542b0a1e2",
@@ -30,7 +31,7 @@
   "ggml/src/ggml-alloc.c": "6a4b269c56f03c37f74f78419aa9e77463ee8e58a82e1f1e7be6e850a550974c",
   "ggml/src/ggml-cpu/ggml-cpu.c": "b1bc2b55c1f747a4334fa2255387ae03e99dd4a094db4f39a7089adae46fb8ce",
   "ggml/src/ggml-cpu/ops.cpp": "48267ec6cf55ad47915ff755b53fc2a90118cc8c1912c0b0671644e8827894e4",
-  "ggml/src/ggml-cuda/concat.cu": "e055ceb67e104305084dde17b21794c8ff5999d389174ef81a4ba87fbcb6a4bc",
+  "ggml/src/ggml-cuda/concat.cu": "30eccbc05e61c5f7b30c64d4560d2de3df28af7e5964d42176613c44527a01c3",
   "ggml/src/ggml-cuda/cpy.cu": "e3b2d6e5eb2182be9c105d716b48abaf5c10f9de0567bfc783e73c7b532502f1",
   "ggml/src/ggml-cuda/fattn-common.cuh": "0ae8fab68b1ee021ff4ddd9fe6d231a91f055bc54fdb3126d9e82669d61e6549",
   "ggml/src/ggml-cuda/fattn-tile.cuh": "0c34e5e903b4e5cafec673be01a1481cdecf8709af4fb57f47fb05212f40cfb2",
@@ -39,7 +40,7 @@
   "ggml/src/ggml-cuda/gated_delta_net.cuh": "ab519101ce97b478efff9798ccf46b7602c667986cb50a1044bb1bdfb9cbfa84",
   "ggml/src/ggml-cuda/gdn-conv.cu": "640bf4881de395ba327837c1ee84381c294262dfa9dc879f7a3ec2acb4b569b5",
   "ggml/src/ggml-cuda/gdn-conv.cuh": "07a45a26fc8d29026e9359ee0a1ff4d000eae78f103c53596582c00c673bd69e",
-  "ggml/src/ggml-cuda/ggml-cuda.cu": "e285677f9a953537135fd99febc2e324d421ef3ccf3e74dcb90c8995444a2808",
+  "ggml/src/ggml-cuda/ggml-cuda.cu": "111318db0fa3be5c24a04ed3881e84a274612cdbf86857fac58a88f952a0296a",
   "ggml/src/ggml-cuda/hc-cn.cu": "5eac2761d8291c28cc77b955d71cb909d82ad3a5ec92296a6e6e71bf347e1758",
   "ggml/src/ggml-cuda/hc-cn.cuh": "489a6b71dd2ed41609a481b4ede3b15369fe5bee8332fd4b1ce338dad49fe422",
   "ggml/src/ggml-cuda/idx-relu-sum.cu": "3b098c666cf4b2b580d393226296d58d133042128c74e988c61a961e5a573467",
@@ -51,7 +52,7 @@
   "ggml/src/ggml-cuda/mmq.cu": "afa9ca158fc00b2eddf386677950640796d0a6288f2a7e6b4770d377a5a52874",
   "ggml/src/ggml-cuda/mmq.cuh": "fc09981f738c1c8458bc1e0298b49d4adf19386cfd45e893587b218d4db1e4c3",
   "ggml/src/ggml-cuda/mmvf.cu": "3f7ab7a069801538a4da80728c909b60f9dd243a9e28264ffe21d1dcfb643317",
-  "ggml/src/ggml-cuda/mmvq.cu": "8891174606c8670bcc525e06d37398f961cc39a96eeb810bc244e1bea8e59cfc",
+  "ggml/src/ggml-cuda/mmvq.cu": "56c6412b6efc6d0d5b987c84a12b77cc4a009ca287a8d9dc62653608a435c979",
   "ggml/src/ggml-cuda/moe-weighted-reduction.cu": "934c095e83f00e0f5f20bca7270bc45cb5f966a1f840943ebc969aeef9a48bef",
   "ggml/src/ggml-cuda/moe-weighted-reduction.cuh": "543f685ce66c53dfcddd997a994d2c76e882f7052fddcc581e584d8bf6968407",
   "ggml/src/ggml-cuda/norm-gated.cu": "6ae2ebae61b5e273a53d2271a501868bd3adb67f6f27d6c89b145fe4be6a5e0b",
@@ -62,6 +63,8 @@
   "ggml/src/ggml-cuda/qsa.cuh": "899fe305633833ea0fa845639ea87f800d483d1c7a31aacef36917bf3acea1f2",
   "ggml/src/ggml-cuda/softcap.cu": "e1c2bc8f06990f5b61cca50f6edb5892576ded44b42c4c00bade0d288c7fb3a0",
   "ggml/src/ggml-cuda/softcap.cuh": "423a18f7e553a56c4482d3284207e53607b8edbd0a0f07882b8fce5a4a0f5ebb",
+  "ggml/src/ggml-cuda/ssm-scan.cu": "d1b975966fb5aab3684bf647c034747cab8a3b8661271cba4ed1b00a0d8f335b",
+  "ggml/src/ggml-cuda/ssm-scan.cuh": "eef537856d8595e5db93058367d200cf04c1ed7e5bd3cfef6c1f68953511c868",
   "ggml/src/ggml-cuda/strixllama-chain.cu": "591ac09f01757546672cd8ad33aa1b941b0a5861e8fc0bab358d90ce34e954fd",
   "ggml/src/ggml-cuda/strixllama-chain.cuh": "15d9dc25d28d292f2ea7c72e80281694855c847465532991c1060c67a583723f",
   "ggml/src/ggml-cuda/strixllama-getrows-cast.cu": "5019f6b5201fd11d2d77c00a7a4df1ee387813d4acc28455fddd43105ec80a9a",
@@ -74,9 +77,9 @@
   "include/llama.h": "3007ca41123d654cc593386e1fe8eaedb60c07e9f126d4921d584be6bc9be282",
   "src/llama-arch.cpp": "6de26cbeecfce19f5b45bfa128c7e318a6a557b145f52b8c07c108e95b664913",
   "src/llama-arch.h": "45feff5722cb46554f5e8e13ecbe08969d4437a4e78d90bcd0d7946b6868c041",
-  "src/llama-batch.cpp": "d54285ce13a17471327b44a4e469b48d035413bae6b9b49ea30825d3dd00f4e9",
-  "src/llama-batch.h": "568cef05377579b3db763404064155e75ddd4a18507208c1d017ae8560ea0261",
-  "src/llama-context.cpp": "f4798a171b02fe95b852f6e75f29febf390f52e39b3c596f65c3387160a413e2",
+  "src/llama-batch.cpp": "af4e40f04e472b4c181b03b1aa8d107d1b15e39074b23adca72e9250091e2fd9",
+  "src/llama-batch.h": "6d845c899d13dcef546865785dd8a59abdb5e201268380f8d2ec9fab6f493527",
+  "src/llama-context.cpp": "70342bf55704acdcb713df68917de00fe251a96c6c020e78e57d72d8c3779689",
   "src/llama-context.h": "ee192f67f68a29d67dfb7a78b5f52da7e6695b56b07411e1ea65e5f8bbabeb83",
   "src/llama-cparams.h": "9654d71c1c9333b0587001642acce3addcee6ebaf9cc021da14531c1e052fa33",
   "src/llama-ext.h": "b87dc15ac0bf33563737b2b7ccf6345647c9c928fe513fa2998850e3af72ee88",
@@ -95,9 +98,17 @@
   "src/models/block-graph.inc": "716077d2dd61f3d7edb94945eaf1cd4aa2bb86f452eff22832d9cf279d55ec07",
   "src/models/delta-net-base.cpp": "bc3ff0fc6e312a0e848cbe19ff1772aac7ea703ee86379d7b094a522490438f9",
   "src/models/models.h": "a47d4049f2e5385a0f38465fd85d2ff99f47c3bf7629c92bf2706e10ccc56246",
+  "src/models/nemotron-h-moe.cpp": "fa6c7c2544b49fb3be01b33535903a8eeb77f9aad15a7a86741f3df2ee2d72b5",
+  "src/models/nemotron-h.cpp": "d16a793885f80902423b663dec15d739b588d5ed0ba4e8b6dec2182364d12320",
   "src/models/qwen4exp.cpp": "149987130224e69e6b68d640e5f787a1bc2776a32f9acfb375cda50b869b0ad3",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/test-backend-ops.cpp": "709752dffa66f842633b78faf634156f8ef72e9b8c72514284a452a6e81cd75a",
+  "tools/mtmd/CMakeLists.txt": "8692d1268ef008b17512c22e07b00b1db32793a8b47b605086ed1debab126a06",
+  "tools/mtmd/clip-impl.h": "45007fd48d934fd550d737895a75ebdf18a9e254eb02baa7ab7d3fa5763d261e",
+  "tools/mtmd/clip.cpp": "b82b74302f6744380e104974ecbc5851e51809e9990ed01693106e4b0f639557",
+  "tools/mtmd/models/models.h": "db562b292645c032eaf7b77bed96809b7fe3992de68d8b2aaeba81e8cac144e9",
+  "tools/mtmd/models/nemotron-omni.cpp": "13773144b5ef91705a8afc29e7e5e47659bf3eb24e3671cee3237b3eec374049",
+  "tools/mtmd/mtmd.cpp": "f1da8b49f512a8b0272919bc7893e7706ad8d287b8a7ebabbc50e5268542eea4",
   "tools/server/server-chat.cpp": "2cd103d121effed1b5ffaa758dbf6d07115c19ba174f357c2b853f94f4423165",
   "tools/server/server-common.cpp": "0158ff8bd1b2ef49defd69658a40d4109a3e6202c66cf44cd73b519fe8e44d2c",
   "tools/server/server-common.h": "ce3d4154d51f7d44fcd57e9cb5228f72f240fc4094366562b4e9ab5a7e94e813",
@@ -336,6 +347,14 @@
    "git_blob": "6d34fb2bee41684d93504e8a2fae172c993f5e50",
    "sha256": "4187b9b447cdafcce48c5d855f6b614e6637fa1c1138943c8fec8ef415eb0def"
   },
+  "ggml/src/ggml-cuda/ssm-scan.cu": {
+   "git_blob": "40cb38dee759cc34135bfb9132f5201d60351588",
+   "sha256": "8a0287be798b6fb2e0ae0ab74c984741040e7f48792d3b366f1510810b020517"
+  },
+  "ggml/src/ggml-cuda/ssm-scan.cuh": {
+   "git_blob": "ee078f5ebb8c0b769c94bae75be3f8e94be6e683",
+   "sha256": "ff506178172b025df33aabab47df575813b41208c9a82901d9ffca1636481bf7"
+  },
   "ggml/src/ggml-cuda/template-instances/fattn-tile-instance-dkq256-dv256.cu": {
    "git_blob": "bc65c723eca9df5323feb38c4a5c792ce31dafbc",
    "sha256": "e13966ac7f971950f9060ba87e0026a1ffab9b1f5697b5b29a5ff3226169ea5b"
@@ -452,6 +471,14 @@
    "git_blob": "4eb028f76daa75330cdd3df7955a894ea994bd3d",
    "sha256": "2859f3a64f14037eff44873b2462f7eacb9fbe8ed92b0e5446829346d26e2250"
   },
+  "src/models/nemotron-h-moe.cpp": {
+   "git_blob": "4d03f49e0f8a4d915af1ed16c4bf87af23cca72f",
+   "sha256": "f525e36101b9a0a67b73847ab9946df761884023738c97aca2e2a724204b480d"
+  },
+  "src/models/nemotron-h.cpp": {
+   "git_blob": "d2c48f125ee2a77673eae7943dc8e5828780b369",
+   "sha256": "e335badd6688f25bb47eaab96886a405731fcb5d223627c88f52d03f5dbc9373"
+  },
   "src/models/qwen4exp.cpp": {
    "git_blob": "eb7fb4df6eb46728a60a345e45b693552357000c",
    "sha256": "7497a7e220ae65d4fbfaa0e7c302025da51c283e24600cb1c2ec60898cf82333"
@@ -463,6 +490,26 @@
   "tests/test-backend-ops.cpp": {
    "git_blob": "a1ca8d4a3b6b093f6555c1c85e47d0133806db70",
    "sha256": "8fe648f1486c34c1c8188562f7d03ab3311f78ba564531a1f8141ee86dd543a5"
+  },
+  "tools/mtmd/CMakeLists.txt": {
+   "git_blob": "176eb15057407eb230c485aed313200b8e77b090",
+   "sha256": "01e273d08c4c1477f8ab5e433aafbb6c89d786dec04bcedbf0fb4b382996f159"
+  },
+  "tools/mtmd/clip-impl.h": {
+   "git_blob": "72148a4d9a9bee3b6f81545f2695f1c20bacfae3",
+   "sha256": "5946bc4c9a575fdfb2b9858b8762edd10d3630fda90c306568b807acb2eed109"
+  },
+  "tools/mtmd/clip.cpp": {
+   "git_blob": "cd6421def528f3a4156f440d9676b18edba8402b",
+   "sha256": "73015c97b683c741bcdd99d8aace3e056e075674b9b6b0eba7c2b0993a0ea7b9"
+  },
+  "tools/mtmd/models/models.h": {
+   "git_blob": "5945c6d92cb7eba4d403b992279b8dcd794e80e0",
+   "sha256": "d1468dd2543233d6ddd85305363f5bd6f7a960bdeacb428793e804f6fb40c1f5"
+  },
+  "tools/mtmd/mtmd.cpp": {
+   "git_blob": "00ecadcf4dfe8b0f39ebca095c6995b7a041986f",
+   "sha256": "b5f5660650d5abd1b8e23b6e4246f33eedc73b79fc904c2ff521796060bd56bb"
   },
   "tools/server/server-chat.cpp": {
    "git_blob": "a6fe3c6ba61962795378a82d3f1a8c45b121448a",
