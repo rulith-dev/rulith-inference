@@ -830,18 +830,28 @@ VISION_EXTRA = 300 * MIB                 # the projector's compute buffer and co
 KV_ELEM_BYTES = {'f16': 2.0, 'bf16': 2.0, 'q8_0': 34 / 32, 'q5_1': 24 / 32, 'q5_0': 22 / 32, 'q4_1': 20 / 32, 'q4_0': 18 / 32,
                  'iq4_nl': 18 / 32}
 RS_BYTES_PER_SLOT = 469 * MIB            # qwen4exp's delta-net and conv states, one conversation (3747 MiB for 8)
-# the target's compute buffer grows with the ubatch and with the pool: 3522 MiB at 262144 cells, 5206 MiB at 512000
-# (both ub 8192), i.e. ~1755 MiB for the ubatch and ~6.74 KiB a cell
-COMPUTE_BYTES_PER_UBATCH_TOKEN = 1755 * MIB / 8192
-COMPUTE_BYTES_PER_CELL = 6.74 * 1024
-DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # the draft's compute buffer, a cell (kv-pool-draft-mask)
-# Measured 10-10 (64 GB carve, q8_0, 4 slots, MTP): the estimate held within ~1 GiB up to 512K cells and fell ~3.9 GiB
-# short at 768000. Of that, ~1.3 GiB was the draft's compute buffer, which the smaller draft ubatch past 512K does not
-# shrink (2687 -> 3812 MiB from 512000 to 768000 cells, against a capped estimate); the rest is GPU memory the server
-# holds beyond its buffer report once the pool passes 2^19 cells, ~10.9 KiB a cell above that. What a load really
-# takes corrects the next one with the same settings (placement.json).
-CELLS_RESIDENT_FROM = 1 << 19
-RESIDENT_BYTES_PER_CELL_ABOVE = 10.9 * 1024
+# the target's compute buffer is the larger of two graphs' needs, one that grows with the ubatch alone and one with
+# the ubatch and the pool. Measured 10-17 (q8_0, 4 slots, MTP): 3473 MiB at 262144 cells / ub 8192, 6930 at 262144 /
+# 16384, 4290 at 512000 / 8192, 7302 at 768000 / 16384 - all four within 10 MiB
+COMPUTE_BYTES_PER_UBATCH_TOKEN = 0.4229 * MIB
+COMPUTE_POOL_GRAPH_BYTES_PER_UBATCH_TOKEN = 0.2118 * MIB
+COMPUTE_BYTES_PER_CELL = 5.11 * 1024
+# what the server takes beyond its buffer report with its first long prompts, by the ubatch (~0.95 GiB at 8192)
+PROMPT_GROWTH_BYTES_PER_UBATCH_TOKEN = 0.115 * MIB
+# the MTP draft's compute buffer: its prompt graphs store K/V and reserve no outputs (LLAMA_MTP_STORE_ONLY, the
+# default), so the pool no longer enters it - 449 MiB at 262144 and 512000 cells, 602 at 768000 (a smaller draft ubatch)
+DRAFT_COMPUTE_BYTES = 600 * MIB
+DRAFT_MASK_BYTES_PER_CELL = 4.8 * 1024   # other architectures' drafts, a cell (kv-pool-draft-mask)
+
+
+def compute_bytes(ubatch, cells):
+    """The target's compute buffer (qwen4exp), measured 10-17."""
+    return max(ubatch * COMPUTE_BYTES_PER_UBATCH_TOKEN,
+               ubatch * COMPUTE_POOL_GRAPH_BYTES_PER_UBATCH_TOKEN + cells * COMPUTE_BYTES_PER_CELL)
+# Measured 10-17 (64 GB carve, q8_0, 4 slots, MTP; 262144-768000 cells, ub 8192-16384, image input): the estimate is
+# 0.2-0.7 GiB above the peak. The 10-10 term for memory beyond the buffer report past 2^19 cells (10.9 KiB a cell) was
+# the QSA block keys - the size of the indexer keys, outside the KV buffer report - and the draft's pool-wide buffer.
+# What a load really takes corrects the next one with the same settings (placement.json).
 
 
 # The server starts with drafts of up to draft_limit(cfg) tokens and caps them at the profile's draft_max
@@ -933,18 +943,18 @@ def gpu_need_raw(model, cfg, tb):
     kvh, kl = meta[f'{arch}.attention.head_count_kv'], meta[f'{arch}.attention.key_length']
     vl, il = meta.get(f'{arch}.attention.value_length', kl), meta.get(f'{arch}.attention.indexer.key_length', 0)
     elem = KV_ELEM_BYTES.get(cfg['kv'], 2.0)
-    per_cell_layer = kvh * (kl + vl) * elem + (il * 2 if cfg.get('qsa') else 0)
+    # with QSA: the indexer keys (f16) and the block keys, as large again
+    per_cell_layer = kvh * (kl + vl) * elem + (il * 2 * 2 if cfg.get('qsa') else 0)
     need = sum(v for k, v in tb.items() if k not in CPU_TENSORS) * 1.01        # rows padded on the GPU
     need += cells * n_attn * per_cell_layer + slots * RS_BYTES_PER_SLOT
-    need += cfg['ubatch'] * COMPUTE_BYTES_PER_UBATCH_TOKEN + cells * COMPUTE_BYTES_PER_CELL
-    need += max(0, cells - CELLS_RESIDENT_FROM) * RESIDENT_BYTES_PER_CELL_ABOVE
+    need += compute_bytes(cfg['ubatch'], cells) + cfg['ubatch'] * PROMPT_GROWTH_BYTES_PER_UBATCH_TOKEN
     if cfg.get('vision'):
         mm = mmproj_path(cfg, model)
         if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
     if cfg.get('mtp') and cfg.get('draft') and Path(cfg['draft']).is_file():
         # the draft's K/V are f16 whatever the target's type
         need += Path(cfg['draft']).stat().st_size * 1.1 + cells * (kvh * (kl + vl) * 2 + (il * 2 if cfg.get('qsa') else 0)) + 300 * MIB
-        need += cells * DRAFT_MASK_BYTES_PER_CELL
+        need += DRAFT_COMPUTE_BYTES
     if cfg.get('trunk_decode_q6k'):
         need += trunk_twin_bytes(model_shards(model)) * 1.01
     return need
