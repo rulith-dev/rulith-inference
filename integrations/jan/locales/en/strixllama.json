@@ -48,7 +48,8 @@
   "tabs": {
     "models": "Library",
     "configuration": "Configuration",
-    "logs": "Logs"
+    "logs": "Logs",
+    "downloads": "Download"
   },
   "actions": {
     "load": "Load model",
@@ -91,13 +92,16 @@
     "subtitle": "Runs Qwen3.8 Flash Next locally on your Ryzen AI Max.",
     "searching": "Looking for model files…",
     "noModelTitle": "No model files found",
-    "noModelBody": "Rulith Inference needs the Qwen3.8 Flash Next GGUF files (about 94 GB). Add the folder that holds them, or download them first.",
+    "noModelBody": "Rulith Inference runs the Qwen3.8 Flash Next GGUF files (about 96 GB with the draft and the projector). Download them here, or add the folder that already holds them.",
     "loading": "Loading the model. The first load after a restart can take a minute or two.",
     "ready": "The model is ready. Opening the chat…",
     "reviewSettings": "Review settings",
     "modelLabel": "Model",
     "setupLabel": "Set up",
-    "loadHint": "Loads with the saved settings. You can change them any time under Model › Configuration."
+    "loadHint": "Loads with the saved settings. You can change them any time under Model › Configuration.",
+    "download": "Download the model",
+    "downloadHint": "About 96 GB, from Hugging Face or its mirror; it can pause and resume.",
+    "orFolder": "Already have the files?"
   },
   "models": {
     "search": "Search by name, file or quantisation…",
@@ -126,14 +130,15 @@
     },
     "configure": "Configure",
     "emptyTitle": "No models in your folders",
-    "emptyBody": "Add the folder that holds the Qwen3.8 Flash Next GGUF files, or download them first.",
-    "getFiles": "Get the model files",
-    "getFilesLead": "Don't have the files yet?",
+    "emptyBody": "Download Qwen3.8 Flash Next here, or add the folder that already holds its GGUF files.",
+    "getFiles": "Download guide",
+    "getFilesLead": "Prefer to download by hand?",
     "noMatch": "No files match the search.",
     "loadingCatalog": "Reading the model folders…",
     "summary": "{{count}} files · {{size}}",
     "readOnly": "Model files are only read, never changed",
-    "switch": "Switch"
+    "switch": "Switch",
+    "download": "Download a model"
   },
   "config": {
     "noModel": "No model to configure yet. Add a model folder under Library.",
@@ -225,7 +230,10 @@
       "help": "Lets chats include images; uses about 0.9 GB of GPU memory",
       "noProjector": "No vision projector (mmproj*.gguf) beside the model, so image input is off. Put it in the model's folder and rescan to turn it on.",
       "projector": "Vision projector",
-      "projectorAuto": "Automatic (next to the model)"
+      "projectorAuto": "Automatic (next to the model)",
+      "imageMinTokens": "Smallest image detail",
+      "imageMinTokensHelp": "Tokens a small image is at least encoded to; 1024 is what the model was trained with",
+      "imageMinTokensInfo": "Every image is cut into patches and each patch becomes tokens the model reads. Large images (screenshots, photos) give more than 1024 tokens by themselves and are not affected. A small image is scaled up to at least this many tokens: the engine's own floor is 8, but Qwen-VL models were trained with 1024 or more and read small text or locate objects worse below it, which the engine warns about at load. Higher means a small image takes longer to read (about one second per 1024 tokens). 0 leaves the engine's floor. The ceiling is 4096 tokens either way. Applies on the next load."
     },
     "startup": {
       "title": "Startup",
@@ -357,7 +365,25 @@
     "stop_failed": "The model process could not be stopped",
     "launch_failed": "The model process did not start; see the log",
     "oom": "the GPU ran out of memory",
-    "error": "the model process exited with an error"
+    "error": "the model process exited with an error",
+    "dl_running": "A download is already running",
+    "dl_unknown": "No such download",
+    "dl_model": "That model is not in the download catalog",
+    "dl_nothing": "Every file is already in a model folder",
+    "dl_space": "Not enough free space on {{drive}}: {{need}} GB needed, {{free}} GB free",
+    "dl_folder": "The download folder must be on a local fixed drive",
+    "dl_folder_lmstudio": "Downloads do not go into LM Studio's folder",
+    "dl_groups": "Choose the files to download",
+    "dl_name_clash": "Two of the chosen files are both called {{name}}",
+    "dl_source": "Unknown download source",
+    "dl_repo_invalid": "Not a Hugging Face, hf-mirror or ModelScope repository link",
+    "dl_repo_unavailable": "The repository {{repo}} cannot be read; gated and private repositories are not supported yet",
+    "dl_repo_no_gguf": "The repository {{repo}} has no GGUF files",
+    "dl_source_unsupported": "This source cannot list repositories yet",
+    "dl_network": "The source could not be reached: {{reason}}",
+    "dl_http": "The source answered HTTP {{status}}",
+    "dl_host_refused": "The download was sent to {{host}}, which is not an allowed source",
+    "dl_failed": "The download failed"
   },
   "compact": {
     "running": "The conversation is about to outgrow the model's context: summarizing its earlier part…",
@@ -368,5 +394,96 @@
     "saved": "Saved to {{path}}",
     "show": "Show",
     "failed": "Could not save the file: {{reason}}"
+  },
+  "dl": {
+    "jobs": "Downloads",
+    "recommended": "Recommended models",
+    "recommendedHint": "Tested with Rulith Inference: the files its numbers were measured with.",
+    "reading": "Reading the catalog…",
+    "license": "License",
+    "caps": {
+      "images": "Images",
+      "tools": "Tools",
+      "mtp": "MTP"
+    },
+    "fits": "Fits this machine",
+    "tooLarge": "Larger than this machine can load",
+    "role": {
+      "model": "Model",
+      "draft": "MTP draft · faster replies",
+      "projection": "Vision projector · image input",
+      "head": "Draft head · faster drafting"
+    },
+    "shard": "Model, part {{n}} of {{of}}",
+    "shards": "{{count}} parts",
+    "present": "In the Library",
+    "required": "Required",
+    "toDownload": "{{size}} to download",
+    "allPresent": "Every file is in the Library",
+    "download": "Download…",
+    "fromRepo": "From a repository",
+    "repoHint": "Paste a Hugging Face or hf-mirror link, or owner/repo, to list its GGUF files. Models from other repositories are not tested by Rulith: try them and keep what works.",
+    "repoLabel": "Repository",
+    "repoPlaceholder": "https://huggingface.co/owner/repo, or owner/repo",
+    "list": "List files",
+    "listFrom": "Read from",
+    "commit": "commit {{commit}}",
+    "notTested": "Not tested by Rulith",
+    "repoModels": "Models in the repository",
+    "incomplete": "Parts missing",
+    "start": {
+      "title": "Download {{name}}",
+      "source": "Source",
+      "china": "mirror in China",
+      "folder": "Folder",
+      "browse": "Browse…",
+      "free": "{{free}} free on {{drive}}",
+      "note": "Every file is checked against its SHA-256 when it is complete. A download can be paused, and continues where it stopped, also after a restart.",
+      "go": "Start download"
+    },
+    "status": {
+      "starting": "Starting",
+      "running": "Downloading",
+      "downloading": "Downloading",
+      "verifying": "Checking",
+      "stopped": "Paused",
+      "pending": "Waiting",
+      "done": "Done",
+      "failed": "Failed"
+    },
+    "progress": "{{done}} of {{total}}",
+    "progressLabel": "Download progress",
+    "speed": "{{speed}} MB/s",
+    "eta": "{{time}} left",
+    "time": {
+      "s": "{{n}} s",
+      "min": "{{n}} min",
+      "h": "{{h}} h {{m}} min"
+    },
+    "pause": "Pause",
+    "resume": "Resume",
+    "retry": "Try again",
+    "cancel": "Cancel",
+    "remove": "Remove",
+    "files": "Files",
+    "hideFiles": "Hide files",
+    "loadNow": "Load now",
+    "showFolder": "Show folder",
+    "verified": "SHA-256 checked",
+    "sizeOnly": "Size checked",
+    "cancelTitle": "Cancel this download?",
+    "cancelBody": "The partly downloaded files are deleted. Files that finished stay in the folder.",
+    "keep": "Keep downloading",
+    "confirmCancel": "Cancel download",
+    "finished": "{{name}} is downloaded",
+    "err": {
+      "hash_mismatch": "{{file}} did not match its checksum from any source",
+      "sources_failed": "No source could deliver {{file}}",
+      "name_taken": "A different file called {{file}} is already in the folder",
+      "disk_full": "The disk is full",
+      "disk_error": "A file could not be written: {{reason}}",
+      "internal": "The download stopped unexpectedly: {{reason}}",
+      "other": "The download failed ({{code}})"
+    }
   }
 }

@@ -18,7 +18,7 @@ export const PROVIDER = 'strixllama'
 export const DEFAULT_ENDPOINT = 'http://127.0.0.1:8080/v1'
 export const endpointOf = (s?: Status) => s?.endpoint || DEFAULT_ENDPOINT
 
-export type Profile = { thinking: string; context: number; gpu_layers: number; threads: number; batch: number; ubatch: number; mtp: boolean; draft: string; draft_max: number; draft_min: number; ngram_spec: boolean; kv: string; flash_attention: string; qsa: boolean; trunk_decode_q6k: boolean; parallel: number; kv_pool: number; vision: boolean; mmproj: string; prompt_cache_disk: boolean; prompt_cache_disk_mib: number; host_experts?: boolean }
+export type Profile = { thinking: string; context: number; gpu_layers: number; threads: number; batch: number; ubatch: number; mtp: boolean; draft: string; draft_max: number; draft_min: number; ngram_spec: boolean; kv: string; flash_attention: string; qsa: boolean; trunk_decode_q6k: boolean; parallel: number; kv_pool: number; vision: boolean; mmproj: string; prompt_cache_disk: boolean; prompt_cache_disk_mib: number; host_experts?: boolean; image_min_tokens?: number }
 export type Model = { id: string; path: string; name: string; filename: string; architecture?: string; quant?: string; size: number; shards?: number; missing?: string[]; role: string; error?: string; context?: number }
 // merged / merge_errors: set by a rescan, when a downloaded draft head was combined with its shared draft
 export type Catalog = { models: Model[]; roots: string[]; scanned_at: string; merged?: string[]; merge_errors?: Record<string, string> }

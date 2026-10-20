@@ -49,6 +49,12 @@ UD-Q4_K_XL（111.3 GB）也经过调优。
 
 ## 模型文件
 
+**0.6.0 起推荐 EXL3 4.05 bpw。** turboderp 的 EXL3 量化，为本引擎重新打包成 GGUF：
+[Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF)
+（104.3 GB，自带 MTP 草稿）。在我们的评测集上它最接近 BF16 原模型（KL 散度 0.022；UD-Q4_K_XL 0.024，UD-IQ4_XS 0.048），
+回答速度和 UD-Q4_K_XL 相同（单路 56 tok/s，读提示 1,230 t/s）。应用里在“下载 › 推荐模型”中直接下载；所需内存和完整对比见模型卡。
+只能在 Rulith Inference 0.6.0 及以上加载。下面的 GGUF 文件继续支持。
+
 这里的每个数字都是用下面这些文件测的。链接固定在核对过的 Hugging Face 版本上（`38bb39e`：
 2026-09-26 逐个文件比对过 sha256）：
 

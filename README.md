@@ -52,6 +52,13 @@ and where to put them, and what to press. No Python, ROCm or build tools involve
 
 ## Model files
 
+**Recommended since 0.6.0: EXL3 4.05 bpw.** turboderp's EXL3 quantization of the model, repacked into GGUF for this
+engine: [Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF)
+(104.3 GB, with its own MTP draft). On our evaluation set it stays closest to the BF16 model (KL divergence 0.022,
+UD-Q4_K_XL 0.024, UD-IQ4_XS 0.048) at the same answering speed as UD-Q4_K_XL (56 tok/s for one conversation; prompt
+reading 1,230 t/s). The app downloads it from Downloads › Recommended models; the model card has the memory needed
+and the full comparison. It loads only in Rulith Inference 0.6.0 or newer. The GGUF files below stay supported.
+
 Every number here was measured with these files. The links are pinned to the Hugging Face revision
 they were checked against (`38bb39e`: the sha256 of each file compared with the repository's on
 2026-09-26):

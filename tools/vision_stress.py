@@ -22,6 +22,7 @@ running server with a projector loaded.
 import argparse
 import base64
 import json
+import os
 import struct
 import sys
 import time
@@ -80,7 +81,7 @@ def filler(n_chars):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("STRIX_TEST_PORT", "8080")))  # with_server sets it
     ap.add_argument("--text", help="a long text file to use instead of generated filler")
     ap.add_argument("--turns", type=int, default=7)
     # English runs ~6 characters per token here, so these are sized to pass the 12514-token mark

@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import upperFirst from 'lodash/upperFirst'
 import { Link } from '@tanstack/react-router'
-import { FolderOpen, LoaderCircle, Play, RefreshCw, RotateCw } from 'lucide-react'
+import { Download, FolderOpen, LoaderCircle, Play, RefreshCw, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { gb, describeError, serverState, useStrixLlamaStatus } from './status'
 import { useModelStore } from './store'
-import { Label, Notice, PageFooter, openExternal, useTr } from './parts'
-import { MODEL_FILES_URL, ModelFolders } from './ModelsView'
+import { Label, Notice, PageFooter, useTr } from './parts'
+import { ModelFolders } from './ModelsView'
 
 // In place of Jan's setup screen, which offers to download Jan's own model: shown until the chat has a model
 // to talk to. It finds the model files, loads one, and gets out of the way - the home route renders the chat
@@ -46,16 +46,17 @@ export default function Welcome() {
             <>
               <div className="text-[13px] font-semibold text-foreground">{tr('welcome.noModelTitle')}</div>
               <p className="mt-1 text-xs text-muted-foreground">{tr('welcome.noModelBody')}</p>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button size="sm" className="h-8" onClick={() => setFolders(true)}><FolderOpen className="size-3.5" />{tr('models.folders')}</Button>
-                <Button size="sm" variant="outline" className="h-8" disabled={scanning} onClick={() => void rescan()}>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <Button size="sm" className="h-8" asChild><Link to="/strixllama/downloads"><Download className="size-3.5" />{tr('welcome.download')}</Link></Button>
+                <span className="text-xs text-muted-foreground">{tr('welcome.downloadHint')}</span>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>{tr('welcome.orFolder')}</span>
+                <Button size="sm" variant="outline" className="h-7" onClick={() => setFolders(true)}><FolderOpen className="size-3.5" />{tr('models.folders')}</Button>
+                <Button size="sm" variant="outline" className="h-7" disabled={scanning} onClick={() => void rescan()}>
                   <RefreshCw className={scanning ? 'size-3.5 animate-spin' : 'size-3.5'} />{tr('models.rescan')}
                 </Button>
               </div>
-              <p className="mt-3 text-xs text-muted-foreground">
-                {tr('models.getFilesLead')}{' '}
-                <button type="button" className="text-[var(--rl-blue)] hover:underline" onClick={() => openExternal(MODEL_FILES_URL)}>{tr('models.getFiles')}</button>
-              </p>
             </>
           ) : (
             <>

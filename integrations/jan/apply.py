@@ -29,14 +29,14 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.5.9'
+VERSION = '0.6.0'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
 # The model pages (StrixLlamaPage lays out the three views), the welcome screen that replaces Jan's
 # setup screen, the chat header's model state, the app-wide status poll, and the canned answers the
 # browser preview uses (fixtures.ts, imported only by development builds).
-UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
+UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'DownloadsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
             'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
             'attachments.ts', 'compact.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
@@ -159,7 +159,7 @@ def main():
         shutil.copyfile(HERE / 'locales' / locale / 'strixllama.json', target / 'strixllama.json')
     routes = JAN / 'web-app/src/routes/strixllama'
     routes.mkdir(parents=True, exist_ok=True)
-    for view in ('models', 'configuration', 'logs'):
+    for view in ('models', 'downloads', 'configuration', 'logs'):
         (routes / f'{view}.tsx').write_text(
             "import { createFileRoute } from '@tanstack/react-router'\n"
             "import StrixLlamaPage from '@/components/strixllama/StrixLlamaPage'\n"

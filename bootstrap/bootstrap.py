@@ -129,6 +129,11 @@ PATCH_ORDER = [
     "apply_concat_gaps_059",   # 0.5.9: CONCAT dim 0 from transposed views with gaps
     "apply_mmvq_q4k_i8_059",   # 0.5.9: Q4_K products of 2-8 columns through a lane-ordered y
     "apply_mtp_pos_jumps_059", # 0.5.9: an MTP draft context lets positions jump forward over a prompt's images
+    "apply_exl3_ggml_060",     # 0.6.0: EXL3 weight types, MUL_MAT_HAD and QSA_PACK in ggml (+ patches/exl3/ggml-exl3.c/.h)
+    "apply_exl3_cpu_060",      # 0.6.0: the CPU references of MUL_MAT_HAD and QSA_PACK (+ patches/exl3/mul-mat-had.cpp)
+    "apply_exl3_hip_060",      # 0.6.0: EXL3 GEMV / GEMMs and fusions on the GPU, QSA_PACK (+ patches/exl3/mul-mat-had.cu/.cuh)
+    "apply_exl3_llama_060",    # 0.6.0: EXL3 weights for qwen4exp; compute buffers that do not grow with the pool (+ llama-weight-aux)
+    "apply_slot_continuation_060",  # 0.6.0: a conversation's next step continues in its own slot (issue #19)
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the

@@ -1,7 +1,8 @@
 """Native Jan IPC helper. Reads one JSON request on stdin; emits one JSON result.
 
 No listening socket, shell command input, or arbitrary executable selection.
-Model weights are read only. Only the pinned strixllama runtime can be managed.
+Model files are never modified: downloads (tools/downloader.py) only create new files in the folder the user chose.
+Only the pinned strixllama runtime and the download worker can be managed.
 """
 import ctypes
 from ctypes import wintypes
@@ -198,6 +199,24 @@ ERRORS = {
     'windows_only': 'This manager runs on Windows only',
     'stop_failed': 'The model process could not be stopped',
     'launch_failed': 'The model process did not start; see the log',
+    'dl_running': 'A download is already running',
+    'dl_unknown': 'No such download',
+    'dl_model': 'That model is not in the download catalog',
+    'dl_nothing': 'Every file is already in a model folder',
+    'dl_space': 'Not enough free space on {drive}: {need} GB needed, {free} GB free',
+    'dl_folder': 'The download folder must be on a local fixed drive',
+    'dl_folder_lmstudio': "Downloads do not go into LM Studio's folder",
+    'dl_groups': 'Choose the files to download',
+    'dl_name_clash': 'Two of the chosen files are both called {name}',
+    'dl_source': 'Unknown download source',
+    'dl_repo_invalid': 'Not a Hugging Face, hf-mirror or ModelScope repository link',
+    'dl_repo_unavailable': 'The repository {repo} cannot be read; gated and private repositories are not supported yet',
+    'dl_repo_no_gguf': 'The repository {repo} has no GGUF files',
+    'dl_source_unsupported': 'This source cannot list repositories yet',
+    'dl_network': 'The source could not be reached: {reason}',
+    'dl_http': 'The source answered HTTP {status}',
+    'dl_host_refused': 'The download was sent to {host}, which is not an allowed source',
+    'dl_failed': 'The download failed',
 }
 # why the last load ended, when its log said nothing more specific (status()['failure'])
 FAILURES = {'oom': 'The GPU ran out of memory', 'error': 'The model process exited with an error'}
@@ -230,6 +249,12 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 # pass --cache-reuse). Ordinary prompt-prefix caching and MTP speculation are unaffected:
                 # verified end to end, an image answered correctly with mtp on. Empty mmproj = auto.
                 vision=True, mmproj='',
+                # image_min_tokens: the fewest tokens an image is encoded to (small images are scaled up to
+                # it). The projector's own floor is 8; Qwen-VL models were trained with 1024 or more, and
+                # llama.cpp warns at load that fewer costs accuracy on grounding and reading tasks
+                # (ggml-org/llama.cpp#16842, issue #20). 0 = the projector's floor. Screenshots and photos
+                # exceed 1024 tokens anyway; this only changes small images. The ceiling stays 4096.
+                image_min_tokens=1024,
                 # thinking: how hard the model reasons before answering, which this model's chat
                 # template supports natively rather than us inventing it. 'off' sets
                 # enable_thinking=false; the rest set reasoning_effort, which the template turns into
@@ -464,7 +489,8 @@ def metadata(path):
         meta = {}
         for _ in range(count):
             key = string()
-            keep = key.startswith(('general.', 'split.')) or key.endswith(('.context_length', '.block_count',
+            # quantize.exl3.*: an EXL3 file's bits per weight for the catalog (tools/exl3/convert_exl3.py)
+            keep = key.startswith(('general.', 'split.', 'quantize.exl3.')) or key.endswith(('.context_length', '.block_count',
                 # what gpu_need_bytes sizes the KV pool from
                 '.attention.head_count_kv', '.attention.key_length', '.attention.value_length', '.full_attention_interval',
                 '.attention.indexer.key_length',
@@ -587,6 +613,15 @@ def merge_heads(found):
     return merged, errors
 
 
+def quant_label(name, meta):
+    """the quantization the file name gives (UD-IQ4_XS -> IQ4_XS, Q8_0, ...), else an EXL3 file's bits per weight (no
+    file_type exists for it), else general.file_type"""
+    m = re.search(r'(?:UD-)?((?:IQ|Q|MXFP|BF|F)[A-Z0-9_]+)(?:-\d{5}-of|\.gguf)', name, re.I)
+    if m: return m[1]
+    if isinstance(meta.get('quantize.exl3.bits'), float): return 'EXL3 %.2f bpw' % meta['quantize.exl3.bits']
+    return str(meta.get('general.file_type', ''))
+
+
 def catalog(refresh=False, _after_merge=False):
     cached = read_json(DATA / 'catalog.json', None)
     if cached is not None and not refresh: return cached
@@ -615,8 +650,7 @@ def catalog(refresh=False, _after_merge=False):
                                       filename=name, architecture=meta.get('general.architecture', 'unknown'),
                                       size=sum(p.stat().st_size for p in shards if p.exists()), shards=len(shards),
                                       missing=missing, role=role, context=next((v for k,v in meta.items() if k.endswith('.context_length')), None),
-                                      quant=re.search(r'(?:UD-)?((?:IQ|Q|MXFP|BF|F)[A-Z0-9_]+)(?:-\d{5}-of|\.gguf)', name, re.I)[1]
-                                      if re.search(r'(?:UD-)?((?:IQ|Q|MXFP|BF|F)[A-Z0-9_]+)(?:-\d{5}-of|\.gguf)', name, re.I) else str(meta.get('general.file_type', ''))))
+                                      quant=quant_label(name, meta)))
                 except (OSError, ValueError, struct.error) as exc:
                     found.append(dict(id=key, path=str(path), filename=name, name=path.stem, error=str(exc), role='invalid', size=0))
     # a rescan is also when a downloaded draft head gets merged with its shared draft; the merged
@@ -641,16 +675,29 @@ def model_by_id(model_id):
     fail('model_unlisted')
 
 
-def family_draft():
+def is_exl3(model):
+    """an EXL3 file (quant_label from quantize.exl3.bits)"""
+    return bool(model) and str(model.get('quant', '')).startswith('EXL3')
+
+
+def family_draft(model=None):
     """The MTP draft for this family, if one is on disk: the repository's own first, then the best
     file under the model roots - a merged *-head-* draft (merge_draft_head) over Unsloth's
     shared-Q4_K_M over shared-Q8_0, all of which draft the same tokens. None when there is none, and
-    then profile() leaves MTP off instead of pointing at a file that is not there."""
-    if DEFAULT_DRAFT.is_file():
+    then profile() leaves MTP off instead of pointing at a file that is not there.
+    An EXL3 target cannot lend the draft rows of its output head (its output rotation mixes 128 rows), so an *-ownhead
+    draft (a head of its own) goes first for it: 56.1 vs 52.4 tok/s with the same tokens (10-20); the other drafts
+    still run there, multiplying the whole head per draft token. Other targets never take an ownhead draft."""
+    own = is_exl3(model)
+    if DEFAULT_DRAFT.is_file() and not own:
         return str(DEFAULT_DRAFT)
-    drafts = [m['path'] for m in catalog()['models'] if m.get('role') == 'draft' and MODEL_FAMILY in m['filename'] and not m.get('error')]
+    drafts = [m['path'] for m in catalog()['models'] if m.get('role') == 'draft' and MODEL_FAMILY in m['filename'] and not m.get('error')
+              and (own or '-ownhead' not in m['filename'].lower())]
+    if own and DEFAULT_DRAFT.is_file() and not any('-ownhead' in Path(p).name.lower() for p in drafts):
+        return str(DEFAULT_DRAFT)
     # the low-rank head (0.4.6) drafts the same tokens as the others, faster
-    drafts.sort(key=lambda p: ('-head-' not in p.lower(), '-head-lr' not in p.lower(), 'Q4_K_M' not in p, p))
+    drafts.sort(key=lambda p: (own and '-ownhead' not in p.lower(), '-head-' not in p.lower() and '-ownhead' not in p.lower(),
+                               '-head-lr' not in p.lower() and '-lr512' not in p.lower(), 'Q4_K_M' not in p, p))
     return drafts[0] if drafts else None
 
 
@@ -659,7 +706,7 @@ def profile(model):
     # MTP and image input default to on, but only when their file is actually there. A load that
     # refuses to start because a companion file is missing is the wrong first experience; the
     # switch turns itself on once the file appears and the directories are rescanned.
-    default['draft'] = family_draft() or ''
+    default['draft'] = family_draft(model) or ''
     default['mtp'] = (MODEL_FAMILY in Path(model['path']).name and bool(default['draft'])) or builtin_mtp(model)
     default['vision'] = mmproj_path({}, model).is_file()
     # sparse attention is this architecture's, and above 64K context it is what makes the load fit
@@ -678,6 +725,11 @@ def profile(model):
     # thinking was a switch before it was a level. Normalise here and not only in
     # validate_profile(): this is what the configuration page displays, and a stored `true`
     # reached it as a level called "true" whose help text does not exist.
+    # a draft that cannot run with this target (an EXL3 one needs its own head) gives way to the family default
+    if cfg['draft'] and '-ownhead' in Path(cfg['draft']).name.lower() and not is_exl3(model):
+        cfg['draft'] = default['draft']
+    if is_exl3(model) and '-ownhead' in Path(default['draft']).name.lower() and '-ownhead' not in Path(cfg['draft'] or '').name.lower():
+        cfg['draft'] = default['draft']
     if type(cfg['thinking']) is bool: cfg['thinking'] = 'high' if cfg['thinking'] else 'off'
     # draft_min 0.3 in a profile saved before PROFILE_VERSION 2 is the old default, not a choice (see DEFAULTS)
     if saved.get('version', 1) < 2 and saved.get('draft_min') == 0.3: cfg['draft_min'] = DEFAULTS['draft_min']
@@ -689,7 +741,7 @@ def validate_profile(raw, model):
     if not isinstance(raw, dict) or set(raw) - set(DEFAULTS): fail('unknown_field')
     cfg = {**profile(model), **raw}
     bounds = dict(context=(512,262144), gpu_layers=(0,999), threads=(1,32), batch=(32,32768), ubatch=(32,32768), draft_max=(1,8), parallel=(1,16),
-                  prompt_cache_disk_mib=(1024,262144), kv_pool=(0,KV_POOL_MAX))
+                  prompt_cache_disk_mib=(1024,262144), kv_pool=(0,KV_POOL_MAX), image_min_tokens=(0,4096))
     for field, (low, high) in bounds.items():
         if type(cfg[field]) is not int or not low <= cfg[field] <= high: fail('out_of_range', field=field, low=low, high=high)
     for field in ('mtp', 'ngram_spec', 'qsa', 'trunk_decode_q6k', 'vision', 'prompt_cache_disk', 'host_experts'):
@@ -815,7 +867,13 @@ def kv_pool_cells(cfg):
 # the per-slot and per-ubatch terms measured from the runtime's own buffer report (tmp/vram64, v64_cal); the experts
 # of the last layers go to system memory until the rest fits, leaving HOST_EXPERT_MARGIN of the carve.
 MIB = 1 << 20
-CPU_TENSORS = ('token_embd.weight', 'per_layer_token_embd.weight')   # llama.cpp keeps these in system memory
+# llama.cpp keeps these in system memory (the input layer). The per-layer table, BF16 / IQ4_NL or the EXL3 row codec
+# (39 GB at 6 bits), is read from the file by rows (--lazy-mode); the EXL3 one comes with a per-head bias beside it.
+CPU_TENSORS = ('token_embd.weight', 'per_layer_token_embd.weight', 'per_layer_token_embd.bias')
+# a layer's experts: the weights and, beside EXL3 ones, their rot_in / rot_out (F16 [K, experts] / [N, experts], 9.8 MB
+# a layer of the 4.05 bpw Qwen3.8-Flash-Next). The runtime creates those in the buffer of their weight, so the -ot
+# pattern that sends the weights to ROCm_Host takes them along, and their bytes move with the layer.
+EXPERT_TENSOR = re.compile(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.(c\d\.)?(weight|rot_in|rot_out)$')
 HOST_EXPERT_MARGIN = 2560 * MIB          # context overhead outside the buffer report (~1.5 GiB) plus headroom
 CARVE_USABLE = 0.96                      # the driver keeps the rest: at the 64 GB carve, dedicated tops out at 62.1 GiB
 # The carve is not all the server's. Other programs hold part of it (the desktop, browsers, Electron apps: 2.8 GiB on
@@ -1102,6 +1160,15 @@ def other_programs_dedicated():
     return None if u is None else max(0, u[0] - u[1])
 
 
+def expert_bytes_by_layer(tb, skip=()):
+    """{layer: bytes of its experts (EXPERT_TENSOR)} from tensor_bytes, the layers in `skip` left out"""
+    out = {}
+    for name, size in tb.items():
+        m = EXPERT_TENSOR.match(name)
+        if m and int(m[1]) not in skip: out[int(m[1])] = out.get(int(m[1]), 0) + size
+    return out
+
+
 def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     """The layers whose experts this load keeps in system memory: none when it fits the carve, else the last layers'
     until the rest does. Bounded by system memory, leaving 16 GiB of it to Windows and everything else. The carve's
@@ -1126,10 +1193,7 @@ def host_expert_layers(model, cfg, dedicated=None, ram=None, others=None):
     if need is None or need <= dedicated: return []
     ram = total_ram_bytes() if ram is None else ram
     cap = max(0, (ram or 0) - (16 << 30)) if ram else float('inf')
-    per_layer = {}
-    for name, size in tb.items():
-        m = re.match(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$', name)
-        if m and int(m[1]) not in skip: per_layer[int(m[1])] = per_layer.get(int(m[1]), 0) + size
+    per_layer = expert_bytes_by_layer(tb, skip)
     moved, out = 0, []
     for layer in sorted(per_layer, reverse=True):
         if need - moved <= dedicated or moved + per_layer[layer] > cap: break
@@ -1295,6 +1359,8 @@ def argv(model, cfg, net=None):
              '--ctx-checkpoints', str(CTX_CHECKPOINTS), '--checkpoint-min-step', str(CHECKPOINT_MIN_STEP)] + reasoning
     if cfg.get('vision', False):
         args += ['--mmproj', str(mmproj_path(cfg, model))]
+        if cfg.get('image_min_tokens'):
+            args += ['--image-min-tokens', str(cfg['image_min_tokens'])]
     host = host_expert_layers(model, cfg)
     if host:
         args += ['-ot', r'blk\.(%s)\.ffn_(gate|up|down)_exps\.weight=ROCm_Host' % '|'.join(map(str, host))]
@@ -1344,7 +1410,7 @@ def commit_bytes():
     return ms.ullTotalPageFile, ms.ullAvailPageFile
 
 
-def process_identity(pid, terminate=False, expected=None):
+def process_identity(pid, terminate=False, expected=None, exe_name='llama-server.exe'):
     """Hold the same process handle while checking identity and terminating it."""
     if os.name != 'nt': fail('windows_only')
     k = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -1368,7 +1434,7 @@ def process_identity(pid, terminate=False, expected=None):
             # the identity (pid, executable, birth time) is what was adopted or started; that it
             # matches, and that it is a llama-server at all, is the check - so a server another
             # copy of this manager started can be unloaded too, and nothing else ever is
-            if result != expected or Path(result['exe']).name.lower() != 'llama-server.exe':
+            if result != expected or Path(result['exe']).name.lower() != exe_name:
                 fail('identity_changed')
             if not k.TerminateProcess(handle,0): fail('stop_failed')
             k.WaitForSingleObject(handle,10000)
@@ -1647,7 +1713,7 @@ def gpu_share_estimate(m, cfg):
         raw = gpu_need_raw(m, cfg, tb)
         if raw is None: return None
         host = set(host_expert_layers(m, cfg))
-        moved = sum(v for k, v in tb.items() if (x := re.match(r'blk\.(\d+)\.ffn_(gate|up|down)_exps\.weight$', k)) and int(x[1]) in host)
+        moved = sum(v for layer, v in expert_bytes_by_layer(tb).items() if layer in host)
         return {'key': mem_key(m, cfg), 'est': raw - moved, 'host_layers': len(host)}
     except (OSError, ValueError, KeyError, struct.error):
         return None
@@ -1726,17 +1792,269 @@ def launch(m, cfg):
     atomic_json(DATA/'process.json',saved)
     return public(saved)
 
+# ---- model downloads (tools/downloader.py; tmp/downloads/DESIGN.md) ----
+
+DL_KEEP_JOBS = 20
+
+
+def _dl():
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path: sys.path.insert(0, here)
+    import downloader
+    return downloader
+
+
+def dl_fail(e):
+    """a downloader error as the manager's coded error"""
+    code = 'dl_' + e.code
+    if code not in ERRORS: code = 'dl_failed'
+    params = dict(e.params)
+    for k in ('reason', 'host', 'repo', 'status', 'name'): params.setdefault(k, '')
+    fail(code, **params)
+
+
+def dl_jobs_dir():
+    return DATA / 'downloads'
+
+
+def dl_find(names):
+    """name -> [(path, size)] of files with these names in the model folders"""
+    found = {}
+    for root in settings()['roots']:
+        for parent, dirs, files in os.walk(root, followlinks=False):
+            dirs[:] = [d for d in dirs if not d.startswith('.') and not Path(parent, d).is_symlink()]
+            for name in files:
+                if name in names:
+                    p = Path(parent, name)
+                    try: found.setdefault(name, []).append((str(p), p.stat().st_size))
+                    except OSError: pass
+    return found
+
+
+def dl_fits(size):
+    """whether a model of this many bytes can load here at all: the carve plus what Windows has, less ~12 GiB for the
+    system, the app and the context (the load's own estimate decides placement)"""
+    ram, carve = total_ram_bytes(), dedicated_vram_bytes()
+    if not ram: return None
+    return size <= (carve or 0) + ram - (12 << 30)
+
+
+def dl_catalog():
+    D = _dl()
+    cat = D.load_catalog()
+    found = dl_find({f['name'] for m in cat['models'] for f in m['files']})
+    models = []
+    for m in cat['models']:
+        files = []
+        for f in m['files']:
+            have = next((p for p, n in found.get(f['name'], []) if n == f['size']), None)
+            files.append({'name': f['name'], 'role': f['role'], 'required': f['required'], 'size': f['size'], 'present': have})
+        need = sum(f['size'] for f in files if f['required'])
+        models.append({**{k: m.get(k) for k in ('id', 'name', 'variant', 'owner', 'repo', 'license', 'capabilities')},
+                       'files': files, 'missing': sum(f['size'] for f in files if not f['present']), 'fits': dl_fits(need)})
+    try: root = D.models_root()
+    except D.DownloadError: root = None
+    return {'models': models, 'sources': {k: v['name'] for k, v in cat['sources'].items()}, 'drives': D.drives_view(),
+            'default_root': root, **dl_status()}
+
+
+def dl_repo(data):
+    D = _dl()
+    cat = D.load_catalog()
+    try:
+        src, owner, repo, rev = D.parse_repo(data.get('url', ''), data.get('source'))
+        if src not in cat['sources']: fail('dl_source')
+        listing = D.list_repo(cat, src, owner, repo, rev)
+    except D.DownloadError as e: dl_fail(e)
+    found = dl_find({f['name'] for g in listing['groups'] for f in g['files']})
+    for g in listing['groups']:
+        for f in g['files']:
+            f['present'] = next((p for p, n in found.get(f['name'], []) if n == f['size']), None)
+        g['fits'] = dl_fits(g['size']) if g['role'] == 'model' else None
+    try: listing['folder'] = str(Path(D.models_root()) / D.safe_dir(owner) / D.safe_dir(repo))
+    except D.DownloadError: listing['folder'] = None
+    return listing
+
+
+def dl_alive(jobdir):
+    w = read_json(jobdir / 'worker.json', None)
+    if not w or os.name != 'nt': return False
+    return process_identity(w['pid']) == w
+
+
+def dl_view(jobdir):
+    job = read_json(jobdir / 'job.json', {}) or {}
+    st = read_json(jobdir / 'state.json', {}) or {}
+    alive = dl_alive(jobdir)
+    status = st.get('status', 'starting')
+    if not alive and status in ('starting', 'running'): status = 'stopped'          # killed, crashed or a reboot
+    if status == 'done' and not (jobdir / 'scanned').exists():
+        (jobdir / 'scanned').write_text(dt.datetime.now().astimezone().isoformat(), encoding='utf-8')
+        catalog(True)                                                                  # also merges a draft head
+    files, done_bytes = [], 0
+    for f in job.get('files', []):
+        fs = st.get('files', {}).get(f['name'], {})
+        got = f['size'] if fs.get('status') == 'done' else int(fs.get('bytes', 0))
+        done_bytes += got
+        files.append({'name': f['name'], 'size': f['size'], 'bytes': got, 'status': fs.get('status', 'pending'),
+                      'verified': fs.get('verified'), 'source': fs.get('source', 0)})
+    total = sum(f['size'] for f in job.get('files', []))
+    speed = float(st.get('speed', 0)) if alive else 0.0
+    return {'id': job.get('id'), 'kind': job.get('kind'), 'title': job.get('title'), 'model': job.get('model'),
+            'folder': job.get('folder'), 'source': job.get('source'), 'created_at': job.get('created_at'),
+            'status': status, 'alive': alive, 'error': st.get('error'), 'files': files, 'bytes': done_bytes,
+            'total': total, 'speed': speed, 'eta': (total - done_bytes) / speed if speed > 1 else None}
+
+
+def dl_job_dirs():
+    d = dl_jobs_dir()
+    if not d.is_dir(): return []
+    return sorted((p for p in d.iterdir() if (p / 'job.json').is_file()), key=lambda p: p.name, reverse=True)
+
+
+def dl_status():
+    jobs = [dl_view(p) for p in dl_job_dirs()[:DL_KEEP_JOBS]]
+    return {'jobs': jobs, 'active': next((j['id'] for j in jobs if j['alive']), None)}
+
+
+def dl_job(job_id):
+    if not isinstance(job_id, str) or not re.fullmatch(r'[0-9a-z-]{8,40}', job_id): fail('dl_unknown')
+    p = dl_jobs_dir() / job_id
+    if not (p / 'job.json').is_file(): fail('dl_unknown')
+    return p
+
+
+def dl_launch(jobdir):
+    (jobdir / 'control.json').unlink(missing_ok=True)
+    with (jobdir / 'worker.out').open('ab') as f:
+        proc = subprocess.Popen([sys.executable, str(Path(__file__).resolve().with_name('downloader.py')), str(jobdir)],
+                                stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, creationflags=HIDDEN,
+                                cwd=ROOT)
+    ident = process_identity(proc.pid)
+    if not ident: fail('launch_failed')
+    atomic_json(jobdir / 'worker.json', ident)
+
+
+def dl_check_folder(folder):
+    D = _dl()
+    f = Path(folder)
+    if not f.is_absolute() or not D.is_fixed(f): fail('dl_folder')
+    lms = lmstudio_models_dir()
+    if lms and (f.resolve() == Path(lms).resolve() or Path(lms).resolve() in f.resolve().parents): fail('dl_folder_lmstudio')
+    return f
+
+
+def dl_start(data):
+    D = _dl()
+    if dl_status()['active']: fail('dl_running')
+    cat = D.load_catalog()
+    source = data.get('source') or 'hf'
+    if source not in cat['sources']: fail('dl_source')
+    try:
+        if data.get('kind') == 'repo':
+            src, owner, repo, rev = D.parse_repo(data.get('url', ''), source)
+            listing = D.list_repo(cat, src, owner, repo, rev)
+            groups = [g for g in listing['groups'] if g['key'] in set(data.get('groups') or [])]
+            if not groups: fail('dl_groups')
+            files = [{'name': D.safe_name(f['path']), 'size': f['size'], 'sha256': f['sha256'],
+                      'urls': D.repo_urls(cat, source, owner, repo, listing['commit'], f['path'])}
+                     for g in groups for f in g['files']]
+            title, model = f'{owner}/{repo}: ' + ', '.join(g['name'] for g in groups), None
+            meta = {'repo': f'{owner}/{repo}', 'commit': listing['commit']}
+        else:
+            m = next((x for x in cat['models'] if x['id'] == data.get('model')), None)
+            if m is None: fail('dl_model')
+            include = set(data.get('include', ['draft', 'projection', 'head']))
+            owner, repo = m['owner'], m['repo']
+            found = dl_find({f['name'] for f in m['files']})
+            files = [{'name': f['name'], 'size': f['size'], 'sha256': f['sha256'], 'urls': D.entry_urls(cat, f, source)}
+                     for f in m['files'] if (f['required'] or f['role'] in include)
+                     and not any(n == f['size'] for _, n in found.get(f['name'], []))]
+            title, model, meta = f"{m['name']} ({m['variant']})", m['id'], {}
+    except D.DownloadError as e: dl_fail(e)
+    names = [f['name'] for f in files]
+    clash = next((n for n in names if names.count(n) > 1), None)
+    if clash: fail('dl_name_clash', name=clash)
+    if not files: fail('dl_nothing')
+    default = not data.get('folder')
+    try: folder = dl_check_folder(data.get('folder') or Path(D.models_root()) / D.safe_dir(owner) / D.safe_dir(repo))
+    except D.DownloadError as e: dl_fail(e)
+    need = sum(f['size'] for f in files if not (folder / f['name']).is_file())
+    free = D.free_bytes(folder)
+    if free < need + D.SPACE_MARGIN:
+        fail('dl_space', drive=folder.drive or str(folder.anchor), need=round(need / 1e9, 1), free=round(free / 1e9, 1))
+    folder.mkdir(parents=True, exist_ok=True)
+    # the folder joins the model folders (the drive's "Rulith Models" folder for a default one), unless one holds it
+    root = folder.parent.parent if default else folder
+    cfg = settings()
+    roots = [Path(r).resolve() for r in cfg['roots']]
+    if not any(r == root.resolve() or r in root.resolve().parents for r in roots):
+        if len(roots) >= 12: fail('roots_count')
+        cfg['roots'] = cfg['roots'] + [str(root.resolve())]
+        atomic_json(DATA / 'settings.json', cfg)
+    job_id = dt.datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:6]
+    jobdir = dl_jobs_dir() / job_id
+    jobdir.mkdir(parents=True)
+    atomic_json(jobdir / 'job.json', {'id': job_id, 'kind': data.get('kind') or 'catalog', 'title': title, 'model': model,
+                                      'source': source, 'folder': str(folder), 'connections': D.CONNECTIONS,
+                                      'created_at': dt.datetime.now().astimezone().isoformat(), 'files': files, **meta})
+    for old in dl_job_dirs()[DL_KEEP_JOBS:]:                                           # the job records, not files
+        if not dl_alive(old):
+            import shutil
+            shutil.rmtree(old, ignore_errors=True)
+    dl_launch(jobdir)
+    return dl_view(jobdir)
+
+
+def dl_stop(jobdir):
+    """ask the worker to stop and wait for it; terminate it when it does not"""
+    if not dl_alive(jobdir): return
+    atomic_json(jobdir / 'control.json', {'stop': True})
+    for _ in range(50):
+        time.sleep(0.1)
+        if not dl_alive(jobdir): return
+    w = read_json(jobdir / 'worker.json', None)
+    process_identity(w['pid'], True, w, exe_name=Path(w['exe']).name.lower())
+
+
+def dl_resume(jobdir):
+    if dl_alive(jobdir): return dl_view(jobdir)
+    if dl_status()['active']: fail('dl_running')
+    if (read_json(jobdir / 'state.json', {}) or {}).get('status') == 'done': return dl_view(jobdir)
+    dl_launch(jobdir)
+    return dl_view(jobdir)
+
+
+def dl_cancel(jobdir, delete_parts=True):
+    D = _dl()
+    dl_stop(jobdir)
+    job = read_json(jobdir / 'job.json', {}) or {}
+    if delete_parts and job.get('folder'):
+        for f in job.get('files', []):
+            try: (Path(job['folder']) / (D.safe_name(f['name']) + '.part')).unlink(missing_ok=True)
+            except (OSError, D.DownloadError): pass
+    import shutil
+    shutil.rmtree(jobdir, ignore_errors=True)
+    return dl_status()
+
 
 def handle(op, data):
     if op=='catalog': return catalog(bool(data.get('refresh')))
+    if op=='dl_catalog': return dl_catalog()
+    if op=='dl_repo': return dl_repo(data)
+    if op=='dl_start': return dl_start(data)
+    if op=='dl_status': return dl_status()
+    if op=='dl_pause': j=dl_job(data.get('id')); dl_stop(j); return dl_view(j)
+    if op=='dl_resume': return dl_resume(dl_job(data.get('id')))
+    if op=='dl_cancel': return dl_cancel(dl_job(data.get('id')),bool(data.get('delete_parts',True)))
     if op=='status': return status()
     if op=='logs': return logs(data.get('offset',0))
     if op=='slots': return slots()
     if op=='profile':
         m=model_by_id(data['id'])
         # what the companion switches can be turned on with: the page explains an off switch by it
-        companions={'draft':family_draft(),'mmproj':mmproj_path({},m).is_file(),
-                    'draft_head':any('-head-' in Path(p).name.lower() for p in [family_draft() or '']),
+        companions={'draft':family_draft(m),'mmproj':mmproj_path({},m).is_file(),
+                    'draft_head':any('-head-' in Path(p).name.lower() for p in [family_draft(m) or '']),
                     'mtp_builtin':builtin_mtp(m)}
         return {'model':m,'profile':profile(m),'companions':companions}
     if op=='roots':

@@ -11,9 +11,10 @@ import { Notice, PageFooter, useTr } from './parts'
 import ModelsView from './ModelsView'
 import ConfigurationView from './ConfigurationView'
 import LogsView from './LogsView'
+import DownloadsView from './DownloadsView'
 import './strixllama.css'
 
-export type View = 'models' | 'configuration' | 'logs'
+export type View = 'models' | 'downloads' | 'configuration' | 'logs'
 
 // A model page in the layout of Rulith's console: the page's name in a strip across the top (Jan's header,
 // which also brings the sidebar toggle back when the sidebar is closed), then one centred column. Problems
@@ -66,6 +67,7 @@ export default function StrixLlamaPage({ view }: { view: View }) {
             </Notice>
           )}
           {view === 'models' && <ModelsView />}
+          {view === 'downloads' && <DownloadsView />}
           {view === 'configuration' && <ConfigurationView />}
           {view === 'logs' && <LogsView />}
           {view !== 'logs' && <PageFooter />}

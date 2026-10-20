@@ -19,7 +19,7 @@ const models = [
 
 const saved: Record<string, Record<string, unknown>> = {}
 let tick = 0
-const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 8, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536, host_experts: true }
+const baseProfile = { thinking: 'medium', context: 262144, gpu_layers: 999, threads: 16, batch: 8192, ubatch: 8192, mtp: true, draft: DRAFT, draft_max: 3, draft_min: 0.6, ngram_spec: false, kv: 'f16', flash_attention: 'on', qsa: true, trunk_decode_q6k: false, parallel: 8, kv_pool: 0, vision: false, mmproj: '', prompt_cache_disk: true, prompt_cache_disk_mib: 65536, host_experts: true, image_min_tokens: 1024 }
 const profileOf = (id: string) => ({ ...baseProfile, ...(saved[id] || {}) })
 
 const initial = new URLSearchParams(location.search).get('state') || 'ready'
@@ -71,6 +71,62 @@ const LOG = [
   '1.05.101.200 E srv    operator(): got exception: {"error":{"code":500,"message":"example error line"}}',
 ].join('\n')
 
+// Model downloads: one catalog model; a job moves ~3 GB a poll while it runs. ?dl=running|paused|failed|done starts
+// with such a job.
+const DL_FILES = [
+  { name: 'Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf', role: 'model', required: true, size: 10946624 },
+  { name: 'Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf', role: 'model', required: true, size: 49835229856 },
+  { name: 'Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf', role: 'model', required: true, size: 43836407744 },
+  { name: 'mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf', role: 'draft', required: false, size: 1907151936 },
+  { name: 'mmproj-F16.gguf', role: 'projection', required: false, size: 904004000 },
+  { name: 'mtp-Qwen3.8-Flash-Next-head-lr512.gguf', role: 'head', required: false, size: 148652224 },
+]
+const DL_FOLDER = 'D:\\Rulith Models\\unsloth\\Qwen3.8-Flash-Next-GGUF'
+const dlMode = new URLSearchParams(location.search).get('dl')
+type MockJob = { id: string; title: string; files: { name: string; size: number; bytes: number }[]; status: string; alive: boolean; error?: unknown }
+let dlJob: MockJob | null = dlMode ? {
+  id: '20261019-140000-abc123', title: 'Qwen3.8 Flash Next (UD-IQ4_XS)', alive: dlMode === 'running',
+  status: dlMode === 'paused' ? 'stopped' : dlMode === 'running' ? 'running' : dlMode,
+  files: DL_FILES.map((f, i) => ({ name: f.name, size: f.size, bytes: dlMode === 'done' ? f.size : i === 0 ? f.size : i === 1 ? 31.4e9 : 0 })),
+  ...(dlMode === 'failed' ? { error: { code: 'sources_failed', params: { file: DL_FILES[1].name } } } : {}),
+} : null
+const jobView = (j: MockJob) => {
+  const bytes = j.files.reduce((n, f) => n + f.bytes, 0), total = j.files.reduce((n, f) => n + f.size, 0)
+  return {
+    id: j.id, kind: 'catalog', title: j.title, model: 'qwen3.8-flash-next-ud-iq4_xs', folder: DL_FOLDER, source: 'hfm',
+    created_at: '2026-10-19T14:00:00', status: j.status, alive: j.alive, error: j.error ?? null, bytes, total,
+    speed: j.alive ? 46.2e6 : 0, eta: j.alive ? (total - bytes) / 46.2e6 : null,
+    files: j.files.map(f => ({ name: f.name, size: f.size, bytes: f.bytes, status: f.bytes >= f.size ? 'done' : j.alive && f.bytes > 0 ? 'downloading' : f.bytes > 0 ? 'downloading' : 'pending', verified: f.bytes >= f.size, source: 0 })),
+  }
+}
+const dlStatus = () => {
+  if (dlJob?.alive) {
+    let step = 3e9
+    for (const f of dlJob.files) { const add = Math.min(step, f.size - f.bytes); f.bytes += add; step -= add }
+    if (dlJob.files.every(f => f.bytes >= f.size)) { dlJob.alive = false; dlJob.status = 'done' }
+  }
+  return { jobs: dlJob ? [jobView(dlJob)] : [], active: dlJob?.alive ? dlJob.id : null }
+}
+const dlCatalog = () => ({
+  models: [{ id: 'qwen3.8-flash-next-ud-iq4_xs', name: 'Qwen3.8 Flash Next', variant: 'UD-IQ4_XS', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF',
+    license: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF', capabilities: ['images', 'tools', 'mtp'], fits: true,
+    files: DL_FILES.map(f => ({ ...f, present: initial === 'none' && dlJob?.status !== 'done' ? null : DL_FOLDER + '\\' + f.name })),
+    missing: initial === 'none' ? DL_FILES.reduce((n, f) => n + f.size, 0) : 0 }],
+  sources: { hf: 'Hugging Face', hfm: 'hf-mirror.com', gh: 'GitHub', ghp: 'gh-proxy.com' },
+  drives: [{ drive: 'C:\\', free: 315e9, total: 2e12 }, { drive: 'D:\\', free: 1.2e12, total: 4e12 }],
+  default_root: 'D:\\Rulith Models', ...dlStatus(),
+})
+const REPO = {
+  source: 'hfm', owner: 'example', repo: 'Example-30B-A3B-GGUF', revision: 'main', commit: '4f2c8e1d9b7a6c5e3f1a2b4c6d8e0f1a2b3c4d5e',
+  folder: 'D:\\Rulith Models\\example\\Example-30B-A3B-GGUF',
+  groups: [
+    { key: 'Example-30B-A3B-Q4_K_M', role: 'model', name: 'Example-30B-A3B-Q4_K_M', quant: 'Q4_K_M', size: 18.6e9, complete: true, shards: 1, fits: true, files: [{ name: 'Example-30B-A3B-Q4_K_M.gguf', path: 'Example-30B-A3B-Q4_K_M.gguf', size: 18.6e9, sha256: 'ab'.repeat(32), present: null }] },
+    { key: 'Q8_0/Example-30B-A3B-Q8_0', role: 'model', name: 'Example-30B-A3B-Q8_0', quant: 'Q8_0', size: 32.5e9, complete: true, shards: 2, fits: true, files: [{ name: 'Example-30B-A3B-Q8_0-00001-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00001-of-00002.gguf', size: 16e9, sha256: 'cd'.repeat(32), present: null }, { name: 'Example-30B-A3B-Q8_0-00002-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00002-of-00002.gguf', size: 16.5e9, sha256: 'ef'.repeat(32), present: null }] },
+    { key: 'BF16/Example-30B-A3B-BF16', role: 'model', name: 'Example-30B-A3B-BF16', quant: 'BF16', size: 61e9, complete: false, shards: 3, fits: true, files: [] },
+    { key: 'mmproj-F16', role: 'projection', name: 'mmproj-F16', quant: 'F16', size: 0.9e9, complete: true, shards: 1, fits: null, files: [{ name: 'mmproj-F16.gguf', path: 'mmproj-F16.gguf', size: 0.9e9, sha256: null, present: null }] },
+  ],
+}
+
 export async function mock<T>(op: string, data: Record<string, unknown>): Promise<T> {
   await new Promise(r => setTimeout(r, 150))
   const list = initial === 'none' ? [] : models
@@ -112,6 +168,19 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
       ], waiting: tick % 20 < 10 ? 2 : 0 } as T
     case 'logs':
       return { text: Number(data.offset) ? '' : LOG, offset: LOG.length, file: 'C:\\Users\\me\\AppData\\Roaming\\dev.rulith.strixllama\\logs\\server.log', reset: false } as T
+    case 'dl_catalog': return dlCatalog() as T
+    case 'dl_status': return dlStatus() as T
+    case 'dl_repo':
+      if (!/\//.test(String(data.url))) throw JSON.stringify({ ok: false, error: 'Not a Hugging Face, hf-mirror or ModelScope repository link', code: 'dl_repo_invalid' })
+      return REPO as T
+    case 'dl_start':
+      if (dlJob?.alive) throw JSON.stringify({ ok: false, error: 'A download is already running', code: 'dl_running' })
+      dlJob = { id: '20261019-141500-def456', title: data.kind === 'repo' ? 'example/Example-30B-A3B-GGUF: Example-30B-A3B-Q4_K_M' : 'Qwen3.8 Flash Next (UD-IQ4_XS)', status: 'running', alive: true,
+        files: (data.kind === 'repo' ? [{ name: 'Example-30B-A3B-Q4_K_M.gguf', size: 18.6e9 }] : DL_FILES).map(f => ({ name: f.name, size: f.size, bytes: 0 })) }
+      return jobView(dlJob) as T
+    case 'dl_pause': if (dlJob) { dlJob.alive = false; dlJob.status = 'stopped' } return (dlJob && jobView(dlJob)) as T
+    case 'dl_resume': if (dlJob) { dlJob.alive = true; dlJob.status = 'running'; dlJob.error = undefined } return (dlJob && jobView(dlJob)) as T
+    case 'dl_cancel': dlJob = null; return dlStatus() as T
     default: return {} as T
   }
 }

@@ -643,6 +643,24 @@ class ManagerTests(unittest.TestCase):
             # a draft the user picked that is not an older head stays
             s['profiles'][model['id']]={'draft':str(self.draft)};m.atomic_json(m.DATA/'settings.json',s)
             self.assertEqual(Path(m.profile(model)['draft']).resolve(),self.draft.resolve())
+    def test_exl3_targets_take_the_ownhead_draft_and_others_never_do(self):
+        lr=self.draft.with_name(self.draft.stem+'-head-lr512.gguf');gguf(lr)
+        own=self.draft.with_name('mtp-'+m.MODEL_FAMILY+'-lr512-ownhead.gguf');gguf(own)
+        with patch.object(m,'DEFAULT_DRAFT',self.root/'models'/'missing-head.gguf'):
+            m.catalog(True)
+            ud={**self.model,'path':str(self.file.with_name(m.MODEL_FAMILY+'-UD-IQ4_XS.gguf')),'quant':'IQ4_XS'}
+            exl3={**self.model,'id':'exl3','path':str(self.file.with_name(m.MODEL_FAMILY+'-EXL3-4.05bpw.gguf')),'quant':'EXL3 4.05 bpw'}
+            self.assertEqual(Path(m.family_draft(ud)).resolve(),lr.resolve())
+            self.assertEqual(Path(m.family_draft(exl3)).resolve(),own.resolve())
+            self.assertEqual(Path(m.profile(exl3)['draft']).resolve(),own.resolve())
+            # a saved profile keeps neither a wrong-kind draft: ownhead on a GGUF target, a shared-head one on EXL3
+            s=m.settings();s['profiles'][ud['id']]={'draft':str(own)};s['profiles'][exl3['id']]={'draft':str(lr)}
+            m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(Path(m.profile(ud)['draft']).resolve(),lr.resolve())
+            self.assertEqual(Path(m.profile(exl3)['draft']).resolve(),own.resolve())
+            # without an ownhead draft, an EXL3 target still drafts (with the whole head)
+            own.unlink();m.catalog(True)
+            self.assertEqual(Path(m.family_draft(exl3)).resolve(),lr.resolve())
     def test_rescan_merges_a_downloaded_head_with_the_shared_draft_once_and_prefers_it(self):
         head=self.file.with_name('mtp-'+m.MODEL_FAMILY+'-head-iq4_xs.gguf');gguf_tensors(head,[('output.weight',[4],0,b'H'*16)])
         merged=self.draft.with_name(self.draft.stem+'-head-iq4_xs.gguf')
@@ -663,7 +681,7 @@ class ManagerTests(unittest.TestCase):
         with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'context':1},self.model)
         self.assertEqual((caught.exception.code,caught.exception.params),('out_of_range',{'field':'context','low':512,'high':262144}))
         self.assertIn('between 512 and 262144',str(caught.exception))
-        for code in m.ERRORS: m.ERRORS[code].format(**{k:'' for k in ('field','low','high','levels','name','head','base','limit','context','port','host')})
+        for code in m.ERRORS: m.ERRORS[code].format(**{k:'' for k in ('field','low','high','levels','name','head','base','limit','context','port','host','drive','need','free','repo','reason','status')})
     def test_a_kv_pool_larger_than_the_context_holds_more_conversations_each_capped_at_the_context(self):
         cfg=m.validate_profile({'parallel':4,'vision':False,'mtp':False,'kv_pool':40000},self.model)
         args=m.argv(self.model,cfg)

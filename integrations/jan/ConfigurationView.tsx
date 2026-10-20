@@ -154,6 +154,8 @@ export default function ConfigurationView() {
               control={<Choice ariaLabel={tr('config.vision.projector')} className="max-w-72" disabled={!p.vision} value={p.mmproj || ''} onChange={set('mmproj')}
                 options={[{ value: '', label: tr('config.vision.projectorAuto') }, ...projectors.map(m => ({ value: m.path, label: m.filename }))]} />} />
           )}
+          <Row title={tr('config.vision.imageMinTokens')} description={tr('config.vision.imageMinTokensHelp')} info={tr('config.vision.imageMinTokensInfo')} disabled={!p.vision}
+            control={<NumberField ariaLabel={tr('config.vision.imageMinTokens')} disabled={!p.vision} value={p.image_min_tokens ?? 1024} onChange={set('image_min_tokens')} min={0} max={4096} step={64} suffix={tr('units.tokens')} />} />
         </Section>
 
         <Section label={tr('config.startup.title')}>

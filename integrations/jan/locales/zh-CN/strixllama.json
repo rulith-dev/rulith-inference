@@ -48,7 +48,8 @@
   "tabs": {
     "models": "模型库",
     "configuration": "配置",
-    "logs": "日志"
+    "logs": "日志",
+    "downloads": "下载"
   },
   "actions": {
     "load": "加载模型",
@@ -91,13 +92,16 @@
     "subtitle": "在你的 Ryzen AI Max 上本地运行 Qwen3.8 Flash Next。",
     "searching": "正在查找模型文件…",
     "noModelTitle": "没有找到模型文件",
-    "noModelBody": "Rulith Inference 需要 Qwen3.8 Flash Next 的 GGUF 文件（约 94 GB）。添加存放它们的文件夹，或者先下载。",
+    "noModelBody": "Rulith Inference 运行 Qwen3.8 Flash Next 的 GGUF 文件（连同草稿模型和视觉投影约 96 GB）。可以在这里直接下载，也可以添加已经存放它们的文件夹。",
     "loading": "正在加载模型。重启后的第一次加载可能需要一两分钟。",
     "ready": "模型已就绪，正在打开对话…",
     "reviewSettings": "查看设置",
     "modelLabel": "模型",
     "setupLabel": "准备",
-    "loadHint": "按已保存的设置加载，之后随时可以在「模型 › 配置」里修改。"
+    "loadHint": "按已保存的设置加载，之后随时可以在「模型 › 配置」里修改。",
+    "download": "下载模型",
+    "downloadHint": "约 96 GB，从 Hugging Face 或国内镜像下载，可以暂停和继续。",
+    "orFolder": "已经有模型文件？"
   },
   "models": {
     "search": "按名称、文件名或量化方式搜索…",
@@ -126,14 +130,15 @@
     },
     "configure": "配置",
     "emptyTitle": "文件夹里没有模型",
-    "emptyBody": "添加存放 Qwen3.8 Flash Next GGUF 文件的文件夹，或者先下载。",
-    "getFiles": "获取模型文件",
-    "getFilesLead": "还没有模型文件？",
+    "emptyBody": "在这里下载 Qwen3.8 Flash Next，或者添加已经存放其 GGUF 文件的文件夹。",
+    "getFiles": "下载指南",
+    "getFilesLead": "想自己手动下载？",
     "noMatch": "没有符合搜索条件的文件。",
     "loadingCatalog": "正在读取模型文件夹…",
     "summary": "{{count}} 个文件 · {{size}}",
     "readOnly": "模型文件只读，不会被改动",
-    "switch": "切换"
+    "switch": "切换",
+    "download": "下载模型"
   },
   "config": {
     "noModel": "还没有可配置的模型。请先在「模型库」里添加模型文件夹。",
@@ -225,7 +230,10 @@
       "help": "对话里可以带图片；约占 0.9 GB 显存",
       "noProjector": "模型旁边没有视觉投影模型（mmproj*.gguf），图像输入已关闭。放进模型文件夹并重新扫描即可开启。",
       "projector": "视觉投影模型",
-      "projectorAuto": "自动（模型旁边的文件）"
+      "projectorAuto": "自动（模型旁边的文件）",
+      "imageMinTokens": "小图最少细节",
+      "imageMinTokensHelp": "一张小图至少编码成多少个 token；1024 是模型训练时的下限",
+      "imageMinTokensInfo": "每张图片会切成小块，每块变成模型要读的 token。大图（截图、照片）本身就超过 1024 个 token，不受影响。小图会被放大到至少这么多 token：引擎自己的下限是 8，但 Qwen-VL 系列是按 1024 以上训练的，低于它时读小字、定位物体会变差，引擎加载时也会为此警告。调高会让小图读得更慢（每 1024 个 token 约一秒）。0 表示用引擎下限。上限始终是 4096。下次加载生效。"
     },
     "startup": {
       "title": "启动",
@@ -357,7 +365,25 @@
     "stop_failed": "无法停止模型进程",
     "launch_failed": "模型进程启动失败，请查看日志",
     "oom": "显存不足",
-    "error": "模型进程报错退出"
+    "error": "模型进程报错退出",
+    "dl_running": "已有一个下载正在进行",
+    "dl_unknown": "找不到这个下载",
+    "dl_model": "下载目录里没有这个模型",
+    "dl_nothing": "所有文件都已在模型文件夹里",
+    "dl_space": "{{drive}} 空间不足：需要 {{need}} GB，剩余 {{free}} GB",
+    "dl_folder": "保存位置必须在本机的固定磁盘上",
+    "dl_folder_lmstudio": "不会下载到 LM Studio 的文件夹里",
+    "dl_groups": "请选择要下载的文件",
+    "dl_name_clash": "选中的文件里有两个都叫 {{name}}",
+    "dl_source": "未知的下载源",
+    "dl_repo_invalid": "不是 Hugging Face、hf-mirror 或 ModelScope 的仓库链接",
+    "dl_repo_unavailable": "无法读取仓库 {{repo}}；暂不支持需要授权或私有的仓库",
+    "dl_repo_no_gguf": "仓库 {{repo}} 里没有 GGUF 文件",
+    "dl_source_unsupported": "这个下载源暂时不能列出仓库文件",
+    "dl_network": "无法连接下载源：{{reason}}",
+    "dl_http": "下载源返回 HTTP {{status}}",
+    "dl_host_refused": "下载被转到了 {{host}}，它不是允许的下载源",
+    "dl_failed": "下载失败"
   },
   "compact": {
     "running": "对话快超出模型的上下文了，正在把前面的部分压缩成摘要…",
@@ -368,5 +394,96 @@
     "saved": "已保存到 {{path}}",
     "show": "打开所在文件夹",
     "failed": "文件没能保存：{{reason}}"
+  },
+  "dl": {
+    "jobs": "下载任务",
+    "recommended": "推荐模型",
+    "recommendedHint": "经 Rulith Inference 测试：我们公布的数据就是用这些文件测的。",
+    "reading": "正在读取模型目录…",
+    "license": "许可证",
+    "caps": {
+      "images": "图片",
+      "tools": "工具调用",
+      "mtp": "MTP"
+    },
+    "fits": "这台机器能运行",
+    "tooLarge": "超出这台机器能加载的大小",
+    "role": {
+      "model": "模型",
+      "draft": "MTP 草稿模型 · 回复更快",
+      "projection": "视觉投影 · 图片输入",
+      "head": "草稿头 · 草稿更快"
+    },
+    "shard": "模型，第 {{n}} / {{of}} 部分",
+    "shards": "共 {{count}} 部分",
+    "present": "已在模型库",
+    "required": "必需",
+    "toDownload": "需下载 {{size}}",
+    "allPresent": "所有文件都已在模型库",
+    "download": "下载…",
+    "fromRepo": "从仓库下载",
+    "repoHint": "粘贴 Hugging Face 或 hf-mirror 的链接，或 owner/repo，列出其中的 GGUF 文件。其他仓库的模型未经 Rulith 测试：可以试用，能用就用。",
+    "repoLabel": "仓库",
+    "repoPlaceholder": "https://huggingface.co/owner/repo，或 owner/repo",
+    "list": "列出文件",
+    "listFrom": "读取来源",
+    "commit": "提交 {{commit}}",
+    "notTested": "未经 Rulith 测试",
+    "repoModels": "仓库中的模型",
+    "incomplete": "缺少部分文件",
+    "start": {
+      "title": "下载 {{name}}",
+      "source": "下载源",
+      "china": "国内镜像",
+      "folder": "保存位置",
+      "browse": "浏览…",
+      "free": "{{drive}} 剩余 {{free}}",
+      "note": "每个文件下载完成后都会核对 SHA-256。下载可以暂停，之后从中断处继续，重启后也一样。",
+      "go": "开始下载"
+    },
+    "status": {
+      "starting": "正在开始",
+      "running": "下载中",
+      "downloading": "下载中",
+      "verifying": "校验中",
+      "stopped": "已暂停",
+      "pending": "等待中",
+      "done": "已完成",
+      "failed": "失败"
+    },
+    "progress": "{{done}} / {{total}}",
+    "progressLabel": "下载进度",
+    "speed": "{{speed}} MB/s",
+    "eta": "剩余 {{time}}",
+    "time": {
+      "s": "{{n}} 秒",
+      "min": "{{n}} 分钟",
+      "h": "{{h}} 小时 {{m}} 分钟"
+    },
+    "pause": "暂停",
+    "resume": "继续",
+    "retry": "重试",
+    "cancel": "取消",
+    "remove": "移除",
+    "files": "文件",
+    "hideFiles": "收起文件",
+    "loadNow": "立即加载",
+    "showFolder": "打开文件夹",
+    "verified": "已核对 SHA-256",
+    "sizeOnly": "已核对大小",
+    "cancelTitle": "取消这个下载？",
+    "cancelBody": "未下载完的文件会被删除，已经下载完成的文件保留在文件夹里。",
+    "keep": "继续下载",
+    "confirmCancel": "取消下载",
+    "finished": "{{name}} 下载完成",
+    "err": {
+      "hash_mismatch": "{{file}} 从所有下载源取得的文件都与校验值不符",
+      "sources_failed": "没有下载源能提供 {{file}}",
+      "name_taken": "文件夹里已有另一个同名文件 {{file}}",
+      "disk_full": "磁盘已满",
+      "disk_error": "无法写入文件：{{reason}}",
+      "internal": "下载意外中止：{{reason}}",
+      "other": "下载失败（{{code}}）"
+    }
   }
 }

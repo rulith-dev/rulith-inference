@@ -8,7 +8,7 @@ The result is what the installer ships under <install dir>/runtime:
                        import tables, not by a list that goes stale), the rocBLAS / hipBLASLt kernel
                        libraries for one GPU, and the Visual C++ and OpenMP runtimes
     bin/.kpack/        the kernel packs those ROCm DLLs load their own kernels from (rocBLAS's GEMV)
-    tools/manager.py   the manager, unchanged
+    tools/manager.py   the manager, unchanged; downloader.py and model_catalog.json beside it (Downloads)
     python/            CPython's embeddable distribution - the manager is standard library only
     BUNDLE.json        what went in, from where, and the upstream pin it was built from
 
@@ -179,6 +179,9 @@ def main():
 
     (out / 'tools').mkdir()
     take(ROOT / 'tools' / 'manager.py', out / 'tools' / 'manager.py', 'tools')
+    # Downloads (0.6.0): the worker the manager starts, and the recommended models it lists
+    for name in ('downloader.py', 'model_catalog.json'):
+        take(ROOT / 'tools' / name, out / 'tools' / name, 'tools')
     for d in ('config', 'logs', 'models'):
         (out / d).mkdir()
 

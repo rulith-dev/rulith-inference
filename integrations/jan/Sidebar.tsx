@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { ArrowDownToLine, Check, ChevronsUpDown, Database, ScrollText, SlidersHorizontal, Settings, Play, Square, RotateCw } from 'lucide-react'
+import { ArrowDownToLine, Check, ChevronsUpDown, Database, ScrollText, SlidersHorizontal, Settings, Play, Square, RotateCw, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
 import { Button } from '@/components/ui/button'
@@ -32,6 +32,7 @@ export function ModelNav() {
   const pathname = useRouterState({ select: s => s.location.pathname })
   const items = [
     { key: 'models', to: '/strixllama/models', icon: Database },
+    { key: 'downloads', to: '/strixllama/downloads', icon: Download },
     { key: 'configuration', to: '/strixllama/configuration', icon: SlidersHorizontal },
     { key: 'logs', to: '/strixllama/logs', icon: ScrollText },
   ] as const
