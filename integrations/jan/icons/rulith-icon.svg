@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100" role="img">
+  <title>Rulith Inference</title>
+  <defs>
+    <linearGradient id="rulith-icon-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#1E3A8A"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="22" fill="url(#rulith-icon-bg)"/>
+  <g transform="translate(-3 0)" fill="#FFFFFF">
+    <path fill-rule="evenodd" d="M30 22H56C68 22 76 30 76 40C76 48.5 71 54.5 63.5 56.5L49.5 58H44V78H30ZM44 33.5V47H55.5C59.5 47 62 44.3 62 40.25C62 36.2 59.5 33.5 55.5 33.5Z"/>
+    <path d="M49.5 58L63.5 56.5L77 78H61.5Z"/>
+  </g>
+</svg>

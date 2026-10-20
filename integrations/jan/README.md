@@ -43,7 +43,7 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable — one that reads a dropped document's bytes with Jan's own document parser (`tauri-plugin-rag`) through a temporary file it removes again, and one that writes a file the page saves into the Downloads folder, numbering the name when it is taken |
 | `tests/compact.test.ts` | the unit tests of `compact.ts`, run with the web app's vitest beside the module (not copied by `apply.py`) |
 | `locales/{en,zh-CN}/strixllama.json` | English and Chinese |
-| `icons/` | the application icon, drawn by `make_icons.py` with no image library |
+| `icons/` | the application icon (white R on a blue gradient tile) and its SVG, rendered by `make_icons.py` (Pillow + numpy) |
 
 Language follows Jan's own setting: Jan discovers i18n namespaces with `import.meta.glob`, so the
 locale files only have to be dropped in. 305 keys, identical key sets in both languages.
@@ -84,9 +84,8 @@ Renaming a build of Jan is what Apache-2.0 allows; [NOTICE.md](../../NOTICE.md) 
 this is. Do not present it as endorsed by Jan.
 
 `apply.py` also drops `yarn build:icon` from `build:tauri`. That step regenerates every icon size
-from `icon.png` by plain downscaling, which would overwrite the 16 px icon that `make_icons.py`
-deliberately draws differently — at that size the ring is under a pixel wide, so it is dropped and
-the eyes grow instead.
+from `icon.png` by plain downscaling, which would overwrite the small icons that `make_icons.py`
+renders from the vector paths with supersampling, so they stay sharp down to 16 px.
 
 ## Building behind a GitHub block
 

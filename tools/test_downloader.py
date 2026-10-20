@@ -272,6 +272,20 @@ class RepoTests(Base):
         urls = D.repo_urls(cat, 't', 'o', 'r', sha, 'Q4/m-Q4_K_M-00001-of-00002.gguf')
         self.assertEqual(urls, [f'{self.srv.base}/o/r/resolve/{sha}/Q4/m-Q4_K_M-00001-of-00002.gguf'])
 
+    def test_search_and_readme(self):
+        cat = {'sources': {'t': {'name': 'test', 'kind': 'hf', 'base': self.srv.base}}}
+        hits = [{'id': 'o/r-GGUF', 'downloads': 12, 'likes': 3, 'lastModified': '2026-10-01T00:00:00.000Z', 'pipeline_tag': 'text-generation',
+                 'gguf': {'architecture': 'qwen4exp', 'total': 5}}, {'id': 'not a repo'}]
+        self.srv.json['/api/models'] = (json.dumps(hits).encode(), None)
+        got = D.search_repos(cat, 't', 'flash next')
+        self.assertEqual([(h['owner'], h['repo'], h['downloads'], h['architecture']) for h in got], [('o', 'r-GGUF', 12, 'qwen4exp')])
+        sha = 'a' * 40
+        self.srv.files[f'/o/r/resolve/{sha}/README.md'] = b'---\nlicense: mit\n---\n\n# Title\nbody\n'
+        self.assertEqual(D.readme(cat, 't', 'o', 'r', sha), '# Title\nbody\n')
+        self.assertEqual(D.readme(cat, 't', 'o', 'none', sha), '')
+        self.assertEqual(D.quant_of('Qwen3.8-Flash-Next-EXL3-4.05bpw-00001-of-00006.gguf'), 'EXL3 4.05 bpw')
+        self.assertEqual(D.quant_of('m-UD-IQ4_XS-00001-of-00003.gguf'), 'IQ4_XS')
+
     def test_gated_repo_refused(self):
         cat = {'sources': {'t': {'name': 'test', 'kind': 'hf', 'base': self.srv.base}}}
         self.srv.opts['/api/models/o/g/revision/main'] = {'status': 401}

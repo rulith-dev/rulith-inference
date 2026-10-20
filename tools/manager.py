@@ -209,7 +209,7 @@ ERRORS = {
     'dl_groups': 'Choose the files to download',
     'dl_name_clash': 'Two of the chosen files are both called {name}',
     'dl_source': 'Unknown download source',
-    'dl_repo_invalid': 'Not a Hugging Face, hf-mirror or ModelScope repository link',
+    'dl_repo_invalid': 'Not a Hugging Face or hf-mirror repository link',
     'dl_repo_unavailable': 'The repository {repo} cannot be read; gated and private repositories are not supported yet',
     'dl_repo_no_gguf': 'The repository {repo} has no GGUF files',
     'dl_source_unsupported': 'This source cannot list repositories yet',
@@ -1850,12 +1850,47 @@ def dl_catalog():
             have = next((p for p, n in found.get(f['name'], []) if n == f['size']), None)
             files.append({'name': f['name'], 'role': f['role'], 'required': f['required'], 'size': f['size'], 'present': have})
         need = sum(f['size'] for f in files if f['required'])
+        spec = D.SPEC.fullmatch(next((f.get('hf', '') for f in m['files'] if f.get('hf', '').startswith(m['owner'] + '/')), ''))
         models.append({**{k: m.get(k) for k in ('id', 'name', 'variant', 'owner', 'repo', 'license', 'capabilities')},
+                       'commit': spec[3] if spec else None,
                        'files': files, 'missing': sum(f['size'] for f in files if not f['present']), 'fits': dl_fits(need)})
     try: root = D.models_root()
     except D.DownloadError: root = None
     return {'models': models, 'sources': {k: v['name'] for k, v in cat['sources'].items()}, 'drives': D.drives_view(),
             'default_root': root, **dl_status()}
+
+
+# the files this build has its own kernels for (README, "Model files"): marked in search results and listings
+TUNED = ('IQ4_XS', 'Q4_K_XL', 'EXL3 ')
+
+
+def dl_tuned(name, quant):
+    return MODEL_FAMILY.lower() in name.lower() and any(quant.startswith(t) for t in TUNED)
+
+
+def dl_search(data):
+    D = _dl()
+    cat = D.load_catalog()
+    source = data.get('source') or 'hf'
+    if source not in cat['sources']: fail('dl_source')
+    query = str(data.get('query') or '').strip()
+    if not query: return {'source': source, 'results': []}
+    try: results = D.search_repos(cat, source, query)
+    except D.DownloadError as e: dl_fail(e)
+    for r in results:
+        r['family'] = MODEL_FAMILY.lower() in r['repo'].lower()
+    return {'source': source, 'results': results}
+
+
+def dl_readme(data):
+    D = _dl()
+    cat = D.load_catalog()
+    source = data.get('source') or 'hf'
+    if source not in cat['sources']: fail('dl_source')
+    owner, repo, commit = (str(data.get(k) or '') for k in ('owner', 'repo', 'commit'))
+    if not (D.REPO_ID.match(f'{owner}/{repo}') and re.fullmatch(r'[0-9a-f]{40}', commit)): fail('dl_repo_invalid')
+    try: return {'text': D.readme(cat, source, owner, repo, commit)}
+    except D.DownloadError as e: dl_fail(e)
 
 
 def dl_repo(data):
@@ -1871,6 +1906,7 @@ def dl_repo(data):
         for f in g['files']:
             f['present'] = next((p for p, n in found.get(f['name'], []) if n == f['size']), None)
         g['fits'] = dl_fits(g['size']) if g['role'] == 'model' else None
+        g['tuned'] = g['role'] == 'model' and dl_tuned(g['name'], g['quant'])
     try: listing['folder'] = str(Path(D.models_root()) / D.safe_dir(owner) / D.safe_dir(repo))
     except D.DownloadError: listing['folder'] = None
     return listing
@@ -2041,6 +2077,8 @@ def dl_cancel(jobdir, delete_parts=True):
 def handle(op, data):
     if op=='catalog': return catalog(bool(data.get('refresh')))
     if op=='dl_catalog': return dl_catalog()
+    if op=='dl_search': return dl_search(data)
+    if op=='dl_readme': return dl_readme(data)
     if op=='dl_repo': return dl_repo(data)
     if op=='dl_start': return dl_start(data)
     if op=='dl_status': return dl_status()

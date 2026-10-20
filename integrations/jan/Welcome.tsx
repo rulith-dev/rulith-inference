@@ -29,7 +29,7 @@ export default function Welcome() {
     <div className="flex h-full w-full flex-col overflow-y-auto">
       <div className="mx-auto flex w-full max-w-[640px] flex-1 flex-col justify-center px-6 py-10">
         <div className="mb-6 flex items-center gap-3">
-          <img src="/images/jan-logo.png" alt="" className="size-10 rounded-lg" />
+          <img src="/images/rulith-icon.svg" alt="" className="size-10" />
           <div>
             <h1 className="text-lg font-semibold text-foreground">{tr('welcome.title')}</h1>
             <p className="text-xs text-muted-foreground">{tr('welcome.subtitle')}</p>

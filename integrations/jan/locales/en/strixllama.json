@@ -376,7 +376,7 @@
     "dl_groups": "Choose the files to download",
     "dl_name_clash": "Two of the chosen files are both called {{name}}",
     "dl_source": "Unknown download source",
-    "dl_repo_invalid": "Not a Hugging Face, hf-mirror or ModelScope repository link",
+    "dl_repo_invalid": "Not a Hugging Face or hf-mirror repository link",
     "dl_repo_unavailable": "The repository {{repo}} cannot be read; gated and private repositories are not supported yet",
     "dl_repo_no_gguf": "The repository {{repo}} has no GGUF files",
     "dl_source_unsupported": "This source cannot list repositories yet",
@@ -484,6 +484,23 @@
       "disk_error": "A file could not be written: {{reason}}",
       "internal": "The download stopped unexpectedly: {{reason}}",
       "other": "The download failed ({{code}})"
-    }
+    },
+    "browse": "Find a model",
+    "searchLabel": "Search models",
+    "searchPlaceholder": "Search Hugging Face, or paste a repository link",
+    "searchHint": "Search finds GGUF repositories on Hugging Face, most downloaded first. Files Rulith Inference has its own kernels for are marked Tuned; other repositories are not tested by Rulith: try them and keep what works.",
+    "picks": "Recommended",
+    "tested": "Tested",
+    "results": "{{count}} repositories",
+    "noResults": "No GGUF repository matches.",
+    "pickHint": "Pick a model on the left.",
+    "loadingRepo": "Reading the repository…",
+    "openOnHf": "Open on Hugging Face",
+    "options": "Download options",
+    "companions": "Files that go with it",
+    "tuned": "Tuned",
+    "tunedHint": "Rulith Inference has its own GPU kernels for this file",
+    "readme": "Model card",
+    "readmeNone": "This repository has no model card."
   }
 }

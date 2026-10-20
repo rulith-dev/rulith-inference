@@ -18,7 +18,7 @@ import { StateDot, StatePill, openExternal, useTr } from './parts'
 export function SidebarBrand() {
   return (
     <div className="flex min-w-0 items-center gap-2.5 pl-1.5">
-      <img src="/images/jan-logo.png" alt="" className="size-6 shrink-0 rounded-md" />
+      <img src="/images/rulith-icon.svg" alt="" className="size-6 shrink-0" />
       <div className="min-w-0 leading-tight">
         <div className="truncate text-[13px] font-semibold uppercase tracking-wide">Rulith Inference</div>
         <div className="truncate text-[11px] text-muted-foreground">by Rulith</div>

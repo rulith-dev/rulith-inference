@@ -109,7 +109,7 @@ const dlStatus = () => {
 }
 const dlCatalog = () => ({
   models: [{ id: 'qwen3.8-flash-next-ud-iq4_xs', name: 'Qwen3.8 Flash Next', variant: 'UD-IQ4_XS', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF',
-    license: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF', capabilities: ['images', 'tools', 'mtp'], fits: true,
+    license: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF', capabilities: ['images', 'tools', 'mtp'], fits: true, commit: '38bb39ee97821de2c9009abb7e93950eec396e66',
     files: DL_FILES.map(f => ({ ...f, present: initial === 'none' && dlJob?.status !== 'done' ? null : DL_FOLDER + '\\' + f.name })),
     missing: initial === 'none' ? DL_FILES.reduce((n, f) => n + f.size, 0) : 0 }],
   sources: { hf: 'Hugging Face', hfm: 'hf-mirror.com', gh: 'GitHub', ghp: 'gh-proxy.com' },
@@ -120,7 +120,7 @@ const REPO = {
   source: 'hfm', owner: 'example', repo: 'Example-30B-A3B-GGUF', revision: 'main', commit: '4f2c8e1d9b7a6c5e3f1a2b4c6d8e0f1a2b3c4d5e',
   folder: 'D:\\Rulith Models\\example\\Example-30B-A3B-GGUF',
   groups: [
-    { key: 'Example-30B-A3B-Q4_K_M', role: 'model', name: 'Example-30B-A3B-Q4_K_M', quant: 'Q4_K_M', size: 18.6e9, complete: true, shards: 1, fits: true, files: [{ name: 'Example-30B-A3B-Q4_K_M.gguf', path: 'Example-30B-A3B-Q4_K_M.gguf', size: 18.6e9, sha256: 'ab'.repeat(32), present: null }] },
+    { key: 'Example-30B-A3B-Q4_K_M', role: 'model', name: 'Example-30B-A3B-Q4_K_M', quant: 'Q4_K_M', size: 18.6e9, complete: true, shards: 1, fits: true, tuned: true, files: [{ name: 'Example-30B-A3B-Q4_K_M.gguf', path: 'Example-30B-A3B-Q4_K_M.gguf', size: 18.6e9, sha256: 'ab'.repeat(32), present: null }] },
     { key: 'Q8_0/Example-30B-A3B-Q8_0', role: 'model', name: 'Example-30B-A3B-Q8_0', quant: 'Q8_0', size: 32.5e9, complete: true, shards: 2, fits: true, files: [{ name: 'Example-30B-A3B-Q8_0-00001-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00001-of-00002.gguf', size: 16e9, sha256: 'cd'.repeat(32), present: null }, { name: 'Example-30B-A3B-Q8_0-00002-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00002-of-00002.gguf', size: 16.5e9, sha256: 'ef'.repeat(32), present: null }] },
     { key: 'BF16/Example-30B-A3B-BF16', role: 'model', name: 'Example-30B-A3B-BF16', quant: 'BF16', size: 61e9, complete: false, shards: 3, fits: true, files: [] },
     { key: 'mmproj-F16', role: 'projection', name: 'mmproj-F16', quant: 'F16', size: 0.9e9, complete: true, shards: 1, fits: null, files: [{ name: 'mmproj-F16.gguf', path: 'mmproj-F16.gguf', size: 0.9e9, sha256: null, present: null }] },
@@ -170,8 +170,15 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
       return { text: Number(data.offset) ? '' : LOG, offset: LOG.length, file: 'C:\\Users\\me\\AppData\\Roaming\\dev.rulith.strixllama\\logs\\server.log', reset: false } as T
     case 'dl_catalog': return dlCatalog() as T
     case 'dl_status': return dlStatus() as T
+    case 'dl_search':
+      return { source: data.source, results: String(data.query).toLowerCase().includes('zzz') ? [] : [
+        { id: 'example/Example-30B-A3B-GGUF', owner: 'example', repo: 'Example-30B-A3B-GGUF', downloads: 1234567, likes: 890, updated: '2026-10-01T00:00:00Z', task: 'text-generation', architecture: 'qwen3moe' },
+        { id: 'unsloth/Qwen3.8-Flash-Next-GGUF', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF', downloads: 1100582, likes: 1243, updated: '2026-09-26T00:00:00Z', task: 'image-text-to-text', architecture: 'qwen4exp' },
+      ] } as T
+    case 'dl_readme':
+      return { text: '# ' + String(data.repo) + '\n\nA model card with **bold** text, a [link](https://huggingface.co) and a table:\n\n| quant | size |\n|---|---|\n| Q4_K_M | 18.6 GB |\n' } as T
     case 'dl_repo':
-      if (!/\//.test(String(data.url))) throw JSON.stringify({ ok: false, error: 'Not a Hugging Face, hf-mirror or ModelScope repository link', code: 'dl_repo_invalid' })
+      if (!/\//.test(String(data.url))) throw JSON.stringify({ ok: false, error: 'Not a Hugging Face or hf-mirror repository link', code: 'dl_repo_invalid' })
       return REPO as T
     case 'dl_start':
       if (dlJob?.alive) throw JSON.stringify({ ok: false, error: 'A download is already running', code: 'dl_running' })

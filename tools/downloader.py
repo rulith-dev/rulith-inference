@@ -195,6 +195,15 @@ def parse_repo(text, source=None):
 
 SHARD = re.compile(r'-(\d{5})-of-(\d{5})\.gguf$', re.I)
 QUANT = re.compile(r'(?:UD-)?((?:IQ|Q|MXFP|BF|F)[A-Z0-9_]+)(?:-\d{5}-of|\.gguf)', re.I)
+EXL3_BPW = re.compile(r'EXL3[-_](\d+(?:\.\d+)?)bpw', re.I)
+
+
+def quant_of(name):
+    """the quantization a file name gives: UD-IQ4_XS -> IQ4_XS, ...-EXL3-4.05bpw -> EXL3 4.05 bpw"""
+    e = EXL3_BPW.search(name)
+    if e: return f'EXL3 {e[1]} bpw'
+    q = QUANT.search(name)
+    return q[1] if q else ''
 
 
 def file_role(name):
@@ -214,8 +223,7 @@ def group_files(files):
     out = []
     for g in groups.values():
         g['files'].sort(key=lambda f: f['name'])
-        q = QUANT.search(g['files'][0]['name'])
-        out.append({**g, 'name': g['key'].rsplit('/', 1)[-1], 'quant': q[1] if q else '',
+        out.append({**g, 'name': g['key'].rsplit('/', 1)[-1], 'quant': quant_of(g['files'][0]['name']),
                     'size': sum(f['size'] for f in g['files']), 'complete': len(g['files']) == g['shards']})
     return sorted(out, key=lambda g: (g['role'] != 'model', g['key'].lower()))
 
@@ -251,6 +259,46 @@ def list_repo(catalog, source, owner, repo, rev='main'):
     if not files: raise DownloadError('repo_no_gguf', repo=f'{owner}/{repo}')
     return {'source': source, 'owner': owner, 'repo': repo, 'revision': rev, 'commit': commit,
             'groups': group_files(files)}
+
+
+SEARCH_FIELDS = ('downloads', 'likes', 'lastModified', 'pipeline_tag', 'gguf')
+
+
+def search_repos(catalog, source, query, limit=40):
+    """GGUF repositories matching `query`, most downloaded first: id, counts, last change, task, and the GGUF
+    header's architecture and parameter count the hub reads from the files"""
+    src = catalog['sources'].get(source)
+    if not src or src['kind'] != 'hf': raise DownloadError('source_unsupported', source=source)
+    q = urllib.parse.quote
+    url = (f"{src['base']}/api/models?search={q(str(query).strip()[:200])}&filter=gguf&sort=downloads&direction=-1"
+           f"&limit={int(limit)}" + ''.join(f'&expand%5B%5D={f}' for f in SEARCH_FIELDS))
+    found, _ = get_json(url)
+    out = []
+    for m in found if isinstance(found, list) else []:
+        ident = str(m.get('id', ''))
+        if not REPO_ID.match(ident): continue
+        g = m.get('gguf') or {}
+        out.append({'id': ident, 'owner': ident.split('/')[0], 'repo': ident.split('/')[1],
+                    'downloads': int(m.get('downloads') or 0), 'likes': int(m.get('likes') or 0),
+                    'updated': m.get('lastModified'), 'task': m.get('pipeline_tag'),
+                    'architecture': g.get('architecture'), 'params': g.get('total')})
+    return out
+
+
+def readme(catalog, source, owner, repo, commit):
+    """a repository's README.md at the listing's commit, without its YAML header; '' when it has none"""
+    src = catalog['sources'].get(source)
+    if not src or src['kind'] != 'hf': raise DownloadError('source_unsupported', source=source)
+    try:
+        with get(source_url(src, f'{owner}/{repo}@{commit}:README.md')) as r:
+            text = r.read(512 << 10).decode('utf-8', errors='replace')
+    except DownloadError as e:
+        if e.code == 'http' and e.params.get('status') == 404: return ''
+        raise
+    if text.startswith('---'):
+        end = text.find('\n---', 3)
+        if end > 0: text = text[end + 4:]
+    return text.lstrip('\n')
 
 
 def repo_urls(catalog, prefer, owner, repo, commit, path):

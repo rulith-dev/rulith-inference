@@ -376,7 +376,7 @@
     "dl_groups": "请选择要下载的文件",
     "dl_name_clash": "选中的文件里有两个都叫 {{name}}",
     "dl_source": "未知的下载源",
-    "dl_repo_invalid": "不是 Hugging Face、hf-mirror 或 ModelScope 的仓库链接",
+    "dl_repo_invalid": "不是 Hugging Face 或 hf-mirror 的仓库链接",
     "dl_repo_unavailable": "无法读取仓库 {{repo}}；暂不支持需要授权或私有的仓库",
     "dl_repo_no_gguf": "仓库 {{repo}} 里没有 GGUF 文件",
     "dl_source_unsupported": "这个下载源暂时不能列出仓库文件",
@@ -484,6 +484,23 @@
       "disk_error": "无法写入文件：{{reason}}",
       "internal": "下载意外中止：{{reason}}",
       "other": "下载失败（{{code}}）"
-    }
+    },
+    "browse": "找模型",
+    "searchLabel": "搜索模型",
+    "searchPlaceholder": "搜索 Hugging Face，或粘贴仓库链接",
+    "searchHint": "搜索的是 Hugging Face 上的 GGUF 仓库，按下载量排序。Rulith Inference 有专门内核的文件会标“已调优”；其他仓库未经 Rulith 测试，可以试用，好用就留下。",
+    "picks": "推荐",
+    "tested": "已测试",
+    "results": "{{count}} 个仓库",
+    "noResults": "没有匹配的 GGUF 仓库。",
+    "pickHint": "在左侧选一个模型。",
+    "loadingRepo": "正在读取仓库…",
+    "openOnHf": "在 Hugging Face 打开",
+    "options": "下载选项",
+    "companions": "配套文件",
+    "tuned": "已调优",
+    "tunedHint": "Rulith Inference 为这个文件准备了专门的 GPU 内核",
+    "readme": "模型卡",
+    "readmeNone": "这个仓库没有模型卡。"
   }
 }

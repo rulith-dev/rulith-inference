@@ -29,7 +29,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.6.0'
+VERSION = '0.6.1'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -599,8 +599,8 @@ def brand(keep_data_dir=False):
                             encoding='utf-8', newline='\n')
 
     # build:tauri starts with `tauri icon`, which regenerates every size from icon.png by plain
-    # downscaling — including the 16 px one, where make_icons.py deliberately drops the ring and
-    # grows the eyes. We ship the whole set already, so drop that step and keep the hinted sizes.
+    # downscaling, while make_icons.py renders each size from the vector paths (a crisper 16 px).
+    # We ship the whole set already, so drop that step and keep the rendered sizes.
     pkg = JAN / 'package.json'
     scripts = json.loads(pkg.read_text(encoding='utf-8'))
     tauri = scripts['scripts'].get('build:tauri', '')
@@ -613,6 +613,8 @@ def brand(keep_data_dir=False):
     # The splash: index.html shows /images/jan-logo.png (the waving hand) until the app mounts,
     # and two other places use the same file. One image replaces all three.
     shutil.copyfile(icons / 'icon.png', JAN / 'web-app/public/images/jan-logo.png')
+    # The sidebar and the welcome page show the mark small (24 and 40 px): the SVG stays sharp there.
+    shutil.copyfile(icons / 'rulith-icon.svg', JAN / 'web-app/public/images/rulith-icon.svg')
     replace_once(html, '<img src="/images/jan-logo.png" alt="Jan Logo" data-tauri-drag-region />',
                  f'<img src="/images/jan-logo.png" alt="{NAME}" data-tauri-drag-region />')
     replace_once(html, 'Booting up Jan…', f'Starting {NAME}…')
