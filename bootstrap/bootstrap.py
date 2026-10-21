@@ -134,6 +134,8 @@ PATCH_ORDER = [
     "apply_exl3_hip_060",      # 0.6.0: EXL3 GEMV / GEMMs and fusions on the GPU, QSA_PACK (+ patches/exl3/mul-mat-had.cu/.cuh)
     "apply_exl3_llama_060",    # 0.6.0: EXL3 weights for qwen4exp; compute buffers that do not grow with the pool (+ llama-weight-aux)
     "apply_slot_continuation_060",  # 0.6.0: a conversation's next step continues in its own slot (issue #19)
+    "apply_exl3_decode_063",   # 0.6.3: EXL3 dense products of up to 8 tokens through the GEMV (MTP verify)
+    "apply_prompt_sample_063", # 0.6.3: EXL3 z + gated norm epilogue, one-pass dense prologue; exact fast top-k sampling
 ]
 
 # The ROCm SDK is installed as Python wheels, which is the only form AMD ships for Windows - the
