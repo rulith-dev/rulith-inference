@@ -175,6 +175,8 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
         { id: 'example/Example-30B-A3B-GGUF', owner: 'example', repo: 'Example-30B-A3B-GGUF', downloads: 1234567, likes: 890, updated: '2026-10-01T00:00:00Z', task: 'text-generation', architecture: 'qwen3moe' },
         { id: 'unsloth/Qwen3.8-Flash-Next-GGUF', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF', downloads: 1100582, likes: 1243, updated: '2026-09-26T00:00:00Z', task: 'image-text-to-text', architecture: 'qwen4exp' },
       ] } as T
+    case 'dl_info':
+      return { source: data.source, info: { downloads: 1100582, likes: 1243, updated: '2026-10-06T05:31:22Z', task: 'image-text-to-text', license: 'qwen-community-1.0', base_model: 'Qwen/Qwen3.8-Flash-Next', architecture: 'qwen4exp', params: 176943899520, context: 262144 } } as T
     case 'dl_readme':
       return { text: '# ' + String(data.repo) + '\n\nA model card with **bold** text, a [link](https://huggingface.co) and a table:\n\n| quant | size |\n|---|---|\n| Q4_K_M | 18.6 GB |\n' } as T
     case 'dl_repo':

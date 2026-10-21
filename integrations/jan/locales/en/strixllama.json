@@ -501,6 +501,33 @@
     "tuned": "Tuned",
     "tunedHint": "Rulith Inference has its own GPU kernels for this file",
     "readme": "Model card",
-    "readmeNone": "This repository has no model card."
+    "readmeNone": "This repository has no model card.",
+    "readmeLoading": "Reading the model card…",
+    "working": {
+      "dl_pause": "Pausing…",
+      "dl_resume": "Resuming…",
+      "dl_cancel": "Stopping…"
+    },
+    "recommendedOne": "Recommended",
+    "optionsCount": "{{count}} download options",
+    "showJobs": "Show",
+    "hideJobs": "Hide",
+    "updated": "Updated {{date}}",
+    "params": "{{n}} parameters",
+    "context": "{{n}} context",
+    "pickOption": "Choose a download option",
+    "downloadSize": "Download {{size}}",
+    "busyOther": "Another download is running",
+    "filesCount": "Files ({{count}})",
+    "moreFrom": "More from {{owner}}",
+    "with": {
+      "projection": "Vision projector",
+      "draft": "MTP draft",
+      "head": "Draft head"
+    },
+    "addingToLibrary": "Every file is here; adding it to the Library…",
+    "notInLibrary": "Every file is here, but not in a Library folder: add its folder under Library › Folders",
+    "otherDownloads": "To download another version, pick it under Download options. To download a different model, search Hugging Face on the left.",
+    "otherDownloadsSearch": "To download a different model, search Hugging Face on the left, or paste a repository link."
   }
 }

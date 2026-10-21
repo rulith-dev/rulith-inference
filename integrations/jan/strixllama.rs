@@ -107,7 +107,7 @@ pub async fn strixllama_request(request: Value) -> Result<Value, String> {
     let op = request.get("op").and_then(Value::as_str).ok_or("Missing operation")?;
     if !["catalog", "status", "logs", "slots", "profile", "roots", "save", "start", "stop", "network", "save_network",
          // Downloads (0.6.0): the catalog, a repository's files, and the one download job
-         "dl_catalog", "dl_search", "dl_repo", "dl_readme", "dl_start", "dl_status", "dl_pause", "dl_resume",
+         "dl_catalog", "dl_search", "dl_repo", "dl_readme", "dl_info", "dl_start", "dl_status", "dl_pause", "dl_resume",
          "dl_cancel"].contains(&op) {
         return Err("Unsupported strixllama operation".into());
     }

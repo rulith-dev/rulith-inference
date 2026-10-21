@@ -352,12 +352,32 @@ def lmstudio_models_dir():
     return _LMSTUDIO[0]
 
 
+# Up to 0.6.1 the app was installed in %LOCALAPPDATA%\Strix Llama; 0.6.2's setup renames that folder to the
+# product's name. A model folder inside it (its runtime\models is a default root) is the same folder under the
+# new name.
+LEGACY_INSTALL = 'Strix Llama'
+
+
+def moved_root(root):
+    p = Path(root)
+    home = ROOT.parent
+    if home.name.lower() == LEGACY_INSTALL.lower() or p.exists(): return root
+    parts = p.parts
+    for i, part in enumerate(parts[:-1]):
+        if part.lower() == LEGACY_INSTALL.lower() and Path(*parts[:i]) == home.parent:
+            return str(home.joinpath(*parts[i + 1:]))
+    return root
+
+
 def settings():
     roots = [str(ROOT / 'models')]
     lms = lmstudio_models_dir()
     if lms:
         roots.append(lms)
-    return read_json(DATA / 'settings.json', {'roots': roots, 'profiles': {}})
+    cfg = read_json(DATA / 'settings.json', {'roots': roots, 'profiles': {}})
+    if isinstance(cfg.get('roots'), list):
+        cfg['roots'] = list(dict.fromkeys(moved_root(r) for r in cfg['roots']))
+    return cfg
 
 
 def api_key_valid(key):
@@ -1868,18 +1888,42 @@ def dl_tuned(name, quant):
     return MODEL_FAMILY.lower() in name.lower() and any(quant.startswith(t) for t in TUNED)
 
 
+def dl_fallback(cat, source, fn):
+    """fn(source) on the source asked for, and on the other Hugging Face source when that one cannot be reached
+    (huggingface.co from China without a proxy, a mirror that is down): (result, the source that answered)"""
+    D = _dl()
+    order = [source] + [k for k, v in cat['sources'].items() if v['kind'] == 'hf' and k != source]
+    # a source that could not be reached in the last 15 minutes goes last: one timeout per page, not one per request
+    reach = read_json(DATA / 'dl_reach.json', {}) or {}
+    order.sort(key=lambda k: time.time() - reach.get(k, 0) < 900)
+    for i, s in enumerate(order):
+        try:
+            result = fn(s)
+            if reach.pop(s, None) is not None: atomic_json(DATA / 'dl_reach.json', reach)
+            return result, s
+        except D.DownloadError as e:
+            unreachable = e.code == 'network' or (e.code == 'http' and (e.params.get('status') or 0) >= 500)
+            if unreachable:
+                reach[s] = time.time()
+                atomic_json(DATA / 'dl_reach.json', reach)
+            if not unreachable or i == len(order) - 1: dl_fail(e)
+
+
 def dl_search(data):
     D = _dl()
     cat = D.load_catalog()
     source = data.get('source') or 'hf'
     if source not in cat['sources']: fail('dl_source')
     query = str(data.get('query') or '').strip()
-    if not query: return {'source': source, 'results': []}
-    try: results = D.search_repos(cat, source, query)
-    except D.DownloadError as e: dl_fail(e)
+    # an owner's repositories ("More from <owner>"), else a search
+    author = str(data.get('author') or '')
+    if author and not re.fullmatch(r'[\w.-]{1,96}', author): fail('dl_repo_invalid')
+    if not query and not author: return {'source': source, 'results': []}
+    limit = 12 if author else 40
+    results, used = dl_fallback(cat, source, lambda s: D.search_repos(cat, s, query, limit, author or None))
     for r in results:
         r['family'] = MODEL_FAMILY.lower() in r['repo'].lower()
-    return {'source': source, 'results': results}
+    return {'source': used, 'results': results}
 
 
 def dl_readme(data):
@@ -1888,9 +1932,21 @@ def dl_readme(data):
     source = data.get('source') or 'hf'
     if source not in cat['sources']: fail('dl_source')
     owner, repo, commit = (str(data.get(k) or '') for k in ('owner', 'repo', 'commit'))
-    if not (D.REPO_ID.match(f'{owner}/{repo}') and re.fullmatch(r'[0-9a-f]{40}', commit)): fail('dl_repo_invalid')
-    try: return {'text': D.readme(cat, source, owner, repo, commit)}
-    except D.DownloadError as e: dl_fail(e)
+    # a listing's commit, or main: a recommended model's card is read from main, newer than its pinned files
+    if not (D.REPO_ID.match(f'{owner}/{repo}') and re.fullmatch(r'[0-9a-f]{40}|main', commit)): fail('dl_repo_invalid')
+    text, used = dl_fallback(cat, source, lambda s: D.readme(cat, s, owner, repo, commit))
+    return {'text': text, 'source': used}
+
+
+def dl_info(data):
+    D = _dl()
+    cat = D.load_catalog()
+    source = data.get('source') or 'hf'
+    if source not in cat['sources']: fail('dl_source')
+    owner, repo = (str(data.get(k) or '') for k in ('owner', 'repo'))
+    if not D.REPO_ID.match(f'{owner}/{repo}'): fail('dl_repo_invalid')
+    info, used = dl_fallback(cat, source, lambda s: D.repo_info(cat, s, owner, repo))
+    return {'info': info, 'source': used}
 
 
 def dl_repo(data):
@@ -1899,8 +1955,8 @@ def dl_repo(data):
     try:
         src, owner, repo, rev = D.parse_repo(data.get('url', ''), data.get('source'))
         if src not in cat['sources']: fail('dl_source')
-        listing = D.list_repo(cat, src, owner, repo, rev)
     except D.DownloadError as e: dl_fail(e)
+    listing, _ = dl_fallback(cat, src, lambda s: D.list_repo(cat, s, owner, repo, rev))
     found = dl_find({f['name'] for g in listing['groups'] for f in g['files']})
     for g in listing['groups']:
         for f in g['files']:
@@ -2079,6 +2135,7 @@ def handle(op, data):
     if op=='dl_catalog': return dl_catalog()
     if op=='dl_search': return dl_search(data)
     if op=='dl_readme': return dl_readme(data)
+    if op=='dl_info': return dl_info(data)
     if op=='dl_repo': return dl_repo(data)
     if op=='dl_start': return dl_start(data)
     if op=='dl_status': return dl_status()
@@ -2130,6 +2187,10 @@ def handle(op, data):
     fail('unknown_op')
 
 
+# read-only operations that wait on the network: run without the manager lock (main)
+UNLOCKED_OPS = ('dl_search', 'dl_repo', 'dl_readme', 'dl_info')
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     try:
@@ -2137,15 +2198,27 @@ def main():
         if len(raw)>65536: fail('request_too_large')
         request=json.loads(raw)
         if not isinstance(request,dict): fail('request_invalid')
-        # Serialize all access across the short-lived native IPC helpers.
+        # Serialize all access across the short-lived native IPC helpers - except the Downloads reads that wait on the
+        # network (search, a repository's files or model card) and change nothing here: holding the lock through a
+        # 1-2 s request made the page's other calls queue past msvcrt's 10 s limit ([Errno 36], 0.6.1).
         DATA.mkdir(parents=True,exist_ok=True)
-        with (DATA/'manager.lock').open('a+b') as lock:
-            import msvcrt
-            if lock.tell()==0: lock.write(b'0');lock.flush()
-            lock.seek(0)
-            msvcrt.locking(lock.fileno(),msvcrt.LK_LOCK,1)
-            try: result=handle(request['op'],request.get('data',{}))
-            finally: lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+        if request.get('op') in UNLOCKED_OPS:
+            result=handle(request['op'],request.get('data',{}))
+        else:
+            with (DATA/'manager.lock').open('a+b') as lock:
+                import msvcrt
+                if lock.tell()==0: lock.write(b'0');lock.flush()
+                lock.seek(0)
+                # LK_LOCK gives up after 10 tries a second apart; a page that fires a dozen calls at once can queue
+                # longer than that, so wait in short steps for up to two minutes instead
+                deadline=time.time()+120
+                while True:
+                    try: msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1); break
+                    except OSError:
+                        if time.time()>deadline: raise
+                        time.sleep(0.02)
+                try: result=handle(request['op'],request.get('data',{}))
+                finally: lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
         print(json.dumps({'ok':True,'data':result},ensure_ascii=False))
     except ManagerError as exc:
         print(json.dumps({'ok':False,'error':str(exc),'code':exc.code,'params':exc.params},ensure_ascii=False))

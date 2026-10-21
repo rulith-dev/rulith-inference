@@ -5,8 +5,16 @@ import { invoke } from '@tauri-apps/api/core'
 // stdout; there is no network port and no shell in between. In the browser preview (`yarn dev:web`,
 // no Tauri) the answers come from fixtures.ts instead, which production builds never include.
 export const request = async <T,>(op: string, data: object = {}): Promise<T> => {
-  if (import.meta.env.DEV && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ === 'undefined')
+  if (import.meta.env.DEV && typeof (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ === 'undefined') {
+    // VITE_STRIX_BRIDGE (tmp/dl/bridge.py): the real manager behind the app shell's allow-list, for testing pages
+    const bridge = import.meta.env.VITE_STRIX_BRIDGE as string | undefined
+    if (bridge) {
+      const r = await (await fetch(bridge, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op, data }) })).json()
+      if (!r.ok) throw r.value
+      return r.value as T
+    }
     return (await import('./fixtures')).mock<T>(op, data as Record<string, unknown>)
+  }
   return invoke<T>('strixllama_request', { request: { op, data } })
 }
 

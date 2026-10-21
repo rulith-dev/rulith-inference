@@ -970,4 +970,17 @@ class ManagerTests(unittest.TestCase):
         with patch('socket.socket',side_effect=OSError('no route')),patch('socket.getaddrinfo',side_effect=OSError('no name')):
             self.assertEqual(m.lan_addresses(),[])
 
+    def test_root_in_the_pre_062_install_folder_follows_the_rename(self):
+        # 0.6.2's setup renames %LOCALAPPDATA%\Strix Llama to ...\Rulith Inference; settings saved before still
+        # name the old folder's runtime\models
+        local=self.root/'Local';new=local/'Rulith Inference'/'runtime';(new/'models').mkdir(parents=True)
+        old=str(local/'Strix Llama'/'runtime'/'models')
+        m.atomic_json(m.DATA/'settings.json',{'roots':[old,str(self.root/'models')],'profiles':{}})
+        with patch.object(m,'ROOT',new):
+            self.assertEqual(m.settings()['roots'],[str(new/'models'),str(self.root/'models')])
+        # an install still in the old folder (the rename failed) keeps it; so does any other missing folder
+        with patch.object(m,'ROOT',local/'Strix Llama'/'runtime'):
+            self.assertEqual(m.settings()['roots'][0],old)
+        self.assertEqual(m.moved_root(str(self.root/'gone'/'models')),str(self.root/'gone'/'models'))
+
 if __name__=='__main__':unittest.main()

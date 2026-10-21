@@ -16,6 +16,8 @@ opened for writing, and a .part file is only ever one this downloader created. S
 import ctypes
 import datetime as dt
 import hashlib
+import html
+import html.parser
 import http.client
 import json
 import math
@@ -97,7 +99,19 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
 # The system proxy (urllib reads the environment, else the Windows setting) for the sources abroad; the mirrors in
 # China are reached directly, as a proxy there is often far slower than the mirror itself.
 DIRECT = ('hf-mirror.com', 'gh-proxy.com', 'modelscope.cn')
-OPENER = urllib.request.build_opener(_Redirects())
+
+
+def system_proxies():
+    """HTTP(S)_PROXY from the environment, else the Windows proxy setting (Clash, v2rayN and the like set it).
+    urllib's own lookup reads the registry only when the environment has no *_PROXY variable at all, so a lone
+    NO_PROXY hid the Windows proxy and huggingface.co was tried directly."""
+    env = urllib.request.getproxies_environment()
+    if env.get('https') or env.get('http'): return env
+    reg = urllib.request.getproxies_registry() if os.name == 'nt' else {}
+    return {**reg, **({'no': env['no']} if 'no' in env else {})}
+
+
+OPENER = urllib.request.build_opener(_Redirects(), urllib.request.ProxyHandler(system_proxies()))
 OPENER_DIRECT = urllib.request.build_opener(_Redirects(), urllib.request.ProxyHandler({}))
 
 
@@ -120,8 +134,12 @@ def get(url, headers=None, timeout=TIMEOUT):
         raise DownloadError('network', reason=str(getattr(e, 'reason', e)), host=host_of(url))
 
 
-def get_json(url):
-    with get(url, {'Accept': 'application/json'}) as r:
+# listings, searches and model cards: a source that does not answer in this time is given up for the other one
+META_TIMEOUT = 10
+
+
+def get_json(url, timeout=META_TIMEOUT):
+    with get(url, {'Accept': 'application/json'}, timeout) as r:
         return json.loads(r.read(64 << 20)), r.headers
 
 
@@ -258,19 +276,49 @@ def list_repo(catalog, source, owner, repo, rev='main'):
         url = urllib.parse.urljoin(base, m[1])
     if not files: raise DownloadError('repo_no_gguf', repo=f'{owner}/{repo}')
     return {'source': source, 'owner': owner, 'repo': repo, 'revision': rev, 'commit': commit,
-            'groups': group_files(files)}
+            'groups': group_files(files), 'info': info_of(info)}
+
+
+def info_of(info):
+    """what the page shows above a repository: its counts, last change, task, license, base model and the GGUF
+    header's architecture, parameter count and context length"""
+    g = info.get('gguf') if isinstance(info.get('gguf'), dict) else {}
+    card = info.get('cardData') if isinstance(info.get('cardData'), dict) else {}
+    num = lambda v: int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    text = lambda v: v if isinstance(v, str) else None
+    base = card.get('base_model')
+    if isinstance(base, list): base = base[0] if base else None
+    return {'downloads': num(info.get('downloads')) or 0, 'likes': num(info.get('likes')) or 0,
+            'updated': text(info.get('lastModified')), 'task': text(info.get('pipeline_tag')),
+            'license': text(card.get('license_name')) or text(card.get('license')), 'base_model': text(base),
+            'architecture': text(g.get('architecture')), 'params': num(g.get('total')),
+            'context': num(g.get('context_length'))}
+
+
+def repo_info(catalog, source, owner, repo):
+    """info_of a repository's main branch (a recommended model's header)"""
+    src = catalog['sources'].get(source)
+    if not src or src['kind'] != 'hf': raise DownloadError('source_unsupported', source=source)
+    try:
+        info, _ = get_json(f"{src['base']}/api/models/{owner}/{repo}/revision/main")
+    except DownloadError as e:
+        if e.code == 'http' and e.params.get('status') in (401, 403, 404):
+            raise DownloadError('repo_unavailable', status=e.params['status'], repo=f'{owner}/{repo}')
+        raise
+    return info_of(info)
 
 
 SEARCH_FIELDS = ('downloads', 'likes', 'lastModified', 'pipeline_tag', 'gguf')
 
 
-def search_repos(catalog, source, query, limit=40):
-    """GGUF repositories matching `query`, most downloaded first: id, counts, last change, task, and the GGUF
-    header's architecture and parameter count the hub reads from the files"""
+def search_repos(catalog, source, query, limit=40, author=None):
+    """GGUF repositories matching `query` (or all of `author`'s), most downloaded first: id, counts, last change,
+    task, and the GGUF header's architecture and parameter count the hub reads from the files"""
     src = catalog['sources'].get(source)
     if not src or src['kind'] != 'hf': raise DownloadError('source_unsupported', source=source)
     q = urllib.parse.quote
-    url = (f"{src['base']}/api/models?search={q(str(query).strip()[:200])}&filter=gguf&sort=downloads&direction=-1"
+    what = f'author={q(author)}' if author else f'search={q(str(query).strip()[:200])}'
+    url = (f"{src['base']}/api/models?{what}&filter=gguf&sort=downloads&direction=-1"
            f"&limit={int(limit)}" + ''.join(f'&expand%5B%5D={f}' for f in SEARCH_FIELDS))
     found, _ = get_json(url)
     out = []
@@ -290,7 +338,7 @@ def readme(catalog, source, owner, repo, commit):
     src = catalog['sources'].get(source)
     if not src or src['kind'] != 'hf': raise DownloadError('source_unsupported', source=source)
     try:
-        with get(source_url(src, f'{owner}/{repo}@{commit}:README.md')) as r:
+        with get(source_url(src, f'{owner}/{repo}@{commit}:README.md'), None, META_TIMEOUT) as r:
             text = r.read(512 << 10).decode('utf-8', errors='replace')
     except DownloadError as e:
         if e.code == 'http' and e.params.get('status') == 404: return ''
@@ -298,7 +346,52 @@ def readme(catalog, source, owner, repo, commit):
     if text.startswith('---'):
         end = text.find('\n---', 3)
         if end > 0: text = text[end + 4:]
-    return text.lstrip('\n')
+    return markdown_only(text).lstrip('\n')
+
+
+class _Table(html.parser.HTMLParser):
+    """the rows of an HTML table as lists of cell texts"""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.rows, self.cell = [], None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'tr': self.rows.append([])
+        elif tag in ('td', 'th'): self.cell = []
+        elif tag in ('br', 'div', 'p', 'li') and self.cell is not None: self.cell.append(' ')   # blocks inside a cell
+
+    def handle_endtag(self, tag):
+        if tag in ('td', 'th') and self.cell is not None:
+            if not self.rows: self.rows.append([])
+            self.rows[-1].append(' '.join(''.join(self.cell).split()).replace('|', '\\|'))
+            self.cell = None
+
+    def handle_data(self, data):
+        if self.cell is not None: self.cell.append(data)
+
+
+def _md_table(block):
+    t = _Table()
+    t.feed(block)
+    rows = [r for r in t.rows if r]
+    if not rows: return ''
+    width = max(len(r) for r in rows)
+    rows = [r + [''] * (width - len(r)) for r in rows]
+    lines = ['| ' + ' | '.join(rows[0]) + ' |', '|' + '---|' * width] + ['| ' + ' | '.join(r) + ' |' for r in rows[1:]]
+    return '\n\n' + '\n'.join(lines) + '\n\n'
+
+
+def markdown_only(text):
+    """A model card's Markdown with its raw HTML made safe to show as Markdown: style, script and comments dropped,
+    tables turned into Markdown tables, line breaks kept, every other tag removed (its text stays). The page renders
+    Markdown only, never HTML from a repository."""
+    text = re.sub(r'<!--.*?-->', '', text, flags=re.S)
+    text = re.sub(r'<(style|script|svg|iframe)\b.*?</\1\s*>', '', text, flags=re.S | re.I)
+    text = re.sub(r'<table\b.*?</table\s*>', lambda m: _md_table(m[0]), text, flags=re.S | re.I)
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.I)
+    text = re.sub(r'</?[a-zA-Z][^<>]*>', '', text)
+    text = html.unescape(text) if '&' in text else text
+    return re.sub(r'\n{3,}', '\n\n', text)
 
 
 def repo_urls(catalog, prefer, owner, repo, commit, path):

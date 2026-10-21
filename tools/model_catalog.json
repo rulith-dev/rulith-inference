@@ -103,6 +103,77 @@
    ]
   },
   {
+   "id": "qwen3.8-flash-next-ud-q4_k_xl",
+   "name": "Qwen3.8 Flash Next",
+   "variant": "UD-Q4_K_XL",
+   "owner": "unsloth",
+   "repo": "Qwen3.8-Flash-Next-GGUF",
+   "license": "https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF",
+   "capabilities": [
+    "images",
+    "tools",
+    "mtp"
+   ],
+   "files": [
+    {
+     "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+     "role": "model",
+     "required": true,
+     "size": 10946624,
+     "sha256": "4448186216b3af4cc558bbce2c3213f01608f8f8b2e5267a9767971dd3ec8082",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf",
+     "role": "model",
+     "required": true,
+     "size": 49859583136,
+     "sha256": "3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf",
+     "role": "model",
+     "required": true,
+     "size": 49376141504,
+     "sha256": "56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+     "role": "model",
+     "required": true,
+     "size": 12087983520,
+     "sha256": "753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf"
+    },
+    {
+     "name": "mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf",
+     "role": "draft",
+     "required": false,
+     "size": 1907151936,
+     "sha256": "f521868a9e143718bef513772f6e04d9642551e362cf2439636d2abdbd149dfc",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf"
+    },
+    {
+     "name": "mmproj-F16.gguf",
+     "role": "projection",
+     "required": false,
+     "size": 904004000,
+     "sha256": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:mmproj-F16.gguf"
+    },
+    {
+     "name": "mtp-Qwen3.8-Flash-Next-head-lr512.gguf",
+     "role": "head",
+     "required": false,
+     "size": 148652224,
+     "sha256": "db4b16664f01db5d92d041012a957b8476fc9df9cb9f6386535174d896180a48",
+     "gh": "rulith-dev/rulith-inference@v0.4.6:mtp-Qwen3.8-Flash-Next-head-lr512.gguf"
+    }
+   ]
+  },
+  {
    "id": "qwen3.8-flash-next-ud-iq4_xs",
    "name": "Qwen3.8 Flash Next",
    "variant": "UD-IQ4_XS",

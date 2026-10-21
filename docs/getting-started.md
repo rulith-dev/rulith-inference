@@ -200,8 +200,10 @@ Building the head yourself instead needs a source checkout with the toolchain:
 - **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running;
   the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand, or
   the server moved to another port under Model › Configuration › Network.
-- **Where things are.** The app is in `%LOCALAPPDATA%\Rulith Inference` (in `%LOCALAPPDATA%\Strix Llama`
-  when it was installed before the rename and updated since); the manager's settings, model catalog,
+- **Where things are.** The app is `%LOCALAPPDATA%\Rulith Inference\rulith-inference.exe`. Up to 0.6.1 an install
+  made before the rename stayed in `%LOCALAPPDATA%\Strix Llama` as `strixllama.exe`; the 0.6.2 setup renames that
+  folder in place (it stays where it was if a program holds a file in it) and re-points the shortcuts and a
+  taskbar pin; if a pin still shows a blank icon, pin the app again. The manager's settings, model catalog,
   prompt cache and last server log are in `runtime\config\jan\` under it; chats are in
   `%APPDATA%\strixllama\data`. Uninstalling removes the app; the settings and the prompt cache go too
   when you tick *Delete the application data*, and chats stay either way.

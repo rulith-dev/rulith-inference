@@ -501,6 +501,33 @@
     "tuned": "已调优",
     "tunedHint": "Rulith Inference 为这个文件准备了专门的 GPU 内核",
     "readme": "模型卡",
-    "readmeNone": "这个仓库没有模型卡。"
+    "readmeNone": "这个仓库没有模型卡。",
+    "readmeLoading": "正在读取模型卡…",
+    "working": {
+      "dl_pause": "正在暂停…",
+      "dl_resume": "正在继续…",
+      "dl_cancel": "正在停止…"
+    },
+    "recommendedOne": "推荐",
+    "optionsCount": "{{count}} 个下载选项",
+    "showJobs": "展开",
+    "hideJobs": "收起",
+    "updated": "更新于 {{date}}",
+    "params": "{{n}} 参数",
+    "context": "{{n}} 上下文",
+    "pickOption": "选择下载选项",
+    "downloadSize": "下载 {{size}}",
+    "busyOther": "另一个下载正在进行",
+    "filesCount": "文件（{{count}}）",
+    "moreFrom": "{{owner}} 的其他模型",
+    "with": {
+      "projection": "视觉投影",
+      "draft": "MTP 草稿模型",
+      "head": "草稿头"
+    },
+    "addingToLibrary": "文件都已在本机，正在加入模型库…",
+    "notInLibrary": "文件都已在本机，但不在模型库的文件夹里：请在 模型库 › 模型文件夹 中添加它所在的文件夹",
+    "otherDownloads": "要下载其他版本，请在“下载选项”里选择；要下载别的模型，请在左侧搜索 Hugging Face。",
+    "otherDownloadsSearch": "要下载别的模型，请在左侧搜索 Hugging Face，或粘贴仓库链接。"
   }
 }

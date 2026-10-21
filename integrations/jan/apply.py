@@ -22,6 +22,9 @@ ROOT = HERE.parents[1]
 NAME = 'Rulith Inference'
 LEGACY_NAME = 'Strix Llama'
 SLUG = 'strixllama'
+# The exe, named after the product since 0.6.2 (it was the slug, strixllama.exe); the install folder is the
+# product name, and the setup moves an install from the old folder (NSIS_HOOKS: STRIX_MOVE_TO_PRODUCT_DIR).
+BINARY = 'rulith-inference'
 # The repository on GitHub, renamed from rulith-dev/strixllama with the app: GitHub redirects the old
 # name, so the old updater endpoint and posted links keep working.
 REPO = 'rulith-dev/rulith-inference'
@@ -29,7 +32,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.6.1'
+VERSION = '0.6.2'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -41,6 +44,7 @@ UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'DownloadsView.tsx', 'Config
             'attachments.ts', 'compact.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
 NSIS_HOOKS = r"""Var LegacyDir
+Var MovedFrom
 
 ; An install made before the rename (up to 0.3.5, as Strix Llama). The installer names the folder, the
 ; uninstall entry, the install-location key and the shortcuts after the product, so the new name's setup
@@ -74,6 +78,56 @@ NSIS_HOOKS = r"""Var LegacyDir
   ${EndIf}
 !macroend
 
+; 0.6.2: the install folder takes the product's name. Up to 0.6.1 it kept the old one, %LOCALAPPDATA%\@LEGACY@
+; (the setup is told the folder by the install-location key, and an install made as @LEGACY@ was updated in
+; place). A folder named @LEGACY@ is renamed to the product's name beside it - not copied: the same volume, one
+; step, and runtime\config - the settings and the prompt cache, tens of GB - goes with it. Only to a name
+; nothing else uses, and if anything still holds a file in it the rename fails and the install stays where it
+; is, as before.
+!macro STRIX_MOVE_TO_PRODUCT_DIR
+  Push $R6
+  Push $R7
+  ${GetFileName} $INSTDIR $R6
+  ${GetParent} $INSTDIR $R7
+  ${If} $R6 == "@LEGACY@"
+  ${AndIf} $R7 != ""
+  ${AndIf} ${FileExists} "$INSTDIR\*.*"
+    ; an empty folder under the new name (one the setup made itself) does not stand in the way
+    RMDir "$R7\${PRODUCTNAME}"
+    ${IfNot} ${FileExists} "$R7\${PRODUCTNAME}\*.*"
+      ; the setup's working folder is the one to rename: step out of it
+      SetOutPath "$R7"
+      ClearErrors
+      Rename "$INSTDIR" "$R7\${PRODUCTNAME}"
+      ${IfNot} ${Errors}
+        StrCpy $MovedFrom $INSTDIR
+        StrCpy $INSTDIR "$R7\${PRODUCTNAME}"
+      ${EndIf}
+      SetOutPath $INSTDIR
+    ${EndIf}
+  ${EndIf}
+  Pop $R7
+  Pop $R6
+!macroend
+
+; a shortcut to the old exe (in the old folder, or in this one under its old name) now opens the new one. The
+; setup re-points the Start menu's and the desktop's only when the folder stays; a taskbar pin is a shortcut
+; Windows keeps in the user's profile, re-pointed the same way.
+!macro STRIX_REPOINT_SHORTCUT LNK
+  ${If} ${FileExists} "${LNK}"
+    !insertmacro IsShortcutTarget "${LNK}" "$MovedFrom\@SLUG@.exe"
+    Pop $0
+    ${If} $0 <> 1
+      !insertmacro IsShortcutTarget "${LNK}" "$INSTDIR\@SLUG@.exe"
+      Pop $0
+    ${EndIf}
+    ${If} $0 = 1
+      CreateShortcut "${LNK}" "$INSTDIR\${MAINBINARYNAME}.exe"
+      !insertmacro SetLnkAppUserModelId "${LNK}"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro STRIX_FIND_LEGACY
   ; only in place of the default folder: a folder chosen on the directory page is kept
@@ -87,16 +141,47 @@ NSIS_HOOKS = r"""Var LegacyDir
   ${EndIf}
   ; a model server still running from this install holds runtime\bin\hip open. Stop it as the app does -
   ; through the manager, which writes its conversations to the disk tier first - then stop whatever of this
-  ; install is still running: only processes whose file lies under $INSTDIR.
+  ; install is still running: only processes whose file lies under $INSTDIR (read from Win32_Process: the setup is
+  ; 32-bit, and so is the PowerShell it starts, where Get-Process cannot read a 64-bit process's path).
   IfFileExists "$INSTDIR\runtime\tools\manager.py" 0 +2
     nsExec::Exec 'cmd /c echo {"op":"stop"}| "$INSTDIR\runtime\python\python.exe" "$INSTDIR\runtime\tools\manager.py"'
-  nsExec::Exec `powershell -NoProfile -Command "Get-Process llama-server -ErrorAction SilentlyContinue | Where-Object { $$_.Path -like '$INSTDIR\*' } | Stop-Process -Force"`
+  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'llama-server.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
+  ; the app under its old exe name, running from this install (the setup's own check looks for the new name),
+  ; asked to close as that check does; then a download worker of this install (it continues where it stopped
+  ; when the download is resumed). Only processes whose file lies under $INSTDIR: another copy is left alone.
+  ; The count comes back as the exit code: nsExec guesses the encoding of what a program prints, and read a
+  ; bare "1" as one UTF-16 character.
+  nsExec::Exec `powershell -NoProfile -Command "exit @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq '@SLUG@.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' }).Count"`
+  Pop $R1
+  ${If} $R1 > 0
+    ${IfNot} ${Silent}
+    ${AndIf} $PassiveMode <> 1
+      nsis_tauri_utils::StrReplace "$(appRunningOkKill)" "{{product_name}}" "${PRODUCTNAME}"
+      Pop $R2
+      MessageBox MB_OKCANCEL $R2 IDOK strix_kill_old
+      Abort
+    ${EndIf}
+    strix_kill_old:
+    nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq '@SLUG@.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
+    Sleep 1000
+  ${EndIf}
+  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'python.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
   ; up to 0.2.4 the runtime lived in runtime\bin\hip-rocm101, named after the ROCm 10.1 it was first built
   ; with; it is runtime\bin\hip now, and the old copy would otherwise stay behind after an upgrade
   RMDir /r "$INSTDIR\runtime\bin\hip-rocm101"
+  !insertmacro STRIX_MOVE_TO_PRODUCT_DIR
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Windows keeps a shortcut's old icon in its icon cache after an update replaces the exe (0.6.1's new icon
+  ; stayed the old one on the desktop): rebuild the cache for this user
+  ; the exe under its old name (the setup deletes the one the uninstall entry names, which a test install or a
+  ; reinstall of an older version may have changed)
+  Delete "$INSTDIR\@SLUG@.exe"
+  !insertmacro STRIX_REPOINT_SHORTCUT "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+  !insertmacro STRIX_REPOINT_SHORTCUT "$DESKTOP\${PRODUCTNAME}.lnk"
+  !insertmacro STRIX_REPOINT_SHORTCUT "$APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\${PRODUCTNAME}.lnk"
+  nsExec::Exec 'ie4uinit.exe -show'
   ; the old name's uninstall entry and install-location key, now that the new name's cover the same folder
   ; (two entries would uninstall one folder), and its shortcuts, renamed. A taskbar pin is left as it is: it
   ; points at the same exe and keeps working.
@@ -449,7 +534,7 @@ def brand(keep_data_dir=False):
     conf = JAN / 'src-tauri/tauri.conf.json'
     data = json.loads(conf.read_text(encoding='utf-8'))
     data['productName'] = NAME
-    data['mainBinaryName'] = SLUG      # strixllama.exe, whatever the product is called
+    data['mainBinaryName'] = BINARY    # rulith-inference.exe (strixllama.exe up to 0.6.1)
     data.setdefault('bundle', {})['publisher'] = PUBLISHER
     data['version'] = VERSION
     # Settings › General reads the web app's package version
@@ -658,7 +743,7 @@ def brand(keep_data_dir=False):
         text = root.read_text(encoding='utf-8')
         if line in text:
             root.write_text(text.replace(line, '', 1), encoding='utf-8', newline='\n')
-    print('  brand: %d icons, productName=%s, binary=%s, identifier=%s' % (copied, NAME, SLUG, data['identifier']))
+    print('  brand: %d icons, productName=%s, binary=%s, identifier=%s' % (copied, NAME, BINARY, data['identifier']))
 
 
 import re
