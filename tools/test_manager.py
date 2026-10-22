@@ -333,6 +333,46 @@ class ManagerTests(unittest.TestCase):
         self.assertIsNone(m.memory_events(clean))
         self.assertIsNone(m.memory_events(self.root/'missing.log'))
         self.assertIsNone(m.memory_events(None))
+    def test_memory_events_reads_only_what_the_log_gained(self):
+        # issue #22: the status poll read the whole log every few seconds
+        log=self.root/'jan-managed-20260926-132707-dacb1d.log'
+        stop=b'6.19.909.251 E srv    send_error: task id = 1, error: decode() failed: bad allocation\n'
+        log.write_bytes(b'0.29.818.996 I model loaded\n'+stop)
+        self.assertEqual(m.memory_events(log)['answers_stopped'],1)
+        self.assertEqual(m.memory_events(log)['answers_stopped'],1)         # nothing new, nothing counted twice
+        with log.open('ab') as f: f.write(stop+stop[:30])                  # one more, and the start of another
+        self.assertEqual(m.memory_events(log)['answers_stopped'],2)
+        with log.open('ab') as f: f.write(stop[30:])                        # its end
+        self.assertEqual(m.memory_events(log)['answers_stopped'],3)
+        log.write_bytes(stop)                                               # cut shorter (STRIX_LOG_MAX_MB): read again
+        self.assertEqual(m.memory_events(log)['answers_stopped'],1)
+        long=self.root/'jan-managed-20260926-140000-bbbbbb.log'
+        long.write_bytes(stop*3)
+        with patch.object(m,'MEMORY_EVENTS_READ',len(stop)+5):            # a long log is read over several calls
+            self.assertEqual([m.memory_events(long)['answers_stopped'] for _ in range(4)],[1,2,3,3])
+    def test_old_server_logs_are_pruned_before_a_start(self):
+        d=self.root/'logs';d.mkdir()
+        def run(stamp,size,requests=0):
+            name='jan-managed-'+stamp+'-abcdef'
+            (d/(name+'.log')).write_bytes(b'x'*size)
+            for part in range(requests): (d/(name+'.requests.jsonl'+('' if part==0 else '.%d'%(part+1)))).write_bytes(b'r')
+            return name
+        names=[run('202610%02d-120000'%day,10,requests=2) for day in range(1,13)]   # 12 runs, the newest last
+        (d/'not-started.log').write_bytes(b'n')
+        with patch.object(m,'ROOT',self.root):
+            m.prune_logs(keep=(str(d/(names[0]+'.log')),None))
+        left={p.name for p in d.iterdir()}
+        for i,name in enumerate(names):
+            kept=i==0 or i>=2                       # the newest ten, and the oldest one because it was kept
+            self.assertEqual(name+'.log' in left,kept,name)
+            self.assertEqual(name+'.requests.jsonl.2' in left,kept,name)
+        self.assertIn('not-started.log',left)
+        # by size: the newest two stay whatever their size, then nothing past LOG_KEEP_BYTES
+        with patch.object(m,'ROOT',self.root),patch.object(m,'LOG_KEEP_BYTES',25):
+            m.prune_logs()
+        left={p.name for p in d.iterdir()}
+        self.assertEqual(sorted(n for n in left if n.endswith('.log') and n.startswith('jan-')),
+                         [names[-2]+'.log',names[-1]+'.log'])
     def test_slots_reports_each_slots_counters_and_nothing_without_a_server(self):
         with patch.object(m,'state',return_value={}):
             self.assertEqual(m.slots(),{'slots':[]})

@@ -21,3 +21,7 @@ corpus/
 
 # runtime bundles (tools/make_runtime_bundle.py): release assets, not source
 dist/
+
+# the recipe's whole files keep the tree's paths: src/ and models/ under patches/files/ are source
+!/patches/files/**/src/
+!/patches/files/**/models/

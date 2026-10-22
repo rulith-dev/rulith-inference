@@ -1,4 +1,31 @@
-# The patch set, and how it was audited
+# The patch set
+
+## Since 0.6.5: upstream llama.cpp, a script per area
+
+The fork ([rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/rulith), branch `rulith`) merges
+upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) into its history, and the recipe in this
+directory turns clean upstream at the pinned revision into the fork's tree, byte for byte:
+
+- `files/` - whole files, laid down first: the 40 the fork adds, and the 13 upstream files it rewrites more than it
+  keeps (a script of hunks would be no easier to read than the file);
+- `apply_<area>.py` - the fork's edits to the other 106 upstream files, one generated script per area (`docs`,
+  `common`, `python`, `ggml`, `ggml_cuda`, `llama`, `models`, `tests`, `tools`, `server`); each file belongs to exactly
+  one script, so their order does not matter;
+- `../bootstrap/UPSTREAM.json` - the pinned upstream revision, each modified file's upstream git blob and SHA-256,
+  the overlay, the script order and the SHA-256 of every file the recipe produces.
+
+`tools/make_recipe.py` writes all of it from two commits of a clone (upstream's and the fork's), replaying the result
+onto upstream before it writes anything; `tools/replay_bootstrap.py` checks the same from the clone's git objects.
+When the fork merges a newer upstream, the recipe is regenerated rather than patched: scripts anchored on upstream's
+old code are what stops replaying first.
+
+The reasons for each change are not in the generated scripts. They are in `history/`: the 141 scripts of the recipe up
+to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements, in the order of
+`history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base.
+
+---
+
+## Up to 0.6.4: the patch set, and how it was audited
 
 *This is the record of an audit run against the predecessor repository, kept because it explains why
 the patch order is what it is and why five of these scripts were generated rather than written. The

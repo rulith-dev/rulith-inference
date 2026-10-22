@@ -12,7 +12,7 @@ acceptance — it says so. See [measuring.md](measuring.md) before comparing any
 | Memory | 128 GB unified, **96 GB carved to the GPU** (Windows is left 31.6 GB) |
 | Power | 140 W |
 | OS | Windows 11 |
-| Runtime | `pwilkin/llama.cpp` @ `f5daaa3` + this patch set, built against TheRock ROCm 10.2 (10.1 up to 0.2.2) |
+| Runtime | `pwilkin/llama.cpp` @ `f5daaa3` + this patch set up to 0.6.4, `ggml-org/llama.cpp` @ `19ab5a5` + the patch set from 0.6.5; built against TheRock ROCm 10.2 (10.1 up to 0.2.2) |
 | Model | Qwen3.8-Flash-Next 125B-A6B, Unsloth UD-IQ4_XS, 93.7 GB |
 | Server flags | ctx 262144, batch/ubatch 8192, `-np 1`, flash attention on, KV f16, MTP draft, `--load-mode none --lazy-mode on-direct` |
 

@@ -76,7 +76,7 @@ python bootstrap/bootstrap.py --fetch --patch --build
 python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
-`bootstrap.py` 按固定版本号克隆 `pwilkin/llama.cpp`、应用补丁集、对着 ROCm SDK 构建。
+`bootstrap.py` 按固定版本号克隆上游 `ggml-org/llama.cpp`、应用补丁集、对着 ROCm SDK 构建。
 `tools/manager.py` 是一个从 stdin 读 JSON 的进程管理器：启动参数、环境开关和运行时都由它掌握，
 所以一套配置是可复现的，而不是靠记忆。
 
@@ -149,7 +149,7 @@ Claude Code 走 Anthropic Messages 接口（`/v1/messages`，含流式输出和 
 | **三个正确性修复** | 推测验证批次跑了无 causal mask 的稠密注意力，长答案会跑偏并提前结束。图像输入曾以三种不同方式在 QSA 块机制里让服务端崩溃，第二个已加载的对话收到图片时还有第四种。 |
 | **测量仪表** | 逐图、逐派发、逐阶段计时，全部默认关闭，需设环境变量才启用。 |
 
-`patches/MANIFEST.md` 列出每个补丁、它动了哪些文件，以及必须的应用顺序。
+`patches/MANIFEST.md` 说明配方的结构；`patches/history/` 保留 0.6.4 及以前按改动拆分的脚本，每个都写了改动的理由。
 
 ## 构建怎么验证
 
@@ -164,11 +164,16 @@ python bootstrap/bootstrap.py --verify    # 当前树是否仍然完全一致
 是配方今天还能不能从零重建出这棵树，这有单独的工具：
 
 ```bash
-python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 97 个文件，逐字节相同
+python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 159 个文件，逐字节相同
 ```
 
-它按 `bootstrap/UPSTREAM.json` 里记的 blob 哈希，从克隆自带的 git 对象里取回那 81 个文件的上游版
-本——干净上游是重建出来的，不是信来的——然后重放整套快照和脚本再比对。结果是 **85 / 85**。
+它按 `bootstrap/UPSTREAM.json` 里记的 blob 哈希，从克隆自带的 git 对象里取回那 119 个文件的上游版
+本——干净上游是重建出来的，不是信来的——然后重放整文件和全部脚本再比对。结果是 **159 / 159**。
+
+从 0.6.5 起，基线换成上游 [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)（合并进 fork），
+每当 fork 合入更新的上游，`tools/make_recipe.py` 就从两个提交重新生成整套配方：按模块生成的补丁脚本，
+`patches/files/` 下 fork 新增或大改的整文件，以及哈希记录；写出之前先在上游上重放一遍。0.6.4 及以前的
+配方（基于 `pwilkin/llama.cpp` @ `f5daaa3`）按改动拆成 141 个脚本，每个都写了理由，保存在 `patches/history/`。
 
 一开始并非如此。24 个里有 5 个没有任何脚本负责，其中就包括项目里最大的单项收益（干净重建会把它
 静默丢掉）；另有 3 个脚本已经漂移到打不上去。`tools/make_patch_script.py` 从两棵树生成补丁脚本、
@@ -185,7 +190,7 @@ python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 97 �
 
 ```
 bootstrap/   拉取、打补丁、构建运行时；UPSTREAM.json 是这份 delta 的哈希记录
-patches/     补丁集、清单，以及两处大到无法用锚点表达的整文件替换
+patches/     补丁集（按模块的脚本 + 整文件）、清单、配方的历史
 tools/       管理器、测量工具、验证工具
 integrations/jan/   可选的 Jan 管理页面
 docs/        install.md · results.md · measuring.md · decode-budget.md · dead-ends.md
@@ -197,7 +202,7 @@ docs/        install.md · results.md · measuring.md · decode-budget.md · dea
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。第三方署名见 [NOTICE.md](NOTICE.md)——特别是本项目修改的是
-[pwilkin/llama.cpp](https://github.com/pwilkin/llama.cpp)（MIT），Jan 覆盖层用于
+[llama.cpp](https://github.com/ggml-org/llama.cpp)（MIT），Jan 覆盖层用于
 [Jan](https://github.com/menloresearch/jan) 的源码树（Apache-2.0）。
 
 如果这些补丁对你的项目有用，欢迎注明出自 Rulith Inference，并附上[本仓库](https://github.com/rulith-dev/rulith-inference)的链接。这是请求，不是许可条款。

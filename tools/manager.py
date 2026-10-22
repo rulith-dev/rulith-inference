@@ -1247,17 +1247,44 @@ def exit_reason(log):
 # "bad allocation" and every answer in flight is stopped with an error; an optional copy - checkpoints
 # handed to the disk tier - is skipped instead ("not enough memory"). The chat shows only an answer that ends
 # mid-sentence, so status() reports both from the log, and the pages say what happened and what to change.
+MEMORY_EVENTS_READ = 64 << 20   # most of a log one status call reads; the rest waits for the next
+
+
 def memory_events(log):
     """Answers stopped and saves skipped for lack of memory in a server's log, with the wall-clock time of the
     last of each; None when there were none. Log lines carry minutes.seconds.ms since the launch, which the
-    log's own name records."""
+    log's own name records. The status poll asks every few seconds, so only what the log gained since the last
+    call is read (DATA/memory_events.json keeps the place and the counts): reading it whole each time took longer
+    and longer as it grew (issue #22). A log that got shorter (the server cuts it at STRIX_LOG_MAX_MB) is read
+    again from its start."""
     try:
         path = Path(log)
-        data = path.read_bytes()
+        size = path.stat().st_size
     except (OSError, TypeError):
         return None
-    if b'bad allocation' not in data and b'not enough memory' not in data:
+    seen = read_json(DATA/'memory_events.json', {})
+    if not isinstance(seen, dict) or seen.get('log') != str(path) or not 0 <= seen.get('offset', -1) <= size:
+        seen = {'log': str(path), 'offset': 0, 'events': {'answers_stopped': 0, 'saves_skipped': 0}}
+    offset, budget = seen['offset'], MEMORY_EVENTS_READ
+    try:
+        with path.open('rb') as f:
+            f.seek(offset)
+            data = f.read(min(size - offset, budget))
+    except OSError:
         return None
+    # whole lines only: an unfinished last line is read again next time
+    end = data.rfind(b'\n') + 1 if len(data) < budget or b'\n' in data else len(data)
+    data = data[:end]
+    seen['offset'] = offset + end
+    out = seen['events']
+    if b'bad allocation' in data or b'not enough memory' in data:
+        count_memory_events(path, data, out)
+    if end: atomic_json(DATA/'memory_events.json', seen)
+    return dict(out) if out['answers_stopped'] or out['saves_skipped'] else None
+
+
+def count_memory_events(path, data, out):
+    """add the lines of `data` that report an answer stopped or a save skipped for lack of memory to `out`"""
     m = re.search(r'jan-managed-(\d{8}-\d{6})', path.name)
     start = dt.datetime.strptime(m.group(1), '%Y%m%d-%H%M%S') if m else None
 
@@ -1266,7 +1293,6 @@ def memory_events(log):
         if not (start and t): return None
         return (start + dt.timedelta(minutes=int(t[1]), seconds=int(t[2]), milliseconds=int(t[3]))).isoformat(timespec='seconds')
 
-    out = {'answers_stopped': 0, 'saves_skipped': 0}
     for line in data.decode('utf-8', 'replace').splitlines():
         if 'send_error' in line and 'bad allocation' in line:
             out['answers_stopped'] += 1
@@ -1274,7 +1300,36 @@ def memory_events(log):
         elif 'not enough memory' in line:
             out['saves_skipped'] += 1
             out['last_skip'] = when(line)
-    return out if out['answers_stopped'] or out['saves_skipped'] else None
+
+
+LOG_KEEP_RUNS = 10          # server runs whose logs are kept (the newest two whatever their size)
+LOG_KEEP_BYTES = 4 << 30    # and at most this much in all
+
+
+def prune_logs(keep=()):
+    """Before a server starts: the logs of older runs go, oldest first, past the newest LOG_KEEP_RUNS runs or
+    LOG_KEEP_BYTES in all (issue #22: 112.8 GB in 36 hours). A run's console log, its request log and that one's
+    later parts go together; the newest two runs and the runs of the paths in `keep` stay whatever their size."""
+    d = ROOT/'logs'
+    try: names = [p for p in d.iterdir() if p.is_file()]
+    except OSError: return
+    runs = {}
+    for p in names:
+        m = re.match(r'(jan-managed-\d{8}-\d{6}-[0-9a-f]{6})\.', p.name)
+        if m: runs.setdefault(m.group(1), []).append(p)
+    kept = {re.match(r'(jan-managed-\d{8}-\d{6}-[0-9a-f]{6})', Path(k).name).group(1)
+            for k in keep if k and re.match(r'jan-managed-\d{8}-\d{6}-[0-9a-f]{6}', Path(k).name)}
+    total = 0
+    for n, run in enumerate(sorted(runs, reverse=True), 1):     # the names sort by start time
+        files = runs[run]
+        for f in files:
+            try: total += f.stat().st_size
+            except OSError: pass
+        if n <= 2 or run in kept or (n <= LOG_KEEP_RUNS and total <= LOG_KEEP_BYTES):
+            continue
+        for f in files:
+            try: f.unlink()
+            except OSError: pass
 
 
 def runtime_environment(cfg):
@@ -1779,6 +1834,8 @@ def launch(m, cfg):
     runtime = selected_runtime(cfg)
     if not runtime.is_file() or not (runtime.parent/'ggml-hip.dll').is_file():
         fail('runtime_missing', name=runtime.parent.name)
+    prior = state()
+    prune_logs(keep=(prior.get('log'), prior.get('last_log')))
     log=ROOT/'logs'/('jan-managed-'+dt.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]+'.log')
     log.parent.mkdir(exist_ok=True)
     command=argv(m,cfg,net)
@@ -1788,6 +1845,10 @@ def launch(m, cfg):
     # RULITH_REQUEST_LOG=0 in the environment turns it off
     if os.environ.get('RULITH_REQUEST_LOG') != '0':
         env['STRIX_REQUEST_LOG']=str(log.with_suffix('.requests.jsonl'))
+        env['STRIX_REQUEST_LOG_KEEP']='2'
+    # a server left running for days (issue #22): its console log is cut back to the end of the load past 1 GB, its
+    # request log keeps its newest two 1 GB files; RULITH_LOG_MAX_MB=0 turns the console cut off
+    env['STRIX_LOG_MAX_MB']=os.environ.get('RULITH_LOG_MAX_MB', '1024')
     banner = (f'[strixllama] runtime={runtime.parent.name} (HIP/ROCm); LLAMA_MMB_HC16={env["LLAMA_MMB_HC16"]} '
               f'(must stay 0 on Windows); gates={sum(1 for k in env if k.startswith("LLAMA_"))}; '
               f'QSA={"on" if cfg["qsa"] else "off"} (this runtime has no context threshold); '

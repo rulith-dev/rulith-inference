@@ -81,8 +81,8 @@ python bootstrap/bootstrap.py --fetch --patch --build
 python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
-`bootstrap.py` clones `pwilkin/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 97-file delta is also published on a fork, a commit per release, so it can be
+`bootstrap.py` clones upstream `ggml-org/llama.cpp` at a pinned revision, applies the patch set, and builds
+against the ROCm SDK. The same 159-file delta is also published on a fork, so it can be
 read as a plain diff: [rulith-dev/llama.cpp, branch `rulith`](https://github.com/rulith-dev/llama.cpp/tree/rulith) (`strixllama` until 0.4.3, kept in
 step up to 0.5.2). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
@@ -165,7 +165,8 @@ substantial pieces:
 | **Three correctness fixes** | Speculative verification batches ran dense attention with no causal mask, so long answers drifted and stopped early. Image input aborted the server three separate ways in the QSA block machinery, and a fourth when a second loaded conversation got an image. |
 | **Measurement instrumentation** | Per-graph, per-dispatch and per-phase timing, all off unless an environment variable is set. |
 
-`patches/MANIFEST.md` lists every patch, what it touches, and the order they must run in.
+`patches/MANIFEST.md` explains how the recipe is laid out; `patches/history/` keeps the per-change scripts of
+the recipe up to 0.6.4, each with the reasons for its change.
 
 ## How the build is verified
 
@@ -181,12 +182,19 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 97 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 159 files, byte for byte
 ```
 
-It restores the 81 modified files to upstream from the clone's own git objects, addressed by the blob
+It restores the 119 modified files to upstream from the clone's own git objects, addressed by the blob
 hashes in `bootstrap/UPSTREAM.json` — so clean upstream is reconstructed rather than trusted — then
-replays the snapshot and every script and compares. It reports **85 / 85**.
+replays the whole files and every script and compares. It reports **159 / 159**.
+
+Since 0.6.5 the base is upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), merged into the
+fork, and `tools/make_recipe.py` writes the recipe again from the two commits whenever the fork moves to a
+newer upstream: a generated script per area for the edits, whole files under `patches/files/` for what the
+fork adds or rewrites, and the record. It replays the result onto upstream before writing anything. The
+141 per-change scripts of the recipe up to 0.6.4 (on `pwilkin/llama.cpp` @ `f5daaa3`), each with the
+reasons for its change, are in `patches/history/`.
 
 It was not always so. Five of the 24 were owned by no script at all - including the largest measured
 win in the project, which a clean rebuild would have silently dropped - and three scripts had drifted
@@ -207,7 +215,7 @@ rotted in the first place.
 
 ```
 bootstrap/   fetch, patch and build the runtime; UPSTREAM.json is the delta's hash record
-patches/     the patch set, its manifest, and two whole-file drops too large to anchor
+patches/     the patch set (a script per area + whole files), its manifest, the recipe's history
 tools/       manager, measurement harnesses, verification
 integrations/jan/   optional management pages for a Jan checkout
 docs/        install.md · results.md · measuring.md · decode-budget.md · dead-ends.md
@@ -219,7 +227,7 @@ the ones above — it is a list of the ways this project measured itself wrong.
 ## Licence
 
 MIT, see [LICENSE](LICENSE). Third-party attribution in [NOTICE.md](NOTICE.md) — in particular this
-patches [pwilkin/llama.cpp](https://github.com/pwilkin/llama.cpp) (MIT) and the Jan overlay is meant
+patches [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT) and the Jan overlay is meant
 for a [Jan](https://github.com/menloresearch/jan) checkout (Apache-2.0).
 
 If these patches are useful in your project, please credit Rulith Inference with a link to

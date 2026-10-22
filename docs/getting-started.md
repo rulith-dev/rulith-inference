@@ -203,7 +203,9 @@ Building the head yourself instead needs a source checkout with the toolchain:
 - **Where things are.** The app is `%LOCALAPPDATA%\Rulith Inference\rulith-inference.exe`. Up to 0.6.1 an install
   made before the rename stayed in `%LOCALAPPDATA%\Strix Llama` as `strixllama.exe`; the 0.6.2 setup renames that
   folder in place (it stays where it was if a program holds a file in it) and re-points the shortcuts and a
-  taskbar pin; if a pin still shows a blank icon, pin the app again. The manager's settings, model catalog,
-  prompt cache and last server log are in `runtime\config\jan\` under it; chats are in
-  `%APPDATA%\strixllama\data`. Uninstalling removes the app; the settings and the prompt cache go too
+  taskbar pin; if a pin still shows a blank icon, pin the app again. The manager's settings, model catalog and
+  prompt cache are in `runtime\config\jan\` under it, the server's logs in `runtime\logs\` (the newest ten runs and
+  at most 4 GB are kept; past 1 GB a run's console log is cut back to the end of the load, and its request log keeps
+  its newest two 1 GB files, since 0.6.5); chats are in `%APPDATA%\strixllama\data`. Uninstalling removes the app;
+  the settings and the prompt cache go too
   when you tick *Delete the application data*, and chats stay either way.

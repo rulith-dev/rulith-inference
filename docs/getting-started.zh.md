@@ -176,6 +176,7 @@ lr512，保存过 iq4_xs 的配置也会换过去。**模型 › 配置**的草�
 - **东西都在哪。** 应用是 `%LOCALAPPDATA%\Rulith Inference\rulith-inference.exe`。0.6.1 及以前，改名前安装的
   一直留在 `%LOCALAPPDATA%\Strix Llama`，程序叫 `strixllama.exe`；0.6.2 的安装程序会把那个文件夹原地改名（有程序
   占用其中文件时保持原位），并把快捷方式和任务栏固定改指过去；如果任务栏图标仍显示空白，重新固定一次即可。
-  管理器的设置、模型目录缓存、提示缓存和最近一次服务日志在它下面的
-  `runtime\config\jan\`；聊天记录在 `%APPDATA%\strixllama\data`。卸载会删掉应用；勾选"删除应用数据"时
+  管理器的设置、模型目录缓存和提示缓存在它下面的 `runtime\config\jan\`，服务日志在 `runtime\logs\`
+  （从 0.6.5 起只保留最近 10 次运行、总共不超过 4 GB；单次运行的控制台日志超过 1 GB 时截回到加载完成处，
+  请求日志只保留最近两个 1 GB 文件）；聊天记录在 `%APPDATA%\strixllama\data`。卸载会删掉应用；勾选"删除应用数据"时
   设置和提示缓存一并删除，聊天记录无论如何都保留。

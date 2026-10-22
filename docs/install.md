@@ -96,9 +96,9 @@ and install from that directory afterwards with `--no-index --find-links toolcha
 python bootstrap/bootstrap.py --fetch --patch --build
 ```
 
-- `--fetch` clones `pwilkin/llama.cpp` at the pinned revision into `src/llama.cpp`.
-  The result of `--fetch --patch` is what the `rulith` branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/rulith) holds at its tip, a commit per release on the pinned revision, if you would rather read the delta than replay it (the branch was `strixllama` until 0.4.3; that name is kept in step for a few releases).
-- `--patch` overlays `patches/iq3s-kernel/` and runs the scripts in order.
+- `--fetch` clones upstream `ggml-org/llama.cpp` at the pinned revision (`bootstrap/UPSTREAM.json`) into `src/llama.cpp`.
+  The result of `--fetch --patch` is what the `rulith` branch of [rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/rulith) holds at its tip, upstream merged in plus the project's changes, if you would rather read the delta than replay it (the branch was `strixllama` until 0.4.3; that name is kept in step for a few releases).
+- `--patch` lays down the whole files of `patches/files/` and runs the scripts in order.
 - `--build` configures and compiles, then copies the runtime into `bin/hip/` (`bin/hip-rocm101/`
   up to 0.2.4, named after the ROCm 10.1 it was first built with; the manager still runs a tree that
   has only that folder).
@@ -109,7 +109,7 @@ file the patch set adds or renames is invisible to an existing `build.ninja`.
 Check it against the recipe:
 
 ```bash
-python tools/replay_bootstrap.py     # clean upstream + patch set == the 30 files. Expect 30 / 30.
+python tools/replay_bootstrap.py     # clean upstream + patch set == the 159 files. Expect 159 / 159.
 ```
 
 ## 5. Model files

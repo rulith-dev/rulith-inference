@@ -19,13 +19,15 @@ Every script under `patches/` is a modification of llama.cpp. Context lines quot
 belong to the original authors and remain under llama.cpp's MIT license. Obtain the corresponding
 source yourself, then apply the patches to it.
 
-Upstream: [`pwilkin/llama.cpp`](https://github.com/pwilkin/llama.cpp) at
-`f5daaa3cfa6358e5dd398911ec741813745a5440`, pinned in `bootstrap/bootstrap.py`. Every script in
-`patches/` applies to that revision, and `tools/replay_bootstrap.py` proves the set reproduces
-the build exactly.
+Upstream: [`ggml-org/llama.cpp`](https://github.com/ggml-org/llama.cpp) at
+`19ab5a5e65736a35437e6b1c0ccd6562fed01b1b`, pinned in `bootstrap/UPSTREAM.json` (up to 0.6.4:
+`pwilkin/llama.cpp` at `f5daaa3cfa6358e5dd398911ec741813745a5440`, the base of `patches/history/`).
+Every script in `patches/` applies to that revision, and `tools/replay_bootstrap.py` proves the set
+reproduces the build exactly. The files under `patches/files/` that also exist upstream are
+llama.cpp's files with this project's changes, under llama.cpp's MIT license.
 
-`bootstrap/UPSTREAM.json` records the provenance of the 85 files this project changes: for each of
-the 81 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 85 the
+`bootstrap/UPSTREAM.json` records the provenance of the 159 files this project changes: for each of
+the 119 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 159 the
 SHA-256 the patch set produces. The replay restores the upstream side by blob hash, so what it
 rebuilds from is upstream's content by construction rather than by assertion.
 
@@ -76,12 +78,14 @@ projector. Obtain them from their official channels and observe their own licens
 `patches/` 下的每个脚本都是对 llama.cpp 的修改。补丁中引用的上下文行属于原作者，仍按 llama.cpp 的 MIT
 许可分发。请自行获取对应版本的源码后再打补丁。
 
-上游：[`pwilkin/llama.cpp`](https://github.com/pwilkin/llama.cpp)，版本
-`f5daaa3cfa6358e5dd398911ec741813745a5440`，固定在 `bootstrap/bootstrap.py` 里。`patches/` 下的
-每个脚本都针对该版本；`tools/replay_bootstrap.py` 可证明整套补丁精确重建该构建。
+上游：[`ggml-org/llama.cpp`](https://github.com/ggml-org/llama.cpp)，版本
+`19ab5a5e65736a35437e6b1c0ccd6562fed01b1b`，固定在 `bootstrap/UPSTREAM.json` 里（0.6.4 及以前是
+`pwilkin/llama.cpp` 的 `f5daaa3cfa6358e5dd398911ec741813745a5440`，即 `patches/history/` 的基线）。
+`patches/` 下的每个脚本都针对该版本；`tools/replay_bootstrap.py` 可证明整套补丁精确重建该构建。
+`patches/files/` 下在上游也存在的文件，是带有本项目改动的 llama.cpp 文件，按 llama.cpp 的 MIT 许可分发。
 
-`bootstrap/UPSTREAM.json` 记录本项目改动的那 85 个文件的来源：被修改的 81 个各记其**上游**版本的
-Git blob SHA-1 与 SHA-256，85 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
+`bootstrap/UPSTREAM.json` 记录本项目改动的那 159 个文件的来源：被修改的 119 个各记其**上游**版本的
+Git blob SHA-1 与 SHA-256，159 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
 所以它据以重建的内容是上游的——这是构造保证，不是声明。
 
 ### Jan —— Apache License 2.0，Copyright 2025 Menlo Research（https://menlo.ai）
