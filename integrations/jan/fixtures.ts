@@ -107,8 +107,19 @@ const dlStatus = () => {
   }
   return { jobs: dlJob ? [jobView(dlJob)] : [], active: dlJob?.alive ? dlJob.id : null }
 }
+// a recommended EXL3 repository: the list has its 4.05 bpw files, the repository a 3.05 bpw folder as well (RULITH_REPO)
+const EXL3_FILES = [
+  ...[10946624, 2706906080, 39040187584, 23589139232, 23592085568, 15354420160].map((size, i) =>
+    ({ name: `Qwen3.8-Flash-Next-EXL3-4.05bpw-0000${i + 1}-of-00006.gguf`, role: 'model', required: true, size })),
+  { name: 'mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf', role: 'draft', required: false, size: 2566331680 },
+  { name: 'mmproj-F16.gguf', role: 'projection', required: false, size: 904004000 },
+]
+const EXL3_FOLDER = 'D:\\Rulith Models\\Rulith\\Qwen3.8-Flash-Next-Rulith-EXL3-GGUF'
 const dlCatalog = () => ({
-  models: [{ id: 'qwen3.8-flash-next-ud-iq4_xs', name: 'Qwen3.8 Flash Next', variant: 'UD-IQ4_XS', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF',
+  models: [{ id: 'qwen3.8-flash-next-exl3-4.05bpw', name: 'Qwen3.8 Flash Next', variant: 'EXL3 4.05 bpw', owner: 'Rulith', repo: 'Qwen3.8-Flash-Next-Rulith-EXL3-GGUF',
+    license: 'https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF', capabilities: ['images', 'tools', 'mtp'], fits: true, commit: '1e13e0220f7f860a3030fcb80cfc5bcbac5fa54f',
+    files: EXL3_FILES.map(f => ({ ...f, present: EXL3_FOLDER + '\\' + f.name })), missing: 0 },
+    { id: 'qwen3.8-flash-next-ud-iq4_xs', name: 'Qwen3.8 Flash Next', variant: 'UD-IQ4_XS', owner: 'unsloth', repo: 'Qwen3.8-Flash-Next-GGUF',
     license: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF', capabilities: ['images', 'tools', 'mtp'], fits: true, commit: '38bb39ee97821de2c9009abb7e93950eec396e66',
     files: DL_FILES.map(f => ({ ...f, present: initial === 'none' && dlJob?.status !== 'done' ? null : DL_FOLDER + '\\' + f.name })),
     missing: initial === 'none' ? DL_FILES.reduce((n, f) => n + f.size, 0) : 0 }],
@@ -124,6 +135,24 @@ const REPO = {
     { key: 'Q8_0/Example-30B-A3B-Q8_0', role: 'model', name: 'Example-30B-A3B-Q8_0', quant: 'Q8_0', size: 32.5e9, complete: true, shards: 2, fits: true, files: [{ name: 'Example-30B-A3B-Q8_0-00001-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00001-of-00002.gguf', size: 16e9, sha256: 'cd'.repeat(32), present: null }, { name: 'Example-30B-A3B-Q8_0-00002-of-00002.gguf', path: 'Q8_0/Example-30B-A3B-Q8_0-00002-of-00002.gguf', size: 16.5e9, sha256: 'ef'.repeat(32), present: null }] },
     { key: 'BF16/Example-30B-A3B-BF16', role: 'model', name: 'Example-30B-A3B-BF16', quant: 'BF16', size: 61e9, complete: false, shards: 3, fits: true, files: [] },
     { key: 'mmproj-F16', role: 'projection', name: 'mmproj-F16', quant: 'F16', size: 0.9e9, complete: true, shards: 1, fits: null, files: [{ name: 'mmproj-F16.gguf', path: 'mmproj-F16.gguf', size: 0.9e9, sha256: null, present: null }] },
+  ],
+}
+
+const shard305 = [10946624, 2062113760, 32640156864, 23927378976, 23707918976]
+const RULITH_REPO = {
+  source: 'hfm', owner: 'Rulith', repo: 'Qwen3.8-Flash-Next-Rulith-EXL3-GGUF', revision: 'main', commit: '4e3ec2101aa2056553f38168ab559c4b1707659f',
+  folder: EXL3_FOLDER,
+  groups: [
+    { key: 'EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw', role: 'model', name: 'Qwen3.8-Flash-Next-EXL3-3.05bpw', quant: 'EXL3 3.05 bpw',
+      size: shard305.reduce((n, x) => n + x, 0), complete: true, shards: 5, fits: true, tuned: true,
+      files: shard305.map((size, i) => ({ name: `Qwen3.8-Flash-Next-EXL3-3.05bpw-0000${i + 1}-of-00005.gguf`, path: `EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-0000${i + 1}-of-00005.gguf`, size, sha256: 'aa'.repeat(32), present: null })) },
+    { key: 'EXL3-4.05bpw/Qwen3.8-Flash-Next-EXL3-4.05bpw', role: 'model', name: 'Qwen3.8-Flash-Next-EXL3-4.05bpw', quant: 'EXL3 4.05 bpw',
+      size: EXL3_FILES.slice(0, 6).reduce((n, f) => n + f.size, 0), complete: true, shards: 6, fits: true, tuned: true,
+      files: EXL3_FILES.slice(0, 6).map(f => ({ name: f.name, path: 'EXL3-4.05bpw/' + f.name, size: f.size, sha256: 'bb'.repeat(32), present: EXL3_FOLDER + '\\' + f.name })) },
+    { key: 'mmproj-F16', role: 'projection', name: 'mmproj-F16', quant: 'F16', size: 904004000, complete: true, shards: 1, fits: null,
+      files: [{ name: 'mmproj-F16.gguf', path: 'mmproj-F16.gguf', size: 904004000, sha256: 'cc'.repeat(32), present: EXL3_FOLDER + '\\mmproj-F16.gguf' }] },
+    { key: 'mtp-Qwen3.8-Flash-Next-lr512-ownhead', role: 'draft', name: 'mtp-Qwen3.8-Flash-Next-lr512-ownhead', quant: '', size: 2566331680, complete: true, shards: 1, fits: null,
+      files: [{ name: 'mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf', path: 'mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf', size: 2566331680, sha256: 'dd'.repeat(32), present: EXL3_FOLDER + '\\mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf' }] },
   ],
 }
 
@@ -181,7 +210,7 @@ export async function mock<T>(op: string, data: Record<string, unknown>): Promis
       return { text: '# ' + String(data.repo) + '\n\nA model card with **bold** text, a [link](https://huggingface.co) and a table:\n\n| quant | size |\n|---|---|\n| Q4_K_M | 18.6 GB |\n' } as T
     case 'dl_repo':
       if (!/\//.test(String(data.url))) throw JSON.stringify({ ok: false, error: 'Not a Hugging Face or hf-mirror repository link', code: 'dl_repo_invalid' })
-      return REPO as T
+      return (/Rulith\//.test(String(data.url)) ? RULITH_REPO : REPO) as T
     case 'dl_start':
       if (dlJob?.alive) throw JSON.stringify({ ok: false, error: 'A download is already running', code: 'dl_running' })
       dlJob = { id: '20261019-141500-def456', title: data.kind === 'repo' ? 'example/Example-30B-A3B-GGUF: Example-30B-A3B-Q4_K_M' : 'Qwen3.8 Flash Next (UD-IQ4_XS)', status: 'running', alive: true,

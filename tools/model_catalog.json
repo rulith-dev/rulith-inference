@@ -103,6 +103,77 @@
    ]
   },
   {
+   "id": "qwen3.8-flash-next-exl3-3.05bpw",
+   "name": "Qwen3.8 Flash Next",
+   "variant": "EXL3 3.05 bpw",
+   "owner": "Rulith",
+   "repo": "Qwen3.8-Flash-Next-Rulith-EXL3-GGUF",
+   "license": "https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF",
+   "capabilities": [
+    "images",
+    "tools",
+    "mtp"
+   ],
+   "files": [
+    {
+     "name": "Qwen3.8-Flash-Next-EXL3-3.05bpw-00001-of-00005.gguf",
+     "role": "model",
+     "required": true,
+     "size": 10946624,
+     "sha256": "448ec3a65e69999ad2a2080c222a064c4975440d466ba2192ff6fd53f4886cd6",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-00001-of-00005.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-EXL3-3.05bpw-00002-of-00005.gguf",
+     "role": "model",
+     "required": true,
+     "size": 2062113760,
+     "sha256": "472d5f565c7e43fa6ee534b38ed96412e4f4b0cc717e6eb2e9e3c98ebce5dc20",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-00002-of-00005.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-EXL3-3.05bpw-00003-of-00005.gguf",
+     "role": "model",
+     "required": true,
+     "size": 32640156864,
+     "sha256": "2477025d3a18456fc617b8befe53c69220604a380485444acdca74ecee222f71",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-00003-of-00005.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-EXL3-3.05bpw-00004-of-00005.gguf",
+     "role": "model",
+     "required": true,
+     "size": 23927378976,
+     "sha256": "d04c92124b41cb37c27952b69727fde352ea74ee9d4df3275a64309df48e0b8d",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-00004-of-00005.gguf"
+    },
+    {
+     "name": "Qwen3.8-Flash-Next-EXL3-3.05bpw-00005-of-00005.gguf",
+     "role": "model",
+     "required": true,
+     "size": 23707918976,
+     "sha256": "0bb83bc7054486f7096fb9c6ec31c380a4041a3435eaff604b480aef2249076f",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:EXL3-3.05bpw/Qwen3.8-Flash-Next-EXL3-3.05bpw-00005-of-00005.gguf"
+    },
+    {
+     "name": "mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf",
+     "role": "draft",
+     "required": false,
+     "size": 2566331680,
+     "sha256": "b46b7b259a789eb20d331ae81b1efdb83eb3255656d3956a4a9be053d4c34256",
+     "hf": "Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF@4e3ec2101aa2056553f38168ab559c4b1707659f:mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf"
+    },
+    {
+     "name": "mmproj-F16.gguf",
+     "role": "projection",
+     "required": false,
+     "size": 904004000,
+     "sha256": "1f7b7f0b984cf065c604360c29c8098362ed61b290db0ff12c6f360bb1a8a980",
+     "hf": "unsloth/Qwen3.8-Flash-Next-GGUF@38bb39ee97821de2c9009abb7e93950eec396e66:mmproj-F16.gguf"
+    }
+   ]
+  },
+  {
    "id": "qwen3.8-flash-next-ud-q4_k_xl",
    "name": "Qwen3.8 Flash Next",
    "variant": "UD-Q4_K_XL",

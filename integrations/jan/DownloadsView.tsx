@@ -554,7 +554,40 @@ function PickDetail({ group, top, running, onDownload, source, setSource, onOpen
   // the optional files (projector, draft, draft head) are wanted unless switched off
   const [off, setOff] = useState<string[]>([])
   const info = useRepoInfo(model.owner, model.repo, source, setSource)
+  // The repository as it is now, read in the background: versions added to it after this build's list (a new
+  // quantization) are download options too, offered as a search shows them. Without the listing (offline, the hub
+  // not answering) the list's own versions are all there is.
+  const [listing, setListing] = useState<RepoListing>()
+  const [repoExtras, setRepoExtras] = useState<string[]>([])
+  useEffect(() => {
+    let live = true
+    request<RepoListing>('dl_repo', { url: `${model.owner}/${model.repo}`, source }).then(l => { if (live) setListing(l) }).catch(() => {})
+    return () => { live = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model.owner, model.repo])
+  const known = new Set(group.models.flatMap(m => m.files.filter(f => f.role === 'model').map(f => f.name)))
+  const added = (listing?.groups || []).filter(g => g.role === 'model' && g.complete && !g.files.some(f => known.has(f.name)))
   const need = (m: DlModel) => m.files.filter(f => f.required).reduce((n, f) => n + f.size, 0)
+  const options: Opt[] = [
+    ...group.models.map((m, i) => ({ key: m.id, label: m.variant,
+      size: need(m), present: m.files.filter(f => f.required).every(f => f.present), complete: true, fits: m.fits, recommended: top && i === 0 })),
+    ...added.map(g => repoOption(g, tr)),
+  ]
+  const choose = (key: string) => {
+    setId(key)
+    const g = added.find(x => x.key === key)
+    if (g && listing) setRepoExtras(companionsFor(g, listing.groups))
+  }
+  const picked = listing && added.find(g => g.key === id)
+  if (listing && picked) {
+    const r = repoParts(listing, picked.key, repoExtras, setRepoExtras, tr)
+    return (
+      <ModelPane title={group.name} owner={model.owner} repo={model.repo} info={info} caps={model.capabilities} tested license={model.license}
+        options={options} option={picked.key} onOption={choose} companions={r.companions} files={r.files} bytes={r.bytes} firstFile={r.firstFile}
+        running={running} onOpen={onOpen} setSource={setSource} readme={{ commit: listing.commit, source: listing.source || source }}
+        onDownload={() => onDownload(r.start)} />
+    )
+  }
   const wanted = model.files.filter(f => f.required || !off.includes(f.role))
   const bytes = wanted.filter(f => !f.present).reduce((n, f) => n + f.size, 0)
   const toggle = (role: string) => (on: boolean) => setOff(on ? off.filter(r => r !== role) : [...off, role])
@@ -564,9 +597,8 @@ function PickDetail({ group, top, running, onDownload, source, setSource, onOpen
 
   return (
     <ModelPane title={group.name} owner={model.owner} repo={model.repo} info={info} caps={model.capabilities} tested license={model.license}
-      options={group.models.map((m, i) => ({ key: m.id, label: m.variant,
-        size: need(m), present: m.files.filter(f => f.required).every(f => f.present), complete: true, fits: m.fits, recommended: top && i === 0 }))}
-      option={model.id} onOption={setId}
+      options={options}
+      option={model.id} onOption={choose}
       companions={roles.map(role => {
         const files = model.files.filter(f => f.role === role)
         return { role, size: files.reduce((n, f) => n + f.size, 0), present: files.every(f => f.present), on: !off.includes(role), toggle: toggle(role) }
@@ -617,39 +649,60 @@ function RepoDetail({ id, path, source, setSource, running, onDownload, onOpen }
   const groups = listing.groups
   const models = groups.filter(g => g.role === 'model')
   const others = groups.filter(g => g.role !== 'model')
-  const current = models.find(g => g.key === model)
-  const chosen = groups.filter(g => g.key === model || extras.includes(g.key))
-  const bytes = chosen.flatMap(g => g.files).filter(f => !f.present).reduce((n, f) => n + f.size, 0)
-  const present = (g: RepoGroup) => g.files.length > 0 && g.files.every(f => f.present)
   const choose = (key: string) => { setModel(key); setExtras(companionsFor(models.find(g => g.key === key), groups)) }
-  const flip = (key: string) => (on: boolean) => setExtras(on ? [...extras, key] : extras.filter(k => k !== key))
-  // a switch per kind: on when any file of the kind is picked; switching it on picks the one companionsFor would
-  const roles = [...new Set(others.map(g => g.role))].filter(r => !!bestCompanion(r, current, groups))
   const caps = [others.some(g => g.role === 'projection') ? 'images' : '', others.some(g => g.role === 'draft') ? 'mtp' : ''].filter(Boolean)
+  const r = repoParts(listing, model, extras, setExtras, tr)
 
   return (
     <ModelPane title={listing.repo} owner={listing.owner} repo={listing.repo} info={listing.info} caps={caps} tested={models.some(g => g.tuned)}
-      options={models.map(g => ({ key: g.key, label: g.quant || g.name, sub: g.shards > 1 ? tr('dl.shards', { count: g.shards }) : undefined,
-        size: g.size, present: present(g), complete: g.complete, fits: g.fits, tuned: g.tuned }))}
-      option={model} onOption={choose}
-      companions={roles.map(role => {
-        const picked = chosen.filter(g => g.role === role)
-        const best = bestCompanion(role, current, groups)!
-        const shown = picked.length ? picked : [best]
-        return { role, size: shown.reduce((n, g) => n + g.size, 0), present: shown.every(present), on: picked.length > 0,
-          toggle: (on: boolean) => setExtras(on ? [...extras, best.key] : extras.filter(k => !others.some(g => g.key === k && g.role === role))) }
-      })}
-      files={[
-        ...(current?.files || []).map((f, n) => ({ key: f.path, name: f.name, size: f.size, present: !!f.present, on: true,
-          label: current!.shards > 1 ? tr('dl.shard', { n: n + 1, of: current!.shards }) : tr('dl.role.model') })),
-        ...others.map(g => ({ key: g.key, name: g.name, size: g.size, present: present(g), on: extras.includes(g.key),
-          label: tr(`dl.role.${g.role}`, { defaultValue: g.role }), toggle: flip(g.key) })),
-      ]}
-      bytes={bytes} firstFile={current?.files[0]?.name}
+      options={models.map(g => repoOption(g, tr))} option={model} onOption={choose}
+      companions={r.companions} files={r.files} bytes={r.bytes} firstFile={r.firstFile}
       running={running} onOpen={onOpen} setSource={setSource} readme={{ commit: listing.commit, source: listing.source || source }}
-      onDownload={() => onDownload({ plan: { kind: 'repo', url: `${listing.owner}/${listing.repo}`, groups: chosen.map(g => g.key) },
-        title: current ? `${listing.owner}/${listing.repo}: ${current.quant || current.name}` : `${listing.owner}/${listing.repo}`, bytes, owner: listing.owner, repo: listing.repo })} />
+      onDownload={() => onDownload(r.start)} />
   )
+}
+
+type Tr = ReturnType<typeof useTr>
+const groupPresent = (g: RepoGroup) => g.files.length > 0 && g.files.every(f => f.present)
+
+// a model group of a repository listing as a line of the "Download options" menu
+function repoOption(g: RepoGroup, tr: Tr): Opt {
+  return { key: g.key, label: g.quant || g.name, sub: g.shards > 1 ? tr('dl.shards', { count: g.shards }) : undefined,
+    size: g.size, present: groupPresent(g), complete: g.complete, fits: g.fits, tuned: g.tuned }
+}
+
+// the pane's parts for model group `model` of a repository listing (a repository from the search, or a version a
+// recommended repository has that this build's list does not): the files that go with it as switches, every file,
+// the bytes still to fetch and what the download button starts. extras: the other groups picked to go with it.
+function repoParts(listing: RepoListing, model: string, extras: string[], setExtras: (keys: string[]) => void, tr: Tr) {
+  const groups = listing.groups
+  const others = groups.filter(g => g.role !== 'model')
+  const current = groups.find(g => g.role === 'model' && g.key === model)
+  const chosen = groups.filter(g => g.key === model || extras.includes(g.key))
+  const bytes = chosen.flatMap(g => g.files).filter(f => !f.present).reduce((n, f) => n + f.size, 0)
+  const flip = (key: string) => (on: boolean) => setExtras(on ? [...extras, key] : extras.filter(k => k !== key))
+  // a switch per kind: on when any file of the kind is picked; switching it on picks the one companionsFor would
+  const roles = [...new Set(others.map(g => g.role))].filter(r => !!bestCompanion(r, current, groups))
+  const repo = `${listing.owner}/${listing.repo}`
+  return {
+    bytes,
+    firstFile: current?.files[0]?.name,
+    companions: roles.map(role => {
+      const picked = chosen.filter(g => g.role === role)
+      const best = bestCompanion(role, current, groups)!
+      const shown = picked.length ? picked : [best]
+      return { role, size: shown.reduce((n, g) => n + g.size, 0), present: shown.every(groupPresent), on: picked.length > 0,
+        toggle: (on: boolean) => setExtras(on ? [...extras, best.key] : extras.filter(k => !others.some(g => g.key === k && g.role === role))) }
+    }),
+    files: [
+      ...(current?.files || []).map((f, n) => ({ key: f.path, name: f.name, size: f.size, present: !!f.present, on: true,
+        label: current!.shards > 1 ? tr('dl.shard', { n: n + 1, of: current!.shards }) : tr('dl.role.model') })),
+      ...others.map(g => ({ key: g.key, name: g.name, size: g.size, present: groupPresent(g), on: extras.includes(g.key),
+        label: tr(`dl.role.${g.role}`, { defaultValue: g.role }), toggle: flip(g.key) })),
+    ] as FileLine[],
+    start: { plan: { kind: 'repo', url: repo, groups: chosen.map(g => g.key) }, bytes, owner: listing.owner, repo: listing.repo,
+      title: current ? `${repo}: ${current.quant || current.name}` : repo } as Start,
+  }
 }
 
 // the file of a kind that goes with a model: a vision projector (F16 first: what the app looks for by name) or an
