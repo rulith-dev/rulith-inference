@@ -10,6 +10,7 @@ The result is what the installer ships under <install dir>/runtime:
     bin/.kpack/        the kernel packs those ROCm DLLs load their own kernels from (rocBLAS's GEMV)
     tools/manager.py   the manager, unchanged; downloader.py and model_catalog.json beside it (Downloads)
     python/            CPython's embeddable distribution - the manager is standard library only
+    licenses/          NOTICE.md and the license texts of the code in bin/hip (llama.cpp, hipfire, ExLlamaV3)
     BUNDLE.json        what went in, from where, and the upstream pin it was built from
 
 Nothing here is specific to the machine it was made on except the GPU: the kernel libraries are
@@ -184,6 +185,19 @@ def main():
         take(ROOT / 'tools' / name, out / 'tools' / name, 'tools')
     for d in ('config', 'logs', 'models'):
         (out / d).mkdir()
+
+    # the binaries carry code under these licenses; Apache-2.0 (hipfire's kernel) wants its text and NOTICE with them
+    tree = ROOT / 'src' / 'llama.cpp'
+    lic = out / 'licenses'
+    lic.mkdir()
+    for src, name in ((ROOT / 'NOTICE.md', 'NOTICE.md'), (ROOT / 'LICENSE', 'LICENSE-rulith-inference'),
+                      (tree / 'LICENSE', 'LICENSE-llama.cpp'),
+                      (tree / 'licenses' / 'LICENSE-hipfire-APACHE', 'LICENSE-hipfire-APACHE'),
+                      (tree / 'licenses' / 'NOTICE-hipfire', 'NOTICE-hipfire'),
+                      (tree / 'ggml' / 'src' / 'ggml-cuda' / 'vendors' / 'kyojin' / 'LICENSE', 'LICENSE-exllamav3')):
+        if not src.is_file():
+            sys.exit(f'license text missing: {src}')
+        take(src, lic / name, 'licenses')
 
     version, url = PYTHON_EMBED
     if args.python_zip:

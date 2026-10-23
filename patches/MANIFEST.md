@@ -6,7 +6,7 @@ The fork ([rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/ru
 upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) into its history, and the recipe in this
 directory turns clean upstream at the pinned revision into the fork's tree, byte for byte:
 
-- `files/` - whole files, laid down first: the 40 the fork adds, and the 13 upstream files it rewrites more than it
+- `files/` - whole files, laid down first: the 57 the fork adds, and the 13 upstream files it rewrites more than it
   keeps (a script of hunks would be no easier to read than the file);
 - `apply_<area>.py` - the fork's edits to the other 106 upstream files, one generated script per area (`docs`,
   `common`, `python`, `ggml`, `ggml_cuda`, `llama`, `models`, `tests`, `tools`, `server`); each file belongs to exactly
@@ -21,7 +21,35 @@ old code are what stops replaying first.
 
 The reasons for each change are not in the generated scripts. They are in `history/`: the 141 scripts of the recipe up
 to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements, in the order of
-`history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base.
+`history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
+recorded here.
+
+### 0.6.6: prompt reading (fork `80f608c9d`)
+
+- `ggml/src/ggml-cuda/gdn-wy.cuh` (new) and `gated_delta_net.cu`: the gated delta net of a prompt-sized batch (64+
+  tokens of one sequence) in the chunked WY form, 16-row chunks on gfx11 WMMA. It replaces the per-token F32 kernel
+  there: 5.6 -> ~3.1 ms a layer at 4942 tokens. Not bitwise: q, k, the decayed operands, the
+  chunk's inverse and the state enter the products as F16 (4e-4 relative to the CPU op; every snapshot slot checked).
+  `STRIX_GDN_WY=0` restores the F32 kernels.
+- `ggml/src/ggml-cuda/mmh-moe.cu` / `.cuh` (new), `vendors/kyojin/` (new) and `ggml-cuda.cu`: the routed EXL3
+  experts of a batch of 32+ tokens as one grouped pipeline: rows sorted by
+  expert (stable, so every run places a row the same way), gate and up as one grouped GEMM with the trellis decoded
+  inside it, SwiGLU and the rotations in F32 between the GEMMs, the down GEMM in F32, and at the weighted sum the down
+  rotation, the sum and the shared expert's gated tail. 28.1 -> 25.6 ms a layer at 4942 tokens. `STRIX_MMH_MOE=0`
+  restores the per-op kernels, `STRIX_MMH_MOE_DEBUG=1` prints why a block was not taken.
+- `ggml/src/ggml-cuda/mmb.cu`, HC gate mix (`hc_gate_mix_kernel`): its K=320 GEMM and its epilogue's F32 residual reads
+  ran one after the other, two blocks a WGP (253 VGPRs, 36 KB of LDS). Unpadded LDS rows with an XOR chunk swizzle
+  (32 KB) and a 6-waves-a-SIMD register budget (178 VGPRs) give four blocks a WGP, so one block's epilogue overlaps
+  another's GEMM: 2.13 -> 1.64 ms a call at 4942 tokens (96 calls a batch). `STRIX_HC_GM_SWZ=0` restores the padded
+  layout.
+- `mmb.cu`, tall HC down tile: the down projection alone has 320 rows (with Q8_0 HC weights the inject GEMM is a
+  separate F32 one), so a 320-row tile replaces the 384-row one, whose last 64 rows of zeros went through the WMMAs:
+  1.23 -> 1.07 ms a call. `STRIX_MMB_TALL320=0` keeps the 384-row tile.
+- Both HC changes keep every output element's arithmetic: the KLD below is unchanged to the last digit with them, and
+  48 greedy tokens after an 8.4K-token prompt are identical with either switch off.
+- Quality, public eval KLD against BF16 (lower is closer): EXL3 4.05 0.02214 -> 0.02163 (two-path mean of the GDN path
+  alone 0.02179 -> 0.02209), EXL3 3.05 0.04444 -> 0.04522, UD-IQ4_XS 0.04804 -> 0.04624 - within the run-to-run spread
+  of numerics changes on this model (3.05 spans 0.0442-0.0457 across four numerics paths).
 
 ---
 

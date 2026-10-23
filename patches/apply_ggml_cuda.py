@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """apply_ggml_cuda: the fork's changes to 25 upstream file(s) of this area.
 
-Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork b92d228ad525. Regenerated whole by tools/make_recipe.py when the fork moved
+Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork 80f608c9da89. Regenerated whole by tools/make_recipe.py when the fork moved
 to this upstream; the scripts it replaced, one per change with its reasons, are in
 patches/history/ (see patches/MANIFEST.md).
 
@@ -1040,6 +1040,7 @@ void ggml_cuda_op_get_rows_mean4(
 #include <immintrin.h>
 #endif
 #include "hc-cn.cuh"
+#include "mmh-moe.cuh"
 #include "ggml-cuda.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -3969,6 +3970,255 @@ static int ggml_cuda_ssm_scan_cache_fuse(ggml_backend_cuda_context & ctx, const 
 #endif
 }
 
+// strixllama: the routed EXL3 experts of a prompt-sized batch as one pipeline (mmh-moe.cu). Main part at the gate node:
+// {MUL_MAT_HAD gate, MUL_MAT_HAD up, GLU swiglu, MUL_MAT_HAD down} - sort by expert, gather, gate / up, SwiGLU, down -
+// with the down product's sorted F32 rows left in the down node's own buffer (the gate or up node's buffer carries the
+// intermediate rows). Reduce part at the weighted sum, which qwen4exp builds after the shared expert's nodes: the sum
+// over the picks and, right after it, the shared expert's gated tail {MUL, ADD}. Both parts are decided at the gate node,
+// so a refused block runs as before throughout. The arrays the reduce needs live in a small buffer of this file (grown
+// with the batch, never per call). STRIX_MMH_MOE = the smallest batch it takes (default 32 tokens), 0 = off;
+// STRIX_MMH_MOE_DEBUG=1 says why a block was refused.
+struct ggml_cuda_mmh_moe_pending {
+    const ggml_tensor *    down = nullptr;   // the routed down product, whose buffer holds the sorted rows
+    int                    device = -1;
+    ggml_cuda_mmh_moe_args a;
+};
+static ggml_cuda_mmh_moe_pending g_mmh_moe;
+
+static void * ggml_cuda_mmh_moe_persist(const int device, const size_t bytes, cudaStream_t stream) {
+    static void * buf[GGML_CUDA_MAX_DEVICES] = {};
+    static size_t size[GGML_CUDA_MAX_DEVICES] = {};
+    if (bytes > size[device]) {
+#if defined(GGML_USE_HIP)
+        hipStreamCaptureStatus cap = hipStreamCaptureStatusNone;
+        CUDA_CHECK(hipStreamIsCapturing(stream, &cap));
+        const bool capturing = cap != hipStreamCaptureStatusNone;
+#else
+        cudaStreamCaptureStatus cap = cudaStreamCaptureStatusNone;
+        CUDA_CHECK(cudaStreamIsCapturing(stream, &cap));
+        const bool capturing = cap != cudaStreamCaptureStatusNone;
+#endif // defined(GGML_USE_HIP)
+        if (capturing) {
+            return nullptr;   // no allocation inside a captured graph: the block runs the plain way
+        }
+        if (buf[device]) {
+            CUDA_CHECK(cudaStreamSynchronize(stream));   // the last reduce may still read it
+            CUDA_CHECK(cudaFree(buf[device]));
+        }
+        const size_t n = std::max<size_t>(bytes, 1 << 20) * 5 / 4;
+        CUDA_CHECK(cudaMalloc(&buf[device], n));
+        size[device] = n;
+    }
+    return buf[device];
+}
+
+static int ggml_cuda_try_mmh_moe(ggml_backend_cuda_context & ctx, ggml_cgraph * cgraph, const int i) {
+#if defined(GGML_USE_HIP)
+    static const int moe_min = getenv("STRIX_MMH_MOE") ? atoi(getenv("STRIX_MMH_MOE")) : 32;
+    static const bool moe_dbg = getenv("STRIX_MMH_MOE_DEBUG") && atoi(getenv("STRIX_MMH_MOE_DEBUG"));
+#define MOE_REFUSE(why) do { if (moe_dbg) { fprintf(stderr, "MMH_MOE refused at node %d (%s): %s\\n", i, cgraph->nodes[i]->name, why); } return 0; } while (0)
+    if (moe_min <= 0 || i + 5 >= cgraph->n_nodes || !GGML_CUDA_CC_IS_RDNA3_5(ggml_cuda_info().devices[ctx.device].cc)) {
+        return 0;
+    }
+    ggml_tensor * n0 = cgraph->nodes[i], * n1 = cgraph->nodes[i + 1], * glu = cgraph->nodes[i + 2], * down = cgraph->nodes[i + 3];
+    if (n0->op != GGML_OP_MUL_MAT_HAD || n1->op != GGML_OP_MUL_MAT_HAD || glu->op != GGML_OP_GLU || down->op != GGML_OP_MUL_MAT_HAD ||
+            ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU || !glu->src[1] || ggml_get_op_params_i32(glu, 1) != 0) {
+        return 0;
+    }
+    ggml_tensor * gate = glu->src[0], * up = glu->src[1];
+    if (!((gate == n0 && up == n1) || (gate == n1 && up == n0))) {
+        return 0;
+    }
+    const ggml_tensor * ids = gate->src[2];
+    const ggml_tensor * x   = gate->src[1];
+    if (!ids || up->src[2] != ids || down->src[2] != ids || up->src[1] != x || down->src[1] != glu) {
+        MOE_REFUSE("not one expert block");
+    }
+    // the ids are the top-k view of the router's argsort: rows of n_used ids, row stride ids->nb[1]
+    if (gate->src[5] || up->src[5] || down->src[5] || ids->type != GGML_TYPE_I32 || ids->nb[0] != sizeof(int32_t) ||
+            ids->nb[1] % sizeof(int32_t) != 0) {
+        MOE_REFUSE("classes or ids layout");
+    }
+    const int n_used = (int) ids->ne[0], T = (int) ids->ne[1];
+    if (T < moe_min) {
+        return 0;
+    }
+    if (g_mmh_moe.down) {
+        MOE_REFUSE("an earlier block's reduce is still pending");
+    }
+    if (x->type != GGML_TYPE_F32 || x->ne[1] != 1 || x->ne[2] != T || x->ne[3] != 1 || x->nb[0] != sizeof(float) ||
+            x->nb[2] % 16 != 0 || ((uintptr_t) x->data) % 16 != 0) {
+        MOE_REFUSE("input layout");
+    }
+    const ggml_tensor * wg = gate->src[0], * wu = up->src[0], * wd = down->src[0];
+    auto bits_of = [](const ggml_type t) { return t == GGML_TYPE_EXL3_M4 ? 4 : t == GGML_TYPE_EXL3_M3 ? 3 : 0; };
+    const int H = (int) wg->ne[0], I = (int) wg->ne[1], E = (int) wg->ne[2];
+    const int bits_gu = bits_of(wg->type), bits_d = bits_of(wd->type);
+    if (wu->type != wg->type || wu->ne[0] != H || wu->ne[1] != I || wu->ne[2] != E || wd->ne[0] != I || wd->ne[1] != H || wd->ne[2] != E ||
+            x->ne[0] != H || !ggml_cuda_mmh_moe_supported(H, I, n_used, bits_gu, bits_d)) {
+        MOE_REFUSE("weight types or shapes");
+    }
+    for (const ggml_tensor * w : { wg, wu, wd }) {
+        if (w->nb[1] != ggml_row_size(w->type, w->ne[0]) || w->nb[2] != w->ne[1] * w->nb[1]) {
+            MOE_REFUSE("weight strides");
+        }
+    }
+    // rotations: F16, one row per expert or one row shared by all of them
+    const ggml_tensor * rot[6] = { gate->src[3], gate->src[4], up->src[3], up->src[4], down->src[3], down->src[4] };
+    const int64_t rot_len[6] = { H, I, H, I, I, H };
+    int64_t rs[6];
+    for (int r = 0; r < 6; ++r) {
+        const ggml_tensor * t = rot[r];
+        if (!t || t->type != GGML_TYPE_F16 || !ggml_is_contiguous(t) || t->ne[0] != rot_len[r] || (t->ne[1] != E && t->ne[1] != 1) ||
+                ((uintptr_t) t->data) % 8 != 0) {
+            MOE_REFUSE("rotations");
+        }
+        rs[r] = t->ne[1] == 1 ? 0 : t->ne[0];
+    }
+    // the products feed only the next step
+    if (!ggml_node_has_n_uses(cgraph, i, 1) || !ggml_node_has_n_uses(cgraph, i + 1, 1) || !ggml_node_has_n_uses(cgraph, i + 2, 1) ||
+            !ggml_node_has_n_uses(cgraph, i + 3, 1)) {
+        MOE_REFUSE("a product has other users");
+    }
+    // the weighted sum: the first node after the block that reads the down product (the nodes in between - the shared
+    // expert's - must not read the block's products), and the shared expert's tail right after the sum
+    int j = -1;
+    for (int k = i + 4; k < std::min(cgraph->n_nodes, i + 64) && j < 0; ++k) {
+        const ggml_tensor * nk = cgraph->nodes[k];
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = nk->src[s];
+            if (src == gate || src == up || src == glu) {
+                MOE_REFUSE("a later node reads the gate, up or SwiGLU product");
+            }
+            if (src == down) {
+                j = k;
+            }
+        }
+    }
+    ggml_cuda_moe_weighted_reduction_match m;
+    if (j < 0 || !ggml_cuda_match_moe_weighted_reduction(cgraph, j, m) || m.experts != down || m.expert_scale != nullptr ||
+            m.weights->ne[1] != n_used || m.weights->ne[2] != T || ((uintptr_t) m.weights->data) % 4 != 0) {
+        MOE_REFUSE("no weighted sum of the down product");
+    }
+    int last = j + m.node_count - 1;
+    ggml_tensor * out = m.dst;
+    const ggml_tensor * sx = nullptr, * sg = nullptr;
+    {
+        const int im = last + 1, ia = last + 2;
+        if (ia < cgraph->n_nodes) {
+            const ggml_tensor * mul = cgraph->nodes[im];
+            ggml_tensor *       add = cgraph->nodes[ia];
+            const ggml_tensor * a0  = mul->op == GGML_OP_MUL ? mul->src[0] : nullptr;
+            const ggml_tensor * a1  = mul->op == GGML_OP_MUL ? mul->src[1] : nullptr;
+            if (a0 && a1 && add->op == GGML_OP_ADD && ((add->src[0] == m.dst && add->src[1] == mul) || (add->src[1] == m.dst && add->src[0] == mul)) &&
+                    mul->type == GGML_TYPE_F32 && add->type == GGML_TYPE_F32 && a0->type == GGML_TYPE_F32 && a1->type == GGML_TYPE_F32 &&
+                    ggml_is_contiguous(a0) && ggml_is_contiguous(a1) && ggml_is_contiguous(add) &&
+                    ggml_are_same_shape(a0, m.dst) && ggml_are_same_shape(add, m.dst) && ggml_are_same_shape(mul, m.dst) &&
+                    a1->ne[0] == 1 && a1->ne[1] == T && a1->ne[2] == 1 && a1->ne[3] == 1 &&
+                    ggml_node_has_n_uses(cgraph, last, 1) && ggml_node_has_n_uses(cgraph, im, 1) && !ggml_cuda_mmb_is_bf16_only(add)) {
+                sx = a0; sg = a1; out = add; last = ia;
+            }
+        }
+    }
+    if (out->type != GGML_TYPE_F32 || !ggml_is_contiguous(out) || out->ne[0] != H || out->ne[1] != T || ggml_cuda_mmb_is_bf16_only(out)) {
+        MOE_REFUSE("output");
+    }
+    // buffers: the gate (or up) product's carries the intermediate rows during the main part, the down product's the
+    // sorted rows until the reduce; neither may overlap what the parts read or write while it is in use
+    auto overlaps = [](const void * a, const size_t na, const void * b, const size_t nb) {
+        return a && b && (const char *) a < (const char *) b + nb && (const char *) b < (const char *) a + na;
+    };
+    const size_t bytes_gu = (size_t) T * n_used * I * sizeof(float), bytes_had = (size_t) T * n_used * H * sizeof(float);
+    if (ggml_nbytes(down) < bytes_had || ggml_nbytes(gate) < bytes_gu || ggml_nbytes(up) < bytes_gu) {
+        MOE_REFUSE("product buffers too small");
+    }
+    void * buf_had = down->data;
+    const ggml_tensor * keep_had[] = { x, ids, m.weights, out };   // sx and sg are made while the down product is alive
+    for (const ggml_tensor * k : keep_had) {
+        if (overlaps(buf_had, bytes_had, k->data, ggml_nbytes(k))) {
+            MOE_REFUSE("the down product's buffer overlaps a live tensor");
+        }
+    }
+    void * buf_gu = nullptr;
+    for (ggml_tensor * cand : { gate, up }) {
+        bool ok = !overlaps(cand->data, bytes_gu, buf_had, bytes_had);
+        for (const ggml_tensor * k : { x, ids }) {
+            ok = ok && !overlaps(cand->data, bytes_gu, k->data, ggml_nbytes(k));
+        }
+        if (ok) {
+            buf_gu = cand->data;
+            break;
+        }
+    }
+    if (!buf_gu) {
+        MOE_REFUSE("the gate and up products' buffers overlap live tensors");
+    }
+    const ggml_cuda_mmh_moe_scratch s = ggml_cuda_mmh_moe_scratch_size(T, n_used, E);
+    void * persist = ggml_cuda_mmh_moe_persist(ctx.device, s.persist_bytes, ctx.stream());
+    if (!persist) {
+        MOE_REFUSE("graph capture");
+    }
+
+    ggml_cuda_mmh_moe_args a = {};
+    a.x = (const float *) x->data;  a.x_ld = (int64_t) (x->nb[2] / sizeof(float));
+    a.ids = (const int32_t *) ids->data;  a.ids_ld = (int64_t) (ids->nb[1] / sizeof(int32_t));  a.weights = (const float *) m.weights->data;
+    a.T = T;  a.n_used = n_used;  a.E = E;  a.H = H;  a.I = I;  a.bits_gu = bits_gu;  a.bits_d = bits_d;
+    a.w_gate = wg->data;  a.w_up = wu->data;  a.w_down = wd->data;
+    a.es_gate = wg->nb[2];  a.es_up = wu->nb[2];  a.es_down = wd->nb[2];
+    a.rin_g = rot[0]->data;  a.rout_g = rot[1]->data;  a.rin_u = rot[2]->data;  a.rout_u = rot[3]->data;
+    a.rin_d = rot[4]->data;  a.rout_d = rot[5]->data;
+    a.rs_in_g = rs[0];  a.rs_out_g = rs[1];  a.rs_in_u = rs[2];  a.rs_out_u = rs[3];  a.rs_in_d = rs[4];  a.rs_out_d = rs[5];
+    a.sx = sx ? (const float *) sx->data : nullptr;  a.sg = sg ? (const float *) sg->data : nullptr;
+    a.out = (float *) out->data;  a.buf_gu = buf_gu;  a.buf_had = buf_had;
+    ggml_cuda_pool_alloc<char> temp(ctx.pool(), s.temp_bytes);
+    ggml_cuda_mmh_moe_scratch_carve(a, persist, temp.get());
+    ggml_cuda_mmh_moe_run_main(a, ctx.stream());
+    CUDA_CHECK(cudaGetLastError());
+    g_mmh_moe.down   = down;
+    g_mmh_moe.device = ctx.device;
+    g_mmh_moe.a      = a;
+    static unsigned hits = 0;
+    if (hits++ == 0) {
+        fprintf(stderr, "MMH_MOE grouped expert pipeline: T=%d E=%d H=%d I=%d picks=%d bits=%d/%d shexp=%d sum %d nodes on\\n", T, E, H, I,
+                n_used, bits_gu, bits_d, int(sx != nullptr), j - i);
+    }
+    return 3;
+#undef MOE_REFUSE
+#else
+    GGML_UNUSED(ctx); GGML_UNUSED(cgraph); GGML_UNUSED(i);
+    return 0;
+#endif
+}
+
+// the reduce part at the weighted sum of a block whose main part ran (ggml_cuda_try_mmh_moe): the nodes it covers after
+// node i, or -1 when node i is not that sum
+static int ggml_cuda_mmh_moe_reduce(ggml_backend_cuda_context & ctx, ggml_cgraph * cgraph, const int i) {
+#if defined(GGML_USE_HIP)
+    ggml_tensor * node = cgraph->nodes[i];
+    if (!g_mmh_moe.down || (node->src[0] != g_mmh_moe.down && node->src[1] != g_mmh_moe.down)) {
+        return -1;
+    }
+    GGML_ASSERT(g_mmh_moe.device == ctx.device);
+    ggml_cuda_moe_weighted_reduction_match m;
+    GGML_ASSERT(ggml_cuda_match_moe_weighted_reduction(cgraph, i, m) && m.experts == g_mmh_moe.down &&
+                "MMH_MOE: the weighted sum seen at the gate node is not there");
+    int last = i + m.node_count - 1;
+    if (g_mmh_moe.a.sx) {
+        last += 2;
+        GGML_ASSERT(last < cgraph->n_nodes && cgraph->nodes[last]->data == g_mmh_moe.a.out);
+    } else {
+        GGML_ASSERT(m.dst->data == g_mmh_moe.a.out);
+    }
+    ggml_cuda_mmh_moe_run_reduce(g_mmh_moe.a, ctx.stream());
+    CUDA_CHECK(cudaGetLastError());
+    g_mmh_moe.down = nullptr;
+    return last - i;
+#else
+    GGML_UNUSED(ctx); GGML_UNUSED(cgraph); GGML_UNUSED(i);
+    return -1;
+#endif
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     if (ggml_cuda_fusion_disabled()) {
@@ -3981,6 +4231,19 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         const int sk = ggml_cuda_ssm_scan_cache_fuse(*cuda_ctx, cgraph, i);
         if (sk > 0) {
             return sk;
+        }
+    }
+
+    if (node->op == GGML_OP_MUL_MAT_HAD && node->src[2]) {
+        const int skip = ggml_cuda_try_mmh_moe(*cuda_ctx, cgraph, i);
+        if (skip > 0) {
+            return skip;
+        }
+    }
+    if (node->op == GGML_OP_MUL) {
+        const int skip = ggml_cuda_mmh_moe_reduce(*cuda_ctx, cgraph, i);
+        if (skip >= 0) {
+            return skip;
         }
     }
 

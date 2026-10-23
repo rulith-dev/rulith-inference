@@ -82,7 +82,7 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
 `bootstrap.py` clones upstream `ggml-org/llama.cpp` at a pinned revision, applies the patch set, and builds
-against the ROCm SDK. The same 159-file delta is also published on a fork, so it can be
+against the ROCm SDK. The same 176-file delta is also published on a fork, so it can be
 read as a plain diff: [rulith-dev/llama.cpp, branch `rulith`](https://github.com/rulith-dev/llama.cpp/tree/rulith) (`strixllama` until 0.4.3, kept in
 step up to 0.5.2). `tools/manager.py` is a JSON-on-stdin process manager: it owns the launch
 flags, the environment gates and the runtime, so a configuration is reproducible rather than
@@ -133,7 +133,7 @@ and Chinese.
 
 ## What is actually in here
 
-The whole delta against upstream llama.cpp is **97 files** — 93 modified, 4 added, out of 3610. The
+The whole delta against upstream llama.cpp is **176 files** — 119 modified, 57 added, out of 3880. The
 substantial pieces:
 
 | | |
@@ -163,6 +163,7 @@ substantial pieces:
 | **A cheaper draft head** | A draft step read a whole output projection to pick one token: 338 MB with the IQ4_XS head, whose first choice matched the model's own 96.5-97% of the time. A rank-512 pre-score of the vocabulary (135 MB) now picks 512 candidates, and only their rows of the model's own projection are multiplied; the model's first choice is among them 99.9-100% of the time, on English, Chinese and conversations the pre-score was not fitted on. Decode +3.6% greedy and +4.9% sampled (acceptance 0.687 → 0.702) over the IQ4_XS head, greedy output unchanged bit for bit (0.4.6). |
 | **MTP when sampling** | With a temperature above 0, a draft token counted only when the model drew that very token. The draft head now draws its proposals from its own distribution, shaped by the request's sampling settings, and speculative sampling accepts each with the probability that keeps every token distributed exactly as the model alone samples it: at temperature 0.7 the first proposal is kept 67% of the time instead of 63%. Proposals kept less often pay for fewer a step, so sampled answers draft 2 tokens for one or two conversations, 1 for three or four. At Jan's settings, one conversation 33.6 → 36.2 tok/s, three 61.3 → 67.1 (0.4.1). Greedy output unchanged bit for bit. |
 | **Three correctness fixes** | Speculative verification batches ran dense attention with no causal mask, so long answers drifted and stopped early. Image input aborted the server three separate ways in the QSA block machinery, and a fourth when a second loaded conversation got an image. |
+| **Prompt reading on new kernels** | The delta net of a prompt now runs in chunks of 16 tokens on the matrix cores instead of one token at a time (5.6 → ~3.1 ms a layer at 5K tokens), and the routed EXL3 experts run as one grouped pipeline with the rows sorted by expert in between (28.1 → 25.6 ms a layer). The hyper-connection gate mix overlaps its GEMM with its residual reads (2.13 → 1.64 ms a call, bit for bit). Prompts read 7-11% faster with EXL3 4.05 and 3.05, 5-7% with UD-IQ4_XS. The delta net and expert kernels are not bit for bit: KLD against BF16 stays within the spread other numerics changes give. `STRIX_GDN_WY=0` / `STRIX_MMH_MOE=0` / `STRIX_HC_GM_SWZ=0` / `STRIX_MMB_TALL320=0` restore the previous paths (0.6.6). |
 | **Measurement instrumentation** | Per-graph, per-dispatch and per-phase timing, all off unless an environment variable is set. |
 
 `patches/MANIFEST.md` explains how the recipe is laid out; `patches/history/` keeps the per-change scripts of
@@ -182,12 +183,12 @@ happily if the tree was edited by hand and re-recorded afterwards. The strong qu
 recipe still rebuilds the tree from nothing, and that has its own tool:
 
 ```bash
-python tools/replay_bootstrap.py          # clean upstream + patch set == the 159 files, byte for byte
+python tools/replay_bootstrap.py          # clean upstream + patch set == the 176 files, byte for byte
 ```
 
 It restores the 119 modified files to upstream from the clone's own git objects, addressed by the blob
 hashes in `bootstrap/UPSTREAM.json` — so clean upstream is reconstructed rather than trusted — then
-replays the whole files and every script and compares. It reports **159 / 159**.
+replays the whole files and every script and compares. It reports **176 / 176**.
 
 Since 0.6.5 the base is upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp), merged into the
 fork, and `tools/make_recipe.py` writes the recipe again from the two commits whenever the fork moves to a

@@ -26,10 +26,28 @@ Every script in `patches/` applies to that revision, and `tools/replay_bootstrap
 reproduces the build exactly. The files under `patches/files/` that also exist upstream are
 llama.cpp's files with this project's changes, under llama.cpp's MIT license.
 
-`bootstrap/UPSTREAM.json` records the provenance of the 159 files this project changes: for each of
-the 119 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 159 the
+`bootstrap/UPSTREAM.json` records the provenance of the 176 files this project changes: for each of
+the 119 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 176 the
 SHA-256 the patch set produces. The replay restores the upstream side by blob hash, so what it
 rebuilds from is upstream's content by construction rather than by assertion.
+
+### hipfire — Apache License 2.0, Copyright the hipfire authors
+
+The gated delta net prefill kernel `ggml/src/ggml-cuda/gdn-wy.cuh` of the fork (shipped in
+`patches/files/`) is adapted from hipfire's `kernels/src/gated_delta_chunk_wmma.gfx1151.hip`
+([`warpfront/hipfire`](https://github.com/warpfront/hipfire), v0.4.2.1-13-gbfb90b9), by way of the
+copy in the ExLlamaV3 port below; the file states what was changed. It remains under the Apache
+License 2.0: the license text and hipfire's NOTICE are `licenses/LICENSE-hipfire-APACHE` and
+`licenses/NOTICE-hipfire` in the fork, and the app ships both in `runtime\licenses`.
+
+### ExLlamaV3 — MIT, Copyright (c) 2025 Turboderp; its gfx11.5 port — MIT, Copyright (c) 2026 Yamz Labs
+
+The grouped EXL3 expert GEMM, the trellis decode and the WMMA helpers under
+`ggml/src/ggml-cuda/vendors/kyojin/` of the fork come from the gfx11.5 port of ExLlamaV3
+([`turboderp-org/exllamav3`](https://github.com/turboderp-org/exllamav3)) published as
+[`Yamz-Labs/kyojin`](https://github.com/Yamz-Labs/kyojin), MIT. `vendors/kyojin/README.md` lists what
+was taken and changed; the license text is `vendors/kyojin/LICENSE`, shipped as
+`runtime\licenses\LICENSE-exllamav3`.
 
 ### Jan — Apache License 2.0, Copyright 2025 Menlo Research (https://menlo.ai)
 
@@ -84,9 +102,24 @@ projector. Obtain them from their official channels and observe their own licens
 `patches/` 下的每个脚本都针对该版本；`tools/replay_bootstrap.py` 可证明整套补丁精确重建该构建。
 `patches/files/` 下在上游也存在的文件，是带有本项目改动的 llama.cpp 文件，按 llama.cpp 的 MIT 许可分发。
 
-`bootstrap/UPSTREAM.json` 记录本项目改动的那 159 个文件的来源：被修改的 119 个各记其**上游**版本的
-Git blob SHA-1 与 SHA-256，159 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
+`bootstrap/UPSTREAM.json` 记录本项目改动的那 176 个文件的来源：被修改的 119 个各记其**上游**版本的
+Git blob SHA-1 与 SHA-256，176 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
 所以它据以重建的内容是上游的——这是构造保证，不是声明。
+
+### hipfire —— Apache License 2.0，Copyright the hipfire authors
+
+fork 中的 gated delta net 预填充内核 `ggml/src/ggml-cuda/gdn-wy.cuh`（随 `patches/files/` 提供）改编自
+hipfire 的 `kernels/src/gated_delta_chunk_wmma.gfx1151.hip`
+（[`warpfront/hipfire`](https://github.com/warpfront/hipfire)，v0.4.2.1-13-gbfb90b9），经由下面 ExLlamaV3 移植中的副本；
+文件开头写明了改动。它仍按 Apache License 2.0 分发：许可全文与 hipfire 的 NOTICE 位于 fork 的
+`licenses/LICENSE-hipfire-APACHE` 和 `licenses/NOTICE-hipfire`，应用把两者一起装在 `runtime\licenses` 里。
+
+### ExLlamaV3 —— MIT，Copyright (c) 2025 Turboderp；其 gfx11.5 移植 —— MIT，Copyright (c) 2026 Yamz Labs
+
+fork 中 `ggml/src/ggml-cuda/vendors/kyojin/` 下的 EXL3 专家分组矩阵乘法、trellis 解码与 WMMA 辅助代码，来自
+ExLlamaV3（[`turboderp-org/exllamav3`](https://github.com/turboderp-org/exllamav3)）的 gfx11.5 移植，
+发布于 [`Yamz-Labs/kyojin`](https://github.com/Yamz-Labs/kyojin)，MIT 许可。`vendors/kyojin/README.md` 列出取用和改动的内容；
+许可全文为 `vendors/kyojin/LICENSE`，随应用装在 `runtime\licenses\LICENSE-exllamav3`。
 
 ### Jan —— Apache License 2.0，Copyright 2025 Menlo Research（https://menlo.ai）
 

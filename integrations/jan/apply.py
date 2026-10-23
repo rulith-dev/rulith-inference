@@ -32,7 +32,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.6.5'
+VERSION = '0.6.6'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -754,11 +754,11 @@ PRODUCT_WORD = re.compile(r'(?<![A-Za-z])Jan(?![A-Za-z])')
 CREDITS = {
     'en': (f"{NAME} is a build of Jan by Menlo Research (Apache-2.0), with its own inference "
            "runtime and management pages in place of Jan's engines and providers.",
-           "It runs on a pwilkin branch of llama.cpp, TheRock ROCm and Tauri. NOTICE.md in the "
-           "repository lists every licence."),
+           "It runs on llama.cpp, TheRock ROCm and Tauri. NOTICE.md and the licence texts are in "
+           "the runtime\\licenses folder of the install."),
     'zh-CN': (f"{NAME} 基于 Menlo Research 的 Jan（Apache-2.0）构建，用自己的推理运行时和管理页面"
               "取代了 Jan 的引擎与模型提供商。",
-              "底层依赖 llama.cpp 的 pwilkin 分支、TheRock ROCm 与 Tauri。完整许可见仓库中的 NOTICE.md。"),
+              "底层依赖 llama.cpp、TheRock ROCm 与 Tauri。NOTICE.md 与各许可全文位于安装目录的 runtime\\licenses 文件夹。"),
 }
 
 
