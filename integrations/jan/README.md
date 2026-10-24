@@ -21,6 +21,20 @@ python integrations/jan/apply.py src/jan     # then build Jan as its own README 
 
 Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 
+## Tests
+
+`apply.py` also applies the test overlay and installs the compaction tests. The test adapter checks the original and resulting file hashes and refuses an unexpected base. Re-running it is safe.
+
+Run the complete Jan test command from `src/jan` after applying the overlay:
+
+```bash
+npm test
+# or, when Yarn is provided by Corepack:
+corepack yarn test
+```
+
+The tests cover this product's fixed backend, settings, attachment errors, inline project documents, branding and updater, alongside Jan's remaining tests. Removed Jan UI features are checked as absent.
+
 ## What it installs
 
 | File | |
@@ -41,7 +55,7 @@ Re-running it is safe: every edit is anchored and becomes a no-op once applied.
 | `strixllama.css` | a bounded log viewport that pauses auto-follow when you scroll up |
 | `rulith-theme.css` | the palette, type and corners for the whole app (below) |
 | `strixllama.rs` | one Tauri command that pipes a bounded JSON request to `tools/manager.py` — no shell, no arbitrary executable — one that reads a dropped document's bytes with Jan's own document parser (`tauri-plugin-rag`) through a temporary file it removes again, and one that writes a file the page saves into the Downloads folder, numbering the name when it is taken |
-| `tests/compact.test.ts` | the unit tests of `compact.ts`, run with the web app's vitest beside the module (not copied by `apply.py`) |
+| `tests/compact.test.ts`, `tests/overlay.json` | compaction regression tests and the pinned Jan tests adapted to this product, installed by `apply_test_overlay.py` |
 | `locales/{en,zh-CN}/strixllama.json` | English and Chinese |
 | `icons/` | the application icon (white R on a blue gradient tile) and its SVG, rendered by `make_icons.py` (Pillow + numpy) |
 

@@ -63,7 +63,7 @@
   "src/prefix.h",
   "tests/test-backend-sched-ring.cpp"
  ],
- "fork_revision": "f96350fb9288134b783023f9bb14b6cf17de0837",
+ "fork_revision": "ee07b49d083716fe316a5f66c35c8a2ccc8184eb",
  "order": [
   "apply_common",
   "apply_docs",
@@ -173,7 +173,7 @@
   "common/parsers/muse-glimmer.cpp": "2f3e37e4464c1db9c3a4c36f94720a1dd6f43059af051c51509e86d8606d2816",
   "common/parsers/parsers.cpp": "4a523c9c321f3d4897d7fc7d07d3a881281899482874a250fde62be41f179cb4",
   "common/parsers/qwen3-coder.cpp": "4d5eb82e6a758859612f72e0c3ba457c0e48ab34b321870c0226e70508281229",
-  "common/sampling.cpp": "f43a2b4a1bd0d8c5de686168ed62ae8462745cb7e4dcb3570253c1feabb200b4",
+  "common/sampling.cpp": "c9993ee52d2802a8dd2433ef493bc96983fd049719fc86a88fc8a03a6307f839",
   "common/sampling.h": "51e73068ba2c845251a019cfdf5678295a23f86ad88c530380a9e7e047327ed3",
   "common/speculative.cpp": "e546fdbefb02c0f44f315f1c418500fe42a5d00d753b526361362b370bf67a51",
   "common/speculative.h": "32d535b449c36a187f8940815da6e361bdbff30fefb03218bc855f5e5a1d5400",
@@ -212,7 +212,7 @@
   "ggml/src/ggml-cuda/gdn-wy.cuh": "64d2d1d80cd617cdd048b773dd132055075501edf68b03b730472ad5bc31fb62",
   "ggml/src/ggml-cuda/getrows.cu": "7be8687eb97cfa164e946686fd1c5a36695062467a92b76a6ff5625cd016727f",
   "ggml/src/ggml-cuda/getrows.cuh": "6b43591b67f8eba8f8ac0584a611f972fd20c3bd36569502a101767414ac6bfa",
-  "ggml/src/ggml-cuda/ggml-cuda.cu": "6c1d7a0f8ee60d742b44f97996f4d918ae22e4294e76e55ae5a0724c404178fa",
+  "ggml/src/ggml-cuda/ggml-cuda.cu": "34619e641bce8e72818be1bedb079c624a27fa124e0a422b28f962a670d73da3",
   "ggml/src/ggml-cuda/hc-cn.cu": "5eac2761d8291c28cc77b955d71cb909d82ad3a5ec92296a6e6e71bf347e1758",
   "ggml/src/ggml-cuda/hc-cn.cuh": "489a6b71dd2ed41609a481b4ede3b15369fe5bee8332fd4b1ce338dad49fe422",
   "ggml/src/ggml-cuda/hc-match.inc": "c38edcb25dca4e40a871ac733f458684e892743fb45df83da523ee8bc3f66ccc",

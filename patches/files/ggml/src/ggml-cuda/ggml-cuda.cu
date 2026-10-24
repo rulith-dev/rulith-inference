@@ -3504,6 +3504,7 @@ struct strix_poll_state {
     cudaEvent_t          ev    = nullptr;
     bool                 ok    = true;
     bool                 dirty = true;     // work went in since the stream was last seen done
+    bool                 dma   = false;    // a DMA copy to the host went in: the poll does not see it end
 };
 
 static strix_poll_state * strix_poll_get(cudaStream_t stream) {
@@ -3529,6 +3530,51 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
 
+#if defined(GGML_USE_HIP)
+// strixllama: with the polling sync, a copy to the host must end before the poll's mark: the mark is a kernel of the
+// stream, and seeing it run did not mean a DMA copy queued before it had landed (0.6.7: the 2-3 MB of logits of an MTP
+// verification were read partly old, and under sampling EXL3 3.05 answered in garbled text). So a copy into pinned host
+// memory is a kernel of the same queue, every store at system scope; any other copy to the host makes the next sync the
+// runtime's (strix_poll_state::dma)
+static __global__ void strix_d2h_words(const uint32_t * __restrict__ src, uint32_t * dst, const size_t n) {
+    for (size_t i = (size_t) blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (size_t) gridDim.x * blockDim.x) {
+        __hip_atomic_store(dst + i, src[i], __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+    }
+    __threadfence_system();
+}
+
+// the device address of pinned host memory at p (nullptr: not pinned host memory)
+static void * strix_pinned_device_ptr(void * p) {
+    hipPointerAttribute_t attr = {};
+    if (hipPointerGetAttributes(&attr, p) != hipSuccess) {
+        (void) hipGetLastError();
+        return nullptr;
+    }
+    return attr.type == hipMemoryTypeHost ? attr.devicePointer : nullptr;
+}
+
+// true when the copy went in as a kernel
+static bool strix_poll_d2h(cudaStream_t stream, void * dst, const void * src, const size_t size) {
+    if (strix_poll_sync_mode() == 0) {
+        return false;
+    }
+    static const bool kernel_env = !getenv("STRIX_POLL_D2H_KERNEL") || atoi(getenv("STRIX_POLL_D2H_KERNEL")) != 0;
+    void * d = kernel_env && size % 4 == 0 && ((uintptr_t) dst) % 4 == 0 && ((uintptr_t) src) % 4 == 0 ? strix_pinned_device_ptr(dst) : nullptr;
+    if (d == nullptr) {
+        strix_poll_get(stream)->dma = true;
+        return false;
+    }
+    const size_t n = size / 4;
+    if (n == 0) {
+        return true;
+    }
+    const unsigned blocks = (unsigned) std::min<size_t>((n + 255) / 256, 1024);
+    strix_d2h_words<<<blocks, 256, 0, stream>>>((const uint32_t *) src, (uint32_t *) d, n);
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+#endif // defined(GGML_USE_HIP)
+
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
@@ -3536,6 +3582,11 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
     strix_poll_dirty(cuda_ctx->stream());
+#if defined(GGML_USE_HIP)
+    if (strix_poll_d2h(cuda_ctx->stream(), data, (const char *) tensor->data + offset, size)) {
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
     CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
 }
 
@@ -3559,6 +3610,9 @@ static void ggml_backend_cuda_get_tensor_2d_async(ggml_backend_t backend, const 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
     strix_poll_dirty(cuda_ctx->stream());
+    if (strix_poll_sync_mode() != 0) {
+        strix_poll_get(cuda_ctx->stream())->dma = true;   // a DMA copy to the host: the next sync is the runtime's
+    }
     CUDA_CHECK(cudaMemcpy2DAsync(
         data, stride_data, (const char *) tensor->data + offset, stride_tensor, size, n_copies, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
 }
@@ -3676,13 +3730,14 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
             return;                             // nothing went in since the stream was last seen done
         }
 #if defined(GGML_USE_HIP)
-        if ((mode == 1 || ggml_cuda_strix_ab()) && strix_poll_wait(cuda_ctx->stream(), st)) {
+        if (!st->dma && (mode == 1 || ggml_cuda_strix_ab()) && strix_poll_wait(cuda_ctx->stream(), st)) {
             st->dirty = false;
             return;
         }
 #endif
         CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
         st->dirty = false;
+        st->dma   = false;
         return;
     }
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));

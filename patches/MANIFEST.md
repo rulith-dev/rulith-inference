@@ -24,6 +24,21 @@ to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
 
+### 0.6.8: copies to the host under the polling sync (fork `ee07b49d0`)
+
+- `ggml/src/ggml-cuda/ggml-cuda.cu`: the polling sync of 0.4.9 (`STRIX_POLL_SYNC`) launches a mark kernel and spins on
+  the number it writes to host memory. Seeing the mark did not mean that a DMA copy queued before it had landed: the
+  2-3 MB of logits of an MTP verification were read partly as the previous step left them (a contiguous stretch of
+  constant values, ~6982), and sampling picked from them - EXL3 3.05 answered in garbled text with MTP and sampling,
+  once 0.6.7 had made its verification steps fast enough. A `get_tensor_async` into pinned host memory
+  (`hipPointerGetAttributes`: `hipMemoryTypeHost`) now runs `strix_d2h_words` on the same stream, every store at
+  system scope, so the mark comes after it; any other copy to the host (pageable memory, 2D) makes the next sync
+  `hipStreamSynchronize`. `STRIX_POLL_D2H_KERNEL=0`: the DMA copy and the runtime's sync. Values unchanged (UD f16 /
+  MTP and EXL3 probes bitwise vs 0.6.7); MTP-off decode 33.7-33.9 vs 33.4-34.0 tok/s, the DMA copy with the runtime's
+  sync 32.4-33.2.
+- `common/sampling.cpp` (dev): `STRIX_SAMPLE_DUMP=1` prints each verified row's top logits, its draft and the sampled
+  token on the exact-match path (`STRIX_SPEC_SAMPLING=0` routes sampling there).
+
 ### 0.6.7: decode on streaming rings (fork `f96350fb9`)
 
 - `ggml/src/ggml-cuda/mul-mat-had.cu`: the dense EXL3 products of a decode step (one row, and the 2-4 rows of an MTP

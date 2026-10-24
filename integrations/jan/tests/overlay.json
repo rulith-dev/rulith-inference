@@ -1,0 +1,340 @@
+[
+  {
+    "file": "web-app/src/containers/__tests__/DropdownModelProvider.displayName.test.tsx",
+    "before_sha256": "dc5584a8c2d0b932e40c1e1c95ae47db4d11f8888cc23ef6e98fa9672c61720d",
+    "after_sha256": "050e10d59409d2f0457bca11e033e432c99a3b0674021405eaef8ff48ed130d5",
+    "edits": [
+      [
+        "      provider: 'llamacpp',\n",
+        "      provider: 'strixllama',\n"
+      ],
+      [
+        "    // Reset the mock for each test\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: mockProviders,\n      selectedProvider: 'llamacpp',\n      selectedModel: mockSelectedModel,\n      getProviderByName: vi.fn((name: string) =>\n        mockProviders.find((p: ModelProvider) => p.provider === name)\n",
+        "    // Reset the mock for each test\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: mockProviders,\n      selectedProvider: 'strixllama',\n      selectedModel: mockSelectedModel,\n      getProviderByName: vi.fn((name: string) =>\n        mockProviders.find((p: ModelProvider) => p.provider === name)\n"
+      ],
+      [
+        "      providers: mockProviders,\n      selectedProvider: 'llamacpp',\n      selectedModel: mockProviders[0].models[2], // model3 without displayName\n",
+        "      providers: mockProviders,\n      selectedProvider: 'strixllama',\n      selectedModel: mockProviders[0].models[2], // model3 without displayName\n"
+      ],
+      [
+        "    const mockSelectModelProvider = vi.fn()\n\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: mockProviders,\n      selectedProvider: 'llamacpp',\n      selectedModel: mockSelectedModel,\n      getProviderByName: vi.fn((name: string) =>\n        mockProviders.find((p: ModelProvider) => p.provider === name)\n      ),\n",
+        "    const mockSelectModelProvider = vi.fn()\n\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: mockProviders,\n      selectedProvider: 'strixllama',\n      selectedModel: mockSelectedModel,\n      getProviderByName: vi.fn((name: string) =>\n        mockProviders.find((p: ModelProvider) => p.provider === name)\n      ),\n"
+      ],
+      [
+        "      providers: mockProviders,\n      selectedProvider: 'llamacpp',\n      selectedModel: mockProviders[0].models[1], // model2 with displayName \"Short Name\"\n",
+        "      providers: mockProviders,\n      selectedProvider: 'strixllama',\n      selectedModel: mockProviders[0].models[1], // model2 with displayName \"Short Name\"\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/containers/__tests__/SettingsMenu.test.tsx",
+    "before_sha256": "1ce702d6d68d7353a3c0395d5af7e145b39bd724b90e0cc2f16269c6aaa7c49d",
+    "after_sha256": "3ad5f75fa3b618ffab696d90db877d2bd47f464251777498c405504401655a84",
+    "edits": [
+      [
+        "describe('SettingsMenu', () => {\n  const mockNavigate = vi.fn()\n  const mockMatches = [\n    {\n      routeId: '/settings/general',\n      params: {},\n    },\n  ]\n\n",
+        "describe('Rulith SettingsMenu', () => {\n"
+      ],
+      [
+        "\n    vi.mocked(useNavigate).mockReturnValue(mockNavigate)\n    vi.mocked(useMatches).mockReturnValue(mockMatches)\n",
+        "    vi.mocked(useNavigate).mockReturnValue(vi.fn())\n    vi.mocked(useMatches).mockReturnValue([])\n"
+      ],
+      [
+        "        { provider: 'openai', active: true, models: [] },\n        { provider: 'llama.cpp', active: true, models: [] },\n",
+        "        { provider: 'strixllama', active: true, models: [] },\n        { provider: 'openai', active: true, models: [] },\n        { provider: 'anthropic', active: false, models: [] },\n"
+      ],
+      [
+        "  it('renders all menu items', () => {\n",
+        "  it.each([\n    ['general', '/settings/general'],\n    ['appearance', '/settings/interface'],\n    ['assistants', '/settings/assistant'],\n    ['attachments', '/settings/attachments'],\n    ['web_search', '/settings/web-search'],\n    ['keyboardShortcuts', '/settings/shortcuts'],\n    ['privacy', '/settings/privacy'],\n  ])('keeps the %s settings link', (key, href) => {\n"
+      ],
+      [
+        "\n    expect(screen.getByText('common:general')).toBeInTheDocument()\n    expect(screen.getByText('common:appearance')).toBeInTheDocument()\n    expect(screen.getByText('common:privacy')).toBeInTheDocument()\n",
+        "    expect(screen.getByRole('link', { name: `common:${key}` })).toHaveAttribute('href', href)\n"
+      ],
+      [
+        "  it('renders core settings links', () => {\n",
+        "  it.each(['/settings/general', '/settings/providers/', '/settings/providers/openai'])(\n    'does not offer a second backend on %s', (routeId) => {\n      vi.mocked(useMatches).mockReturnValue([{ routeId, params: { providerName: 'openai' }, search: {} }])\n      render(<SettingsMenu />)\n      for (const provider of ['strixllama', 'openai', 'anthropic']) {\n        expect(screen.queryByTestId(`provider-avatar-${provider}`)).not.toBeInTheDocument()\n      }\n      expect(screen.queryByText('common:hiddenProviders')).not.toBeInTheDocument()\n    }\n  )\n\n  it('keeps Jan integrations and the second local server out of the settings', () => {\n"
+      ],
+      [
+        "    expect(screen.getByText('common:keyboardShortcuts')).toBeInTheDocument()\n    expect(screen.getByText('common:assistants')).toBeInTheDocument()\n    expect(screen.getByText('common:local_api_server')).toBeInTheDocument()\n    expect(screen.getByText('common:privacy')).toBeInTheDocument()\n  })\n\n  it('renders integrations links', () => {\n    render(<SettingsMenu />)\n    expect(screen.getByText('common:mcp-servers')).toBeInTheDocument()\n    expect(screen.getByText('common:claude_code')).toBeInTheDocument()\n  })\n\n  it('shows provider expansion chevron when providers are active', () => {\n    render(<SettingsMenu />)\n\n    // There should be at least one button (the chevron)\n    const chevronButtons = screen.getAllByRole('button')\n    expect(chevronButtons.length).toBeGreaterThan(0)\n  })\n\n  it('shows expanded providers by default', () => {\n    render(<SettingsMenu />)\n\n    // Providers ARE expanded by default (expandedProviders starts as true)\n    expect(screen.getByTestId('provider-avatar-openai')).toBeInTheDocument()\n  })\n\n  it('collapses disabled providers section when toggle is clicked', async () => {\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: [\n        { provider: 'openai', active: true, models: [] },\n        { provider: 'anthropic', active: false, models: [] },\n      ],\n      addProvider: vi.fn(),\n    })\n\n    const user = userEvent.setup()\n    render(<SettingsMenu />)\n\n    // Disabled section is expanded by default — anthropic is visible\n    expect(screen.getByTestId('provider-avatar-anthropic')).toBeInTheDocument()\n\n    // Click the toggle to collapse the disabled section\n    const toggleButton = screen.getByText('common:hiddenProviders')\n    await user.click(toggleButton)\n\n    // After collapsing, anthropic should be hidden\n    expect(screen.queryByTestId('provider-avatar-anthropic')).not.toBeInTheDocument()\n  })\n\n  it('auto-expands providers when on provider route', () => {\n    vi.mocked(useMatches).mockReturnValue([\n      {\n        routeId: '/settings/providers/$providerName',\n        params: { providerName: 'openai' },\n      },\n    ])\n\n    render(<SettingsMenu />)\n\n    expect(screen.getByTestId('provider-avatar-openai')).toBeInTheDocument()\n  })\n\n  it('highlights active provider in submenu', () => {\n    vi.mocked(useMatches).mockReturnValue([\n      {\n        routeId: '/settings/providers/$providerName',\n        params: { providerName: 'openai' },\n      },\n    ])\n\n    render(<SettingsMenu />)\n\n    const openaiProvider = screen\n      .getByTestId('provider-avatar-openai')\n      .closest('div')\n    expect(openaiProvider).toBeInTheDocument()\n  })\n\n  it('navigates to provider when provider is clicked', async () => {\n    const user = userEvent.setup()\n    render(<SettingsMenu />)\n\n    // Providers are expanded by default, click directly on a provider\n    const openaiProvider = screen\n      .getByTestId('provider-avatar-openai')\n      .closest('div[class*=\"cursor-pointer\"]')\n    await user.click(openaiProvider!)\n\n    expect(mockNavigate).toHaveBeenCalled()\n  })\n\n  it('hides llama.cpp during setup remote provider step', () => {\n    vi.mocked(useMatches).mockReturnValue([\n      {\n        routeId: '/settings/providers/',\n        params: {},\n        search: { step: 'setup_remote_provider' },\n      },\n    ])\n\n    render(<SettingsMenu />)\n\n    // openai should be visible during remote provider setup\n    expect(screen.getByTestId('provider-avatar-openai')).toBeInTheDocument()\n\n    // llama.cpp should have 'hidden' class during setup_remote_provider step\n    const llamaCpp = screen.getByTestId('provider-avatar-llama.cpp').closest('div[class*=\"cursor-pointer\"]')\n    expect(llamaCpp?.className).toContain('hidden')\n  })\n\n  it('shows inactive providers in disabled section', () => {\n    vi.mocked(useModelProvider).mockReturnValue({\n      providers: [\n        { provider: 'openai', active: true, models: [] },\n        { provider: 'anthropic', active: false, models: [] },\n      ],\n      addProvider: vi.fn(),\n    })\n\n    render(<SettingsMenu />)\n\n    // Active provider shown normally\n    expect(screen.getByTestId('provider-avatar-openai')).toBeInTheDocument()\n    // Inactive provider shown in the disabled section (expanded by default)\n    expect(screen.getByTestId('provider-avatar-anthropic')).toBeInTheDocument()\n    // Disabled section label is shown\n    expect(screen.getByText('common:hiddenProviders')).toBeInTheDocument()\n",
+        "    expect(screen.queryByText('common:local_api_server')).not.toBeInTheDocument()\n    expect(screen.queryByText('common:integrations')).not.toBeInTheDocument()\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/routes/settings/__tests__/privacy.test.tsx",
+    "before_sha256": "17cf7ca19e29f68f070b18d33b0ce68ba1039c04194fd353cbde435f32a1e462",
+    "after_sha256": "e61930b082beeee58c5e77388ade9183f10fc9cd9da6dabbb5677f1d60ec22be",
+    "edits": [
+      [
+        "import { Route as PrivacyRoute } from '../privacy'\n\n",
+        "import { Route as PrivacyRoute } from '../privacy'\nimport { useAnalytic } from '@/hooks/useAnalytic'\nimport posthog from 'posthog-js'\n\n"
+      ],
+      [
+        "  useAnalytic: () => ({\n",
+        "  useAnalytic: vi.fn(() => ({\n"
+      ],
+      [
+        "    setProductAnalytic: vi.fn(),\n  }),\n}))\n",
+        "    setProductAnalytic: vi.fn(),\n  })),\n}))\n"
+      ],
+      [
+        "describe('Privacy Settings Route', () => {\n  beforeEach(() => {\n    vi.clearAllMocks()\n  })\n",
+        "describe('Rulith privacy settings', () => {\n  beforeEach(() => vi.clearAllMocks())\n"
+      ],
+      [
+        "  it('should render the privacy settings page', () => {\n",
+        "  it.each([false, true])('has no analytics opt-in, including a stored setting of %s', (enabled) => {\n    const setProductAnalytic = vi.fn()\n    vi.mocked(useAnalytic).mockReturnValue({ productAnalytic: enabled, setProductAnalytic })\n"
+      ],
+      [
+        "    render(<Component />)\n\n    expect(screen.getByTestId('header-page')).toBeInTheDocument()\n",
+        "    render(<Component />)\n    expect(screen.getByTestId('header-page')).toBeInTheDocument()\n"
+      ],
+      [
+        "    expect(screen.getByText('common:settings')).toBeInTheDocument()\n  })\n\n  it('should render analytics card with header', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    expect(screen.getByTestId('card')).toBeInTheDocument()\n    expect(screen.getByTestId('card-header')).toBeInTheDocument()\n    expect(screen.getByText('settings:privacy.analytics')).toBeInTheDocument()\n  })\n\n  it('should render analytics switch', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    expect(analyticsSwitch).toBeInTheDocument()\n    expect(analyticsSwitch).not.toBeChecked()\n  })\n\n  it('should handle analytics toggle when enabling', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    expect(analyticsSwitch).toBeInTheDocument()\n    \n    // Test that switch is interactive\n    fireEvent.click(analyticsSwitch)\n    expect(analyticsSwitch).toBeInTheDocument()\n  })\n\n  it('should handle analytics toggle when disabling', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    expect(analyticsSwitch).toBeInTheDocument()\n    \n    // Test that switch is interactive\n    fireEvent.click(analyticsSwitch)\n    expect(analyticsSwitch).toBeInTheDocument()\n  })\n\n  it('should have proper layout structure', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const headerPage = screen.getByTestId('header-page')\n    expect(headerPage).toBeInTheDocument()\n    \n    const settingsMenu = screen.getByTestId('settings-menu')\n    expect(settingsMenu).toBeInTheDocument()\n  })\n\n  it('should render switch in correct checked state based on productAnalytic', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    expect(analyticsSwitch).toBeInTheDocument()\n    // Test that switch has some state\n    expect(analyticsSwitch).toHaveAttribute('type', 'checkbox')\n  })\n\n  it('should render switch in unchecked state when productAnalytic is false', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    expect(analyticsSwitch).toBeInTheDocument()\n    expect(analyticsSwitch).toHaveAttribute('type', 'checkbox')\n  })\n\n  it('should call translation function with correct keys', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    // Test that translations are rendered\n    expect(screen.getByText('common:settings')).toBeInTheDocument()\n    expect(screen.getByText('settings:privacy.analytics')).toBeInTheDocument()\n  })\n\n  it('should handle switch state change properly', () => {\n    const Component = PrivacyRoute.component as React.ComponentType\n    render(<Component />)\n\n    const analyticsSwitch = screen.getByTestId('switch')\n    \n    // Test that switch can be toggled\n    fireEvent.click(analyticsSwitch)\n    expect(analyticsSwitch).toBeInTheDocument()\n    \n    // Test that switch can be toggled again\n    fireEvent.click(analyticsSwitch)\n    expect(analyticsSwitch).toBeInTheDocument()\n",
+        "    expect(screen.queryByTestId('switch')).not.toBeInTheDocument()\n    expect(screen.queryByText('settings:privacy.analytics')).not.toBeInTheDocument()\n    expect(posthog.opt_in_capturing).not.toHaveBeenCalled()\n    expect(setProductAnalytic).not.toHaveBeenCalled()\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/routes/settings/__tests__/general.test.tsx",
+    "before_sha256": "8b63de929c9573b29017c95e7a8fc2730bdaf8f37ee37fd4027ac3f769ef527d",
+    "after_sha256": "673a1a2c5b6de50d7d0a58fd647fbe54f34a07a985f6605566493a97a0f2be6a",
+    "edits": [
+      [
+        "  it('should render huggingface token input', async () => {\n",
+        "  it('keeps model download credentials out of general settings', async () => {\n"
+      ],
+      [
+        "    await act(async () => {\n      render(<Component />)\n    })\n\n    const input = screen.getByTestId('input')\n    expect(input).toBeInTheDocument()\n    expect(input).toHaveValue('test-token')\n",
+        "    await act(async () => { render(<Component />) })\n    expect(screen.queryByDisplayValue('test-token')).not.toBeInTheDocument()\n    expect(screen.queryByTestId('input')).not.toBeInTheDocument()\n"
+      ],
+      [
+        "  })\n\n  it('should handle spell check toggle', async () => {\n",
+        "  })\n  it('should handle spell check toggle', async () => {\n"
+      ],
+      [
+        "  it('should handle huggingface token change', async () => {\n",
+        "  it('keeps the update check available', async () => {\n"
+      ],
+      [
+        "    await act(async () => {\n      render(<Component />)\n    })\n\n    const input = screen.getByTestId('input')\n    expect(input).toBeInTheDocument()\n\n    // Test that input is interactive\n    await act(async () => {\n      fireEvent.change(input, { target: { value: 'new-token' } })\n    })\n    expect(input).toBeInTheDocument()\n",
+        "    await act(async () => { render(<Component />) })\n    const button = screen.getAllByTestId('button').find(b => b.textContent?.includes('checkForUpdates'))\n    expect(button).toBeDefined()\n    await act(async () => { fireEvent.click(button!) })\n    expect(mockCheckForUpdate).toHaveBeenCalled()\n"
+      ],
+      [
+        "  })\n\n  it('should handle check for updates', async () => {\n",
+        "  })\n  it('should handle check for updates', async () => {\n"
+      ],
+      [
+        "  it('should render external links', async () => {\n",
+        "  it('does not show Jan company links in this product', async () => {\n"
+      ],
+      [
+        "    await act(async () => {\n      render(<Component />)\n    })\n\n    // Check for external links\n    const links = screen.getAllByRole('link')\n    expect(links.length).toBeGreaterThan(0)\n",
+        "    await act(async () => { render(<Component />) })\n    expect(screen.queryByRole('link', { name: /jan|menlo/i })).not.toBeInTheDocument()\n    expect(screen.getByText('v1.0.0')).toBeInTheDocument()\n"
+      ],
+      [
+        "  })\n\n  it('should handle logs window opening', async () => {\n",
+        "  })\n  it('should handle logs window opening', async () => {\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/routes/settings/__tests__/interface.test.tsx",
+    "before_sha256": "a7effabe9aac8c90e1192b99eb399967aa4b376cc98f750140b1f00e795b3ccf",
+    "after_sha256": "5d5cf8fc9d3a8891b89e8ac9d9b5c5a11aa42e0e917f50bc1caa35fdb2bc3de5",
+    "edits": [
+      [
+        "    expect(screen.getByTestId('accent-color-picker')).toBeInTheDocument()\n",
+        "    expect(screen.queryByTestId('accent-color-picker')).not.toBeInTheDocument()\n    expect(screen.getByTestId('notification-position-switcher')).toBeInTheDocument()\n"
+      ],
+      [
+        "  it('should have proper responsive layout classes', () => {\n",
+        "  it('keeps the product appearance controls and omits the custom palette', () => {\n"
+      ],
+      [
+        "\n    const cardItems = screen.getAllByTestId('card-item')\n\n    // Check that some card items have responsive classes\n    const responsiveItems = cardItems.filter(item =>\n      item.className?.includes('flex-col') ||\n      item.className?.includes('sm:flex-row')\n    )\n\n    expect(responsiveItems.length).toBeGreaterThan(0)\n",
+        "    expect(screen.getByText('settings:interface.showTokenSpeed')).toBeInTheDocument()\n    expect(screen.getByText('settings:interface.coloredUserBubble')).toBeInTheDocument()\n    expect(screen.queryByText('Accent color')).not.toBeInTheDocument()\n"
+      ],
+      [
+        "  })\n\n  it('should render main layout structure', () => {\n",
+        "  })\n  it('should render main layout structure', () => {\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/routes/__tests__/index.test.tsx",
+    "before_sha256": "d568d716bb75afeef853298e2d5736f6e19a586b3792c3a2131ce2ccdf0b3c18",
+    "after_sha256": "bd7fe3e1de40b5a3b013d22785a9919f4a60d447266ff77e60fa8ff9b5e93fbe",
+    "edits": [
+      [
+        "vi.mock('@/containers/SetupScreen', () => ({\n",
+        "vi.mock('@/components/strixllama/Welcome', () => ({\n"
+      ],
+      [
+        "  it('renders SetupScreen when no valid providers exist', () => {\n",
+        "  it('renders Welcome when no valid providers exist', () => {\n"
+      ],
+      [
+        "  it('renders SetupScreen when predefined provider has no api key and no models', () => {\n",
+        "  it('renders Welcome when predefined provider has no api key and no models', () => {\n"
+      ],
+      [
+        "  it('renders SetupScreen for custom provider with no models', () => {\n",
+        "  it('renders Welcome for custom provider with no models', () => {\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/hooks/__tests__/useAssistant.test.ts",
+    "before_sha256": "5e1397a445447990411510a1788f43e923ab2a4a0d0ff1d27df68ed92b5ba735",
+    "after_sha256": "2dc403b2aae9146a27e854be17978062f9c93568974ef8c2602e0d37781633c6",
+    "edits": [
+      [
+        "    expect(result.current.currentAssistant.name).toBe('Jan')\n    expect(result.current.currentAssistant.avatar).toBe('👋')\n",
+        "    expect(result.current.currentAssistant.name).toBe('Rulith Inference')\n    expect(result.current.currentAssistant.avatar).toBe('🦉')\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/hooks/__tests__/useReleaseNotes.test.ts",
+    "before_sha256": "2b816290cee477b7c1d835f5d2171f3f5a6f7a74dccf78e8516fffc707efde09",
+    "after_sha256": "92dcc112878ab03ee584a8b71f71209f205142855d9ea7caa53a6a6686ccce0b",
+    "edits": [
+      [
+        "        'https://api.github.com/repos/janhq/jan/releases'\n",
+        "        'https://api.github.com/repos/rulith-dev/strixllama/releases'\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/services/core/__tests__/tauri.test.ts",
+    "before_sha256": "2ed91c7499e8d1f03bd437a0eb1728515a96e9cd9497af42104308372d95be30",
+    "after_sha256": "53041eefab9caf999e518ee436f150a950f5950b3dfad2d6f95f6408d4860e09",
+    "edits": [
+      [
+        "      expect(exts.every((e) => e.extensionInstance)).toBe(true)\n      expect(exts.map((e) => e.name)).toContain('@janhq/llamacpp-extension')\n    })\n",
+        "      expect(exts.every((e) => e.extensionInstance)).toBe(true)\n      expect(exts.map((e) => e.name)).toContain('@janhq/assistant-extension')\n      expect(exts.map((e) => e.name)).not.toContain('@janhq/llamacpp-extension')\n    })\n"
+      ],
+      [
+        "      expect(mockInvoke).not.toHaveBeenCalled()\n      expect(exts.map((e) => e.name)).toContain('@janhq/llamacpp-extension')\n    })\n",
+        "      expect(mockInvoke).not.toHaveBeenCalled()\n      expect(exts.map((e) => e.name)).toContain('@janhq/assistant-extension')\n      expect(exts.map((e) => e.name)).not.toContain('@janhq/llamacpp-extension')\n    })\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/utils/__tests__/formatDate.test.ts",
+    "before_sha256": "0d87c7890a5c6dbc4eb7ed8806b0d85ba8edb384589a7b036e3f89769972aaa7",
+    "after_sha256": "4207047f63e588a9c7459ce33681dbb386cd5cd384c698eed1526d5807de0e92",
+    "edits": [
+      [
+        "    // Test with very old and very new dates\n    const oldDate = '1900-01-01T00:00:00Z'\n    const futureDate = '2099-12-31T23:59:59Z'\n",
+        "    // Test with very old and very new dates\n    const oldDate = new Date(1900, 0, 1, 12)\n    const futureDate = '2099-12-31T23:59:59Z'\n"
+      ],
+      [
+        "  it('date-only formatting includes a year and omits time across edge cases', () => {\n    const oldDate = '1900-01-01T00:00:00Z'\n    const formatted = formatDate(oldDate, { includeTime: false })\n",
+        "  it('date-only formatting includes a year and omits time across edge cases', () => {\n    const oldDate = new Date(1900, 0, 1, 12)\n    const formatted = formatDate(oldDate, { includeTime: false })\n"
+      ]
+    ]
+  },
+  {
+    "file": "extensions/assistant-extension/src/index.test.ts",
+    "before_sha256": "a4fdeb80aee7ed36c9cce8db65732031454895de72b35d86d0e29b2705548167",
+    "after_sha256": "263c40b742fad5932e163963bdde22b081b6f27e126dcdbc9aff29f6ccf908cc",
+    "edits": [
+      [
+        "    expect(result[0].name).toBe('Jan')\n",
+        "    expect(result[0].name).toBe('Rulith Inference')\n"
+      ],
+      [
+        "    expect(seeded.parameters).toEqual({\n      temperature: 0.7,\n      top_k: 20,\n      top_p: 0.8,\n      repeat_penalty: 1.12,\n    })\n  })\n\n  it('does not overwrite an existing persisted assistant on load', async () => {\n",
+        "    expect(seeded.parameters).toEqual({\n      temperature: 0.7,\n      top_k: 20,\n      top_p: 0.8,\n    })\n  })\n\n  it('does not overwrite an existing persisted assistant on load', async () => {\n"
+      ],
+      [
+        "    expect(migrated.parameters).toEqual({\n      temperature: 0.7,\n      top_k: 20,\n      top_p: 0.8,\n      repeat_penalty: 1.12,\n    })\n  })\n\n  it('migration v3 strips the identity preamble when instructions match the verbatim v2 default', async () => {\n",
+        "    expect(migrated.parameters).toEqual({\n      temperature: 0.7,\n      top_k: 20,\n      top_p: 0.8,\n    })\n  })\n\n  it('migration v3 strips the identity preamble when instructions match the verbatim v2 default', async () => {\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/lib/__tests__/attachmentProcessing.test.ts",
+    "before_sha256": "4c666e61b77795c97b4fdeb415547c1a85c5933be492530b339aa215c58420da",
+    "after_sha256": "4fef36ee277273b0444135b3cae61c4c2e439728a9a73ed9b84d22d52178a2ce",
+    "edits": [
+      [
+        "    it('falls back to embeddings when inline parsing fails', async () => {\n",
+        "    it('refuses an unreadable inline document instead of silently indexing it', async () => {\n"
+      ],
+      [
+        "      const hub = {\n        ...createMockServiceHub(),\n        rag: () => ({ parseDocument: failingParse }),\n      }\n      const doc = docAttachment({ parseMode: 'inline' })\n\n      const result = await processAttachmentsForSend({\n        attachments: [doc],\n        threadId,\n        serviceHub: hub as any,\n        parsePreference: 'auto',\n      })\n\n      // Falls back to embeddings since parsedContent is absent\n      expect(result.processedAttachments[0].injectionMode).toBe('embeddings')\n      expect(result.hasEmbeddedDocuments).toBe(true)\n",
+        "      const uploads = createMockServiceHub().uploads()\n      const hub = { uploads: () => uploads, rag: () => ({ parseDocument: failingParse }) }\n      await expect(processAttachmentsForSend({\n        attachments: [docAttachment({ parseMode: 'inline' })],\n        threadId, serviceHub: hub as any, parsePreference: 'auto',\n      })).rejects.toThrow('report.pdf could not be read: parse failed')\n      expect(uploads.ingestFileAttachment).not.toHaveBeenCalled()\n      expect(uploads.ingestFileAttachmentForProject).not.toHaveBeenCalled()\n"
+      ],
+      [
+        "    })\n\n    it('skips already-processed documents', async () => {\n",
+        "    })\n    it('skips already-processed documents', async () => {\n"
+      ],
+      [
+        "    it('forces embeddings for project files', async () => {\n      const hub = createMockServiceHub()\n      const doc = docAttachment({ parseMode: 'inline' })\n\n",
+        "    it('inlines project documents without starting an embedding engine', async () => {\n      const uploads = createMockServiceHub().uploads()\n      const hub = { uploads: () => uploads, rag: () => ({ parseDocument: vi.fn().mockResolvedValue('project text') }) }\n"
+      ],
+      [
+        "        attachments: [doc],\n        threadId,\n        projectId: 'proj-1',\n        serviceHub: hub as any,\n        parsePreference: 'auto',\n",
+        "        attachments: [docAttachment({ parseMode: 'inline' })],\n        threadId, projectId: 'proj-1', serviceHub: hub as any, parsePreference: 'auto',\n"
+      ],
+      [
+        "\n      expect(result.processedAttachments[0].injectionMode).toBe('embeddings')\n      expect(result.processedAttachments[0].id).toBe('proj-doc-1')\n    })\n  })\n",
+        "      expect(result.processedAttachments[0].injectionMode).toBe('inline')\n      expect(result.processedAttachments[0].inlineContent).toBe('project text')\n      expect(result.hasEmbeddedDocuments).toBe(false)\n      expect(uploads.ingestFileAttachmentForProject).not.toHaveBeenCalled()\n    })  })\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/lib/__tests__/attachmentProcessing.coverage.test.ts",
+    "before_sha256": "7bcc4597f24b5948e0f4beb60ea336f9f3b6bb231bb3052ff0b4402f3fa5f796",
+    "after_sha256": "470fa8635746d84616ebed544ee54867b0ccdcfa04303f7cd5c738a541838f00",
+    "edits": [
+      [
+        "  it('auto mode: no parsedContent available logs debug and defaults', async () => {\n",
+        "  it('refuses unreadable auto-mode documents', async () => {\n    const ingest = vi.fn()\n"
+      ],
+      [
+        "      uploads: () => ({\n        ingestImage: vi.fn(),\n        ingestFileAttachment: vi.fn().mockResolvedValue({ id: 'd1', size: 10, chunkCount: 1 }),\n        ingestFileAttachmentForProject: vi.fn(),\n      }),\n",
+        "      uploads: () => ({ ingestFileAttachment: ingest, ingestFileAttachmentForProject: ingest }),\n"
+      ],
+      [
+        "    const result = await processAttachmentsForSend({\n      attachments: [{ name: 'doc.txt', type: 'document' as const, path: '/doc.txt' }],\n      threadId,\n      serviceHub: hub as any,\n      parsePreference: 'auto',\n      estimateTokens: vi.fn().mockResolvedValue(50),\n    })\n    expect(result.processedAttachments[0].injectionMode).toBe('embeddings')\n  })\n})\n",
+        "    await expect(processAttachmentsForSend({\n      attachments: [{ name: 'doc.txt', type: 'document' as const, path: '/doc.txt' }],\n      threadId, serviceHub: hub as any, parsePreference: 'auto',\n    })).rejects.toThrow('doc.txt could not be read: fail')\n    expect(ingest).not.toHaveBeenCalled()\n  })})\n"
+      ]
+    ]
+  },
+  {
+    "file": "web-app/src/routes/__tests__/__root.test.tsx",
+    "before_sha256": "62e7e59784f4abdd45014ee43d55b9723c0bb95780b2e980c4193f64d4f4300b",
+    "after_sha256": "18958ad1efb80f45c130f3be4a615eeb943f77b448f55c8db37ccdc1dfb3e014",
+    "edits": [
+      [
+        "import React from 'react'\n\n",
+        "import React from 'react'\n\nvi.mock('@/components/strixllama/StrixLlamaSync', () => ({\n  StrixLlamaSync: () => <div data-testid=\"rulith-model-sync\" />,\n}))\n\n"
+      ],
+      [
+        "    expect(screen.getByTestId('data-provider')).toBeInTheDocument()\n    expect(screen.getByTestId('left-sidebar')).toBeInTheDocument()\n",
+        "    expect(screen.getByTestId('data-provider')).toBeInTheDocument()\n    expect(screen.getByTestId('rulith-model-sync')).toBeInTheDocument()\n    expect(screen.getByTestId('left-sidebar')).toBeInTheDocument()\n"
+      ],
+      [
+        "  it('renders PromptAnalytic when productAnalyticPrompt is true', () => {\n",
+        "  it('does not restore the removed analytics prompt from stored settings', () => {\n"
+      ],
+      [
+        "    expect(screen.getByTestId('prompt-analytic')).toBeInTheDocument()\n",
+        "    expect(screen.queryByTestId('prompt-analytic')).not.toBeInTheDocument()\n"
+      ],
+      [
+        "  it('renders PromptJanModel when showJanModelPrompt is true', () => {\n",
+        "  it('does not offer the removed Jan model download prompt', () => {\n"
+      ],
+      [
+        "    expect(screen.getByTestId('prompt-jan')).toBeInTheDocument()\n",
+        "    expect(screen.queryByTestId('prompt-jan')).not.toBeInTheDocument()\n"
+      ]
+    ]
+  }
+]
