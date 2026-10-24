@@ -26,8 +26,8 @@ Every script in `patches/` applies to that revision, and `tools/replay_bootstrap
 reproduces the build exactly. The files under `patches/files/` that also exist upstream are
 llama.cpp's files with this project's changes, under llama.cpp's MIT license.
 
-`bootstrap/UPSTREAM.json` records the provenance of the 176 files this project changes: for each of
-the 119 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 176 the
+`bootstrap/UPSTREAM.json` records the provenance of the 181 files this project changes: for each of
+the 119 it modifies, the Git blob SHA-1 and SHA-256 the file has *upstream*, and for all 181 the
 SHA-256 the patch set produces. The replay restores the upstream side by blob hash, so what it
 rebuilds from is upstream's content by construction rather than by assertion.
 
@@ -39,6 +39,17 @@ The gated delta net prefill kernel `ggml/src/ggml-cuda/gdn-wy.cuh` of the fork (
 copy in the ExLlamaV3 port below; the file states what was changed. It remains under the Apache
 License 2.0: the license text and hipfire's NOTICE are `licenses/LICENSE-hipfire-APACHE` and
 `licenses/NOTICE-hipfire` in the fork, and the app ships both in `runtime\licenses`.
+
+### Crucible — Apache License 2.0, Copyright 2026 jaedync
+
+`ggml/src/ggml-cuda/vendors/crucible/` of the fork holds two headers of Crucible
+([`jaedync/crucible-strix-halo`](https://github.com/jaedync/crucible-strix-halo)) as published: the EXL3
+trellis decode of a lane's weights and the LDS slot handoff between loader and compute waves. The decode-time
+EXL3 kernels of `ggml/src/ggml-cuda/mul-mat-had.cu` (the dense stream rings) and `mmh-moe.cu` (the decode-sized
+expert pipeline and its stream ring) are adapted from Crucible's; `vendors/crucible/README.md` lists what was
+taken and changed. They remain under the Apache License 2.0: the license text and Crucible's NOTICE are
+`vendors/crucible/LICENSE` and `vendors/crucible/NOTICE` in the fork, and the app ships both in
+`runtime\licenses` as `LICENSE-crucible-APACHE` and `NOTICE-crucible`.
 
 ### ExLlamaV3 — MIT, Copyright (c) 2025 Turboderp; its gfx11.5 port — MIT, Copyright (c) 2026 Yamz Labs
 
@@ -102,8 +113,8 @@ projector. Obtain them from their official channels and observe their own licens
 `patches/` 下的每个脚本都针对该版本；`tools/replay_bootstrap.py` 可证明整套补丁精确重建该构建。
 `patches/files/` 下在上游也存在的文件，是带有本项目改动的 llama.cpp 文件，按 llama.cpp 的 MIT 许可分发。
 
-`bootstrap/UPSTREAM.json` 记录本项目改动的那 176 个文件的来源：被修改的 119 个各记其**上游**版本的
-Git blob SHA-1 与 SHA-256，176 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
+`bootstrap/UPSTREAM.json` 记录本项目改动的那 181 个文件的来源：被修改的 119 个各记其**上游**版本的
+Git blob SHA-1 与 SHA-256，181 个全部记补丁集产出的 SHA-256。重放时按 blob 哈希取回上游那一侧，
 所以它据以重建的内容是上游的——这是构造保证，不是声明。
 
 ### hipfire —— Apache License 2.0，Copyright the hipfire authors
@@ -113,6 +124,16 @@ hipfire 的 `kernels/src/gated_delta_chunk_wmma.gfx1151.hip`
 （[`warpfront/hipfire`](https://github.com/warpfront/hipfire)，v0.4.2.1-13-gbfb90b9），经由下面 ExLlamaV3 移植中的副本；
 文件开头写明了改动。它仍按 Apache License 2.0 分发：许可全文与 hipfire 的 NOTICE 位于 fork 的
 `licenses/LICENSE-hipfire-APACHE` 和 `licenses/NOTICE-hipfire`，应用把两者一起装在 `runtime\licenses` 里。
+
+### Crucible —— Apache License 2.0，Copyright 2026 jaedync
+
+fork 中 `ggml/src/ggml-cuda/vendors/crucible/` 下的两个头文件原样来自 Crucible
+（[`jaedync/crucible-strix-halo`](https://github.com/jaedync/crucible-strix-halo)）：EXL3 trellis 的逐 lane 解码，
+以及 loader 与 compute wave 之间的 LDS 槽交接。`ggml/src/ggml-cuda/mul-mat-had.cu`（dense 流式 ring）与 `mmh-moe.cu`
+（decode 规模的专家流水线及其流式 ring）中的 decode 期 EXL3 内核改编自 Crucible；`vendors/crucible/README.md`
+列出取用和改动的内容。它们仍按 Apache License 2.0 分发：许可全文与 Crucible 的 NOTICE 位于 fork 的
+`vendors/crucible/LICENSE` 和 `vendors/crucible/NOTICE`，应用把两者装在 `runtime\licenses` 里，
+文件名为 `LICENSE-crucible-APACHE` 与 `NOTICE-crucible`。
 
 ### ExLlamaV3 —— MIT，Copyright (c) 2025 Turboderp；其 gfx11.5 移植 —— MIT，Copyright (c) 2026 Yamz Labs
 

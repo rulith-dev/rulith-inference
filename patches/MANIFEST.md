@@ -6,9 +6,9 @@ The fork ([rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp/tree/ru
 upstream [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) into its history, and the recipe in this
 directory turns clean upstream at the pinned revision into the fork's tree, byte for byte:
 
-- `files/` - whole files, laid down first: the 57 the fork adds, and the 13 upstream files it rewrites more than it
+- `files/` - whole files, laid down first: the 62 the fork adds, and the 14 upstream files it rewrites more than it
   keeps (a script of hunks would be no easier to read than the file);
-- `apply_<area>.py` - the fork's edits to the other 106 upstream files, one generated script per area (`docs`,
+- `apply_<area>.py` - the fork's edits to the other 105 upstream files, one generated script per area (`docs`,
   `common`, `python`, `ggml`, `ggml_cuda`, `llama`, `models`, `tests`, `tools`, `server`); each file belongs to exactly
   one script, so their order does not matter;
 - `../bootstrap/UPSTREAM.json` - the pinned upstream revision, each modified file's upstream git blob and SHA-256,
@@ -23,6 +23,43 @@ The reasons for each change are not in the generated scripts. They are in `histo
 to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements, in the order of
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
+
+### 0.6.7: decode on streaming rings (fork `f96350fb9`)
+
+- `ggml/src/ggml-cuda/mul-mat-had.cu`: the dense EXL3 products of a decode step (one row, and the 2-4 rows of an MTP
+  verification) as a wave-specialised LDS stream ring (`vendors/crucible/`, new): two loader waves move 4-tile chunks
+  of a 128-row group with 128-bit buffer loads into a 3-slot ring, eight compute waves decode their column tile; the
+  rows' input is staged behind the weights in the slot. The splits, the per-row arithmetic and the epilogue of the
+  2-4-row ring are the one-row ring's, so a verification row equals the one-row result bit for bit (dev check
+  `STRIX_MMH_RING2_CHECK=1`). 56 workgroups (in-run A/Bs: one row -0.21 ms a token against 80, verification dense
+  products 13.23 -> 12.92 ms a step). `STRIX_MMH_RING=0` / `STRIX_MMH_RING2=0` restore the GEMVs.
+- `ggml/src/ggml-cuda/mmh-moe.cu` / `.cuh` and `ggml-cuda.cu`: the routed experts of a decode-sized block (1-4 tokens)
+  as one launch on the same ring: every expert job's gate and up groups, then the down groups, a down item waiting on
+  its job's counter and computing the SwiGLU rows into LDS. Workgroups take items from a counter, heaviest first (the
+  fixed round-robin left the busiest 1.4x the mean bytes: 8.07 -> 7.67 ms a token), 64 workgroups for one token and 80
+  for 2-4. Plan, gather and the shared gate are one launch before it. `STRIX_MMH_MOE_DEC=0` / `STRIX_MMH_MOE_RING=0`
+  restore the previous paths.
+- The shared expert of such a block is one more job of that launch (its own width: 6 bits in 4.05, 5 in 3.05). Its
+  gate (sigmoid of a BF16 dot) is computed with the arithmetic of the graph's own node (`mul_mat_vec_f` at 256
+  threads), so folding leaves the gate's bits unchanged - an in-kernel dot in another order had moved one sensitive
+  chunk of the KLD below. The matcher (`ggml_cuda_mmh_moe_match_shexp`) skips the shared expert's nodes and the sum's,
+  and the reduce runs at its MUL and adds the gated output: 1662 -> 1518 dispatches a token. `STRIX_MMH_MOE_SHEXP=0`
+  keeps the graph's nodes.
+- The rings' weight loads carry the SLC|DLC cache-policy bits (data read once): GPU time a token 30.2 -> 28.6 ms
+  (EXL3 4.05, MTP off), the same results (DLC alone 29.0 ms).
+- `mul-mat-had.cu`, `mmh_prologue_row`: the input rotation of rows of 2560 < k <= 8192 values (ssm_out, the attention
+  output) in one pass, a workgroup a row; the two-pass form read x twice and the second read missed the cache. Same
+  values. `STRIX_MMH_PROW=0` keeps the two passes.
+- `cpy.cu`: an F32 copy out of a host buffer (the per-layer embedding input of a decode step, pinned in system memory)
+  runs the contiguous copy kernel instead of a DMA transfer node: ~0.3 ms -> 2 us a token, the same bytes.
+  `STRIX_CPY_HOST_KERNEL=0` keeps the transfer.
+- `gated_delta_net.cu`: the decode kernels read the state with nontemporal loads (read once a step).
+- Decode, 256-token answers in the app's default settings, two interleaved rounds: EXL3 4.05 MTP off 29.8 -> 34.5
+  tok/s, MTP on 39.6 -> 46.7 (prose) / 50.4 -> 59.9 (explanation) / 58.4 -> 66.4 (code); EXL3 3.05 MTP off 32.5 ->
+  38.4, MTP on 45.4 -> 52.1 / 46.7 -> 60.9 / 62.7 -> 77.5. Prompt reading unchanged (1350-1410 t/s at 8K / 32K).
+- Quality, decode-path KLD against BF16 (EXL3 4.05, every position one token at a time, 82 chunks of the public
+  eval): 0.025256 -> 0.025474, top-1 agreement 95.695 -> 95.773%. Prompt-path PPL at ctx 8192 unchanged: EXL3 4.05
+  2.6295, UD 2.6811. With the switches above off the UD f16 / MTP and EXL3 probes are bitwise vs 0.6.6.
 
 ### 0.6.6: prompt reading (fork `80f608c9d`)
 

@@ -95,7 +95,7 @@ gated_delta_net_cuda(const float * q,
 #pragma unroll
         for (int r = 0; r < rows_per_lane; r++) {
             const int i   = r * warp_size + lane;
-            s_shard[c][r] = curr_state[c * S_v + i];
+            s_shard[c][r] = __builtin_nontemporal_load(&curr_state[c * S_v + i]);
         }
     }
 
@@ -975,7 +975,7 @@ gated_delta_net_lazy_cuda(const float * q, const float * k, const float * v, con
     for (int c = 0; c < COLS; c++) {
 #pragma unroll
         for (int r = 0; r < rows_per_lane; r++) {
-            s_shard[c][r] = s_in[c * S_v + r * warp_size + lane];
+            s_shard[c][r] = __builtin_nontemporal_load(&s_in[c * S_v + r * warp_size + lane]);
         }
     }
 

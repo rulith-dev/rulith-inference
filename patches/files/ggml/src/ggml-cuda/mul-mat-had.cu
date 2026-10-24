@@ -22,6 +22,15 @@
 // The CPU backend always computes the fp32 grade.
 
 #include "mul-mat-had.cuh"
+#ifndef MMH_RING_AUX
+#define MMH_RING_AUX 6   // strixllama: the rings' weight loads with the SLC and DLC cache-policy bits (weights are read once). 4.05 MTP off,
+                         // interleaved: GPU 30.2 -> 28.6 ms a token, 0 (as before) / 4 (Crucible's static cache) / 1: 30.2 / 29.0 /
+                         // 31.4 ms. The same bits
+#endif
+#if defined(GGML_USE_HIP)
+#include "vendors/crucible/exl3_gemv.h"
+#include "vendors/crucible/lds_stream_ring.h"
+#endif // defined(GGML_USE_HIP)
 
 #include <string>
 #include <vector>
@@ -733,6 +742,88 @@ static __global__ void __launch_bounds__(256) mmh_prologue_wave4(const mmh_param
         const half2 h23 = __halves2half2(__float2half_rn(v[2]), __float2half_rn(v[3]));
         *(uint2 *) (xh + o) = make_uint2(mmh_as_u32(h01), mmh_as_u32(h23));
     }
+}
+
+// strixllama: mmh_prologue_wave4's one-pass form for rows longer than 128*MMH_PW_NC (the 6144-value inputs of ssm_out
+// and the attention output): a workgroup a row, wave w holding chunks w, w + 8, ... of 128 values in registers, the
+// row's maximum from the eight waves' through LDS. The two-pass form read x twice, and the second read missed the
+// cache (8192 rows x 6144 values: 201 MB). Same values, scales and layouts as mmh_prologue_wave4 (the maximum does not
+// depend on the order it is taken in). STRIX_MMH_PROW=0: the two passes
+#ifndef MMH_PROW_NC
+#define MMH_PROW_NC 8   // chunks a wave: rows of up to 8 * 128 * MMH_PROW_NC values
+#endif
+template <bool tiled>
+static __global__ void __launch_bounds__(256) mmh_prologue_row(const mmh_params p, half * __restrict__ xh,
+        float * __restrict__ rscale) {
+    __shared__ float red[8];
+    const int lane = threadIdx.x % 32;
+    const int wave = threadIdx.x / 32;
+    const int r    = blockIdx.x;
+    const int e = mmh_expert(p, r);
+    const float * src = mmh_src_row(p, r);
+    const char  * rin = mmh_rot_row(p, p.rot_in, p.rin_nb1, e);
+    const int nch = (int) (p.k / 128);
+
+    float4 xr[MMH_PROW_NC];
+    float amax = 0.0f;
+#pragma unroll
+    for (int i = 0; i < MMH_PROW_NC; ++i) {
+        const int ch = 8*i + wave;
+        if (ch < nch) {
+            const int64_t c = 128*ch + 4*lane;
+            const float4 x4 = *(const float4 *) (src + c);
+            float rv[4];
+            mmh_rot4c(rin, p.rin_f16, c, rv);
+            xr[i] = make_float4(x4.x*rv[0], x4.y*rv[1], x4.z*rv[2], x4.w*rv[3]);
+            amax = fmaxf(amax, fabsf(xr[i].x));
+            amax = fmaxf(amax, fabsf(xr[i].y));
+            amax = fmaxf(amax, fabsf(xr[i].z));
+            amax = fmaxf(amax, fabsf(xr[i].w));
+        }
+    }
+#pragma unroll
+    for (int h = 16; h > 0; h >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, h, 32));
+    }
+    if (lane == 0) {
+        red[wave] = amax;
+    }
+    __syncthreads();
+    amax = red[0];
+#pragma unroll
+    for (int w = 1; w < 8; ++w) {
+        amax = fmaxf(amax, red[w]);
+    }
+    float sc = 1.0f;
+    const float bound = amax*sqrtf((float) p.had);
+    if (bound > 0.0f && bound <= FLT_MAX) {
+        int ex;
+        frexpf(bound, &ex);
+        sc = ldexpf(1.0f, max(-100, min(100, 14 - ex)));
+    }
+    if (threadIdx.x == 0) {
+        rscale[r] = 1.0f/sc;
+    }
+    const int q = p.pos ? p.pos[r] : r;
+#pragma unroll
+    for (int i = 0; i < MMH_PROW_NC; ++i) {
+        const int ch = 8*i + wave;
+        if (ch < nch) {
+            const int64_t c = 128*ch + 4*lane;
+            float v[4] = { xr[i].x*sc, xr[i].y*sc, xr[i].z*sc, xr[i].w*sc };
+            mmh_fwht_v4(v, lane, p.had, p.hscale);
+            const int64_t o = (p.pos || p.panel_rows) ? mmh_xh_panel(p, q, c) :
+                tiled ? ((int64_t) (r/128)*(p.k/16) + c/16)*2048 + (r % 128)*16 + c % 16 : p.k*r + c;
+            const half2 h01 = __halves2half2(__float2half_rn(v[0]), __float2half_rn(v[1]));
+            const half2 h23 = __halves2half2(__float2half_rn(v[2]), __float2half_rn(v[3]));
+            *(uint2 *) (xh + o) = make_uint2(mmh_as_u32(h01), mmh_as_u32(h23));
+        }
+    }
+}
+
+static bool mmh_prow_ok(const mmh_params & p) {
+    static const bool env = !getenv("STRIX_MMH_PROW") || atoi(getenv("STRIX_MMH_PROW")) != 0;
+    return env && p.k > 128*MMH_PW_NC && p.k <= 128*8*MMH_PROW_NC && p.k % 128 == 0;
 }
 
 // strixllama: mmh_prologue_wave4's one-pass form: rows of up to 128*MMH_PW_NC values; STRIX_MMH_PWAVE1=0 keeps two
@@ -1639,6 +1730,461 @@ static __global__ void __launch_bounds__(1024) mmh_gemv(const mmh_params p, cons
     }
     trace_end(0);
 }
+
+#if defined(GGML_USE_HIP)
+// strixllama: the dense EXL3 GEMV of one row as Crucible's wave-specialised stream ring (vendors/crucible, Apache-2.0:
+// LinRingFlowKernel / Load / Compute of engine/exl3/exl3_ring.h), adapted (vendors/crucible/README.md). An item is k split
+// s of 128-row group g; two loader waves stream its chunks (4 k tiles of the 8 column tiles of the group: in this fork's
+// layout already one contiguous run of 32 tiles) into a 3-slot LDS ring with 128-bit loads, two register sets in flight,
+// and run on into their next item; eight compute waves decode column tile cw of each chunk from LDS against the fp16
+// input. The input transform is the fused GEMV's (rot_in, mmh_fwht) with one fp16 rounding; the last split of a group adds
+// the splits in order and runs the GEMV's epilogue (mmh_fwht, rot_out, mmh_store). Arrival order picks the writer, never
+// the order of the sum.
+namespace mmh_ring {
+constexpr int SLOTS = 3, LOADERS = 2, CONSUMERS = 8, CHUNK = 4, MAXK = 6;
+constexpr int SLOT_WORDS = CONSUMERS * CHUNK * 8 * MAXK;
+typedef crucible::LdsStreamRing<SLOTS, LOADERS, CONSUMERS> control_t;
+
+// compute-wave barrier on an LDS counter; the loader waves never join it (Crucible's ConsumerBarrier)
+static __device__ __forceinline__ void consumer_barrier(uint32_t * arrived, const uint32_t round, const int lane) {
+    asm volatile("s_waitcnt lgkmcnt(0)" ::: "memory");
+    if (lane == 0) {
+        __hip_atomic_fetch_add(arrived, 1u, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP);
+    }
+    while (__hip_atomic_load(arrived, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP) < CONSUMERS * round) {
+        __builtin_amdgcn_s_sleep(1);
+    }
+    asm volatile("" ::: "memory");
+}
+} // namespace mmh_ring
+
+// items it = s * groups + g, strided over the grid; R rows (each tile decoded once for all of them); part:
+// [S][groups][R][128] floats; tickets: one per group, zero between ops; xs: two buffers of R rows of xs_words / R dwords
+// strixllama: the dense rings' workgroups. 56 (in-run A/Bs on 4.05, 10-24): one row 80 -> 64 -0.21 ms a token, 56 / 48 the
+// same as 64, 40 +0.22 and 96 +0.57; the 2-4 rows of an MTP verification 13.23 -> 12.92 ms of dense products a step at
+// 56 against 80. Fewer streams read the DRAM faster than the extra workgroups add. DEV: STRIX_MMH_RING_GRID=a[,b]
+// (b: side B of the in-run A/B, STRIX_AB)
+static int mmh_ring_grid(const int n_items) {
+    static int g[2] = { 56, 56 };
+    static const bool once = [] {
+        if (const char * e = getenv("STRIX_MMH_RING_GRID")) {
+            g[0] = g[1] = atoi(e);
+            if (const char * c = strchr(e, ',')) { g[1] = atoi(c + 1); }
+            for (int & v : g) { v = v > 0 ? v : 56; }
+        }
+        return true;
+    }();
+    (void) once;
+    GGML_UNUSED(n_items);
+    return g[ggml_cuda_strix_ab() ? 1 : 0];
+}
+
+template <int K, int R>
+static __global__ void __launch_bounds__(320) mmh_ring_gemv(const mmh_params p, const char * __restrict__ w, const int groups,
+        const int S, float * __restrict__ part, int * __restrict__ tickets, const int xs_words) {
+    using namespace crucible;
+    __shared__ mmh_ring::control_t control;
+    __shared__ uint32_t payload[mmh_ring::SLOTS * mmh_ring::SLOT_WORDS];
+    __shared__ uint32_t arrived;
+    extern __shared__ uint32_t xs[];
+    constexpr int T = 8 * K;                       // dwords a tile
+    constexpr int VPL = K;                         // 128-bit vectors a loader lane moves a chunk: 8T / 64
+    const int lane   = threadIdx.x & 31;
+    const int A      = (int) (p.k / 16);
+    const int span   = A / S;
+    const int count  = span / mmh_ring::CHUNK;     // the host makes span a multiple of 8
+    const int n_items = S * groups;
+    control.Initialize(threadIdx.x);
+    if (threadIdx.x == 0) {
+        arrived = 0;
+    }
+    __syncthreads();
+    const char * w0 = mmh_weight_matrix(p, w, 0);
+    if (threadIdx.x < 32 * mmh_ring::LOADERS) {
+        const int loader = threadIdx.x >> 5;
+        uint32_t seq0 = 0;
+        for (int it = blockIdx.x; it < n_items; it += gridDim.x) {
+            const int g = it % groups, sp = it / groups;
+            const uint32_t * base = (const uint32_t *) (w0 + (int64_t) g * MMH_NG * p.nb01) + (size_t) sp * span * 8 * T;
+            const __amdgpu_buffer_rsrc_t rs = StreamRsrc(base, (uint32_t) span * 8 * T * 4);
+            auto ld = [&](const int c, const int v) -> uint4 {
+                const int vi = v * 64 + loader * 32 + lane;
+                const auto raw = __builtin_amdgcn_raw_buffer_load_b128(rs, vi * 16, c * 32 * T * 4, MMH_RING_AUX);
+                return *reinterpret_cast<const uint4 *>(&raw);
+            };
+            auto put = [&](const int c, const uint4 (&r)[6]) {
+                if (c < count) {
+                    const uint32_t gs = seq0 + c;
+                    control.WaitWritable(gs);
+                    uint4 * d = reinterpret_cast<uint4 *>(payload + (gs % mmh_ring::SLOTS) * mmh_ring::SLOT_WORDS) + loader * 32 + lane;
+#pragma unroll
+                    for (int v = 0; v < VPL; ++v) {
+                        d[64 * v] = r[v];
+                    }
+                    control.Publish(gs, lane);
+                }
+            };
+            uint4 ra[6], rb[6];
+#pragma unroll
+            for (int v = 0; v < VPL; ++v) {
+                ra[v] = ld(0, v);
+            }
+            // full pairs with unconditional loads: each store waits only for its own register set
+            int c = 0;
+            for (; c + 2 < count; c += 2) {
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    rb[v] = ld(c + 1, v);
+                }
+                put(c, ra);
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    ra[v] = ld(c + 2, v);
+                }
+                put(c + 1, rb);
+            }
+            if (c + 1 < count) {
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    rb[v] = ld(c + 1, v);
+                }
+            }
+            put(c, ra);
+            put(c + 1, rb);
+            seq0 += count;
+        }
+        return;
+    }
+    const int cw = __builtin_amdgcn_readfirstlane((threadIdx.x >> 5) - mmh_ring::LOADERS);
+    const int q  = lane & 3;
+    const LaneWindow<K> win(lane);
+    const char  * rin = mmh_rot_row(p, p.rot_in, p.rin_nb1, 0);
+    const int row_words = span * 8;                // dwords of one row's input (span * 16 halves)
+    uint32_t round = 0, seq0 = 0;
+    for (int it = blockIdx.x, kk = 0; it < n_items; it += gridDim.x, ++kk) {
+        const int g = it % groups, sp = it / groups;
+        // the item's input: H(rot_in * x) of its k range, one fp16 rounding, in k order. A wave writes buffer kk & 1
+        // only after the barrier of item kk - 1, which every wave reaches after it finished item kk - 2
+        half * x = (half *) (xs + (kk & 1) * xs_words);
+        for (int t = cw; t < R * (span / 8); t += mmh_ring::CONSUMERS) {
+            const int r = t / (span / 8), blk = t % (span / 8);
+            const float * src = mmh_src_row(p, r);
+            const int c0 = (sp * span + blk * 8) * 16;
+            float v[4], rv[4];
+            mmh_rot4(rin + (int64_t) c0 * (p.rin_f16 ? 2 : 4), p.rin_f16, 0, lane, 1, rv);
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                v[j] = src[c0 + 32 * j + lane] * rv[j];
+            }
+            mmh_fwht(v, lane, p.had, p.hscale);
+            half * xr = x + (size_t) r * row_words * 2;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                xr[blk * 128 + 32 * j + lane] = __float2half_rn(fabsf(v[j]) > 65504.0f ? copysignf(65504.0f, v[j]) : v[j]);
+            }
+        }
+        mmh_ring::consumer_barrier(&arrived, ++round, lane);
+        const uint32_t * xw = (const uint32_t *) x;
+        float acc0[R], acc1[R];
+#pragma unroll
+        for (int r = 0; r < R; ++r) {
+            acc0[r] = acc1[r] = 0.f;
+        }
+        for (int c = 0, a = 0; a < span; ++c, a += mmh_ring::CHUNK) {
+            const uint32_t gs = seq0 + c;
+            control.WaitReady(gs);
+            const uint32_t * slot = payload + (gs % mmh_ring::SLOTS) * mmh_ring::SLOT_WORDS;
+#pragma unroll
+            for (int f = 0; f < mmh_ring::CHUNK; ++f) {
+                const uint32_t * tile = slot + (f * 8 + cw) * T;   // this fork's order: k row f, column tile cw. kMulU24: this
+                                                                   // file is built without real true16 (the .l operand form)
+                __half2 P[4];
+                DecodeLane<K, kMulU24>(tile[win.d0], tile[(win.d0 + 1) % T], tile[(win.d0 + 2) % T], win.shift, P);
+#pragma unroll
+                for (int r = 0; r < R; ++r) {
+                    const uint32_t xa = xw[r * row_words + (a + f) * 8 + q], xb = xw[r * row_words + (a + f) * 8 + 4 + q];
+                    const __half2 ha = *reinterpret_cast<const __half2 *>(&xa), hb = *reinterpret_cast<const __half2 *>(&xb);
+                    acc0[r] = Dot2(P[0], ha, acc0[r]);
+                    acc0[r] = Dot2(P[1], hb, acc0[r]);
+                    acc1[r] = Dot2(P[2], ha, acc1[r]);
+                    acc1[r] = Dot2(P[3], hb, acc1[r]);
+                }
+            }
+            control.Release(gs, lane);
+        }
+        seq0 += count;
+#pragma unroll
+        for (int r = 0; r < R; ++r) {
+            acc0[r] = acc0[r] + __shfl_xor(acc0[r], 1);
+            acc0[r] = acc0[r] + __shfl_xor(acc0[r], 2);
+            acc1[r] = acc1[r] + __shfl_xor(acc1[r], 1);
+            acc1[r] = acc1[r] + __shfl_xor(acc1[r], 2);
+        }
+        float * pg = part + ((int64_t) sp * groups + g) * R * MMH_NG;
+        if (q == 0) {
+#pragma unroll
+            for (int r = 0; r < R; ++r) {
+                pg[r * MMH_NG + 16 * cw + lane / 4]     = acc0[r];
+                pg[r * MMH_NG + 16 * cw + lane / 4 + 8] = acc1[r];
+            }
+        }
+        __threadfence();
+        mmh_ring::consumer_barrier(&arrived, ++round, lane);
+        if (cw == 0) {
+            bool last = S == 1;
+            if (!last && lane == 0) {
+                last = __hip_atomic_fetch_add(tickets + g, 1, __ATOMIC_ACQ_REL, __HIP_MEMORY_SCOPE_AGENT) == S - 1;
+                if (last) {
+                    __hip_atomic_store(tickets + g, 0, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+                }
+            }
+            if (__shfl(last, 0)) {
+                __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "agent");
+                const char * rout = mmh_rot_row(p, p.rot_out, p.rout_nb1, 0) + (int64_t) g * MMH_NG * p.rout_nb0;
+                float ro[4];
+                mmh_rot4(rout, p.rout_f16, 0, lane, p.rout_nb0 / (p.rout_f16 ? 2 : 4), ro);
+#pragma unroll
+                for (int r = 0; r < R; ++r) {
+                    float v[4];
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) {
+                        float sum = 0.0f;
+                        for (int s2 = 0; s2 < S; ++s2) {
+                            sum += part[(((int64_t) s2 * groups + g) * R + r) * MMH_NG + 32 * j + lane];
+                        }
+                        v[j] = sum;
+                    }
+                    mmh_fwht(v, lane, p.had, p.hscale);
+                    float * out = mmh_dst_row(p, r) + (int64_t) g * MMH_NG;
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) {
+                        mmh_store(p, out, 32 * j + lane, v[j] * ro[j]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// strixllama: the input of the R-row stream ring: H(rot_in * x) of each row in k order, one fp16 rounding - the values
+// the one-row ring stages for itself. A wave a 128-value block; grid (blocks of 8 waves, rows)
+static __global__ void __launch_bounds__(256) mmh_ring_rows_in(const mmh_params p, half * __restrict__ xh) {
+    const int lane = threadIdx.x & 31;
+    const int r    = blockIdx.y;
+    const int64_t c0 = ((int64_t) blockIdx.x * 8 + (threadIdx.x >> 5)) * 128;
+    if (c0 >= p.k) {
+        return;
+    }
+    const float * src = mmh_src_row(p, r);
+    const char  * rin = mmh_rot_row(p, p.rot_in, p.rin_nb1, 0);
+    float v[4], rv[4];
+    mmh_rot4(rin + c0 * (p.rin_f16 ? 2 : 4), p.rin_f16, 0, lane, 1, rv);
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        v[j] = src[c0 + 32 * j + lane] * rv[j];
+    }
+    mmh_fwht(v, lane, p.had, p.hscale);
+    half * xr = xh + (int64_t) r * p.k + c0;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        xr[32 * j + lane] = __float2half_rn(fabsf(v[j]) > 65504.0f ? copysignf(65504.0f, v[j]) : v[j]);
+    }
+}
+
+// strixllama: the dense EXL3 GEMV of 2 to 4 rows (MTP verification) as Crucible's LinRingRowsKernel (vendors/crucible,
+// Apache-2.0: engine/exl3/ring_rows.h), adapted: the loader waves stage each chunk's activations (R rows x 4 tiles x 8
+// words, from mmh_ring_rows_in's rows) behind its weights in the ring slot, so the compute waves fill nothing and the LDS
+// stays small. Items, splits, per-row arithmetic and epilogue are mmh_ring_gemv's, so a row's result does not depend
+// on R: verification rows come out as the one-row ring gives them
+namespace mmh_ring {
+constexpr int ROW_WORDS = CHUNK * 8;               // one row's activations of one chunk
+template <int R> constexpr int slot_words_rows() { return SLOT_WORDS + R * ROW_WORDS; }
+} // namespace mmh_ring
+
+template <int K, int R>
+static __global__ void __launch_bounds__(320) mmh_ring_rows(const mmh_params p, const char * __restrict__ w, const int groups,
+        const int S, const half * __restrict__ xh, float * __restrict__ part, int * __restrict__ tickets) {
+    using namespace crucible;
+    static_assert(R >= 1 && R * 8 <= 32 * mmh_ring::LOADERS, "one activation vector per loader lane");
+    constexpr int SW = mmh_ring::slot_words_rows<R>();
+    __shared__ mmh_ring::control_t control;
+    __shared__ uint32_t payload[mmh_ring::SLOTS * SW];
+    __shared__ uint32_t arrived;
+    __shared__ int s_last;
+    constexpr int T = 8 * K;                       // dwords a tile
+    constexpr int VPL = K;                         // 128-bit vectors a loader lane moves a chunk: 8T / 64
+    const int lane   = threadIdx.x & 31;
+    const int A      = (int) (p.k / 16);
+    const int span   = A / S;
+    const int count  = span / mmh_ring::CHUNK;     // the host makes span a multiple of 8
+    const int n_items = S * groups;
+    control.Initialize(threadIdx.x);
+    if (threadIdx.x == 0) {
+        arrived = 0;
+    }
+    __syncthreads();
+    const char * w0 = mmh_weight_matrix(p, w, 0);
+    if (threadIdx.x < 32 * mmh_ring::LOADERS) {
+        const int loader = threadIdx.x >> 5;
+        const int xv = loader * 32 + lane;         // activation vector xv: row xv / 8, words (xv % 8) * 4 .. + 3 of a chunk
+        const int xr = xv >> 3, xo = (xv & 7) * 4;
+        const __amdgpu_buffer_rsrc_t xrs = StreamRsrc((const uint32_t *) xh, (uint32_t) R * A * 8 * 4);
+        uint32_t seq0 = 0;
+        for (int it = blockIdx.x; it < n_items; it += gridDim.x) {
+            const int g = it % groups, sp = it / groups;
+            const uint32_t * base = (const uint32_t *) (w0 + (int64_t) g * MMH_NG * p.nb01) + (size_t) sp * span * 8 * T;
+            const __amdgpu_buffer_rsrc_t rs = StreamRsrc(base, (uint32_t) span * 8 * T * 4);
+            auto ld = [&](const int c, const int v) -> uint4 {
+                const int vi = v * 64 + loader * 32 + lane;
+                const auto raw = __builtin_amdgcn_raw_buffer_load_b128(rs, vi * 16, c * 32 * T * 4, MMH_RING_AUX);
+                return *reinterpret_cast<const uint4 *>(&raw);
+            };
+            // lanes past the R rows read past the stream: zero, no memory traffic
+            auto ldx = [&](const int c) -> uint4 {
+                const int vo = xr < R ? (xr * A * 8 + (sp * span + c * mmh_ring::CHUNK) * 8 + xo) * 4 : R * A * 8 * 4;
+                const auto raw = __builtin_amdgcn_raw_buffer_load_b128(xrs, vo, 0, 0);
+                return *reinterpret_cast<const uint4 *>(&raw);
+            };
+            auto put = [&](const int c, const uint4 (&r)[6], const uint4 rx) {
+                if (c < count) {
+                    const uint32_t gs = seq0 + c;
+                    control.WaitWritable(gs);
+                    uint32_t * slot = payload + (gs % mmh_ring::SLOTS) * SW;
+                    uint4 * d = reinterpret_cast<uint4 *>(slot) + loader * 32 + lane;
+#pragma unroll
+                    for (int v = 0; v < VPL; ++v) {
+                        d[64 * v] = r[v];
+                    }
+                    if (xr < R) {
+                        reinterpret_cast<uint4 *>(slot + mmh_ring::SLOT_WORDS)[xv] = rx;
+                    }
+                    control.Publish(gs, lane);
+                }
+            };
+            uint4 ra[6], rb[6], rxa, rxb;
+#pragma unroll
+            for (int v = 0; v < VPL; ++v) {
+                ra[v] = ld(0, v);
+            }
+            rxa = ldx(0);
+            int c = 0;
+            for (; c + 2 < count; c += 2) {
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    rb[v] = ld(c + 1, v);
+                }
+                rxb = ldx(c + 1);
+                put(c, ra, rxa);
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    ra[v] = ld(c + 2, v);
+                }
+                rxa = ldx(c + 2);
+                put(c + 1, rb, rxb);
+            }
+            if (c + 1 < count) {
+#pragma unroll
+                for (int v = 0; v < VPL; ++v) {
+                    rb[v] = ld(c + 1, v);
+                }
+                rxb = ldx(c + 1);
+            }
+            put(c, ra, rxa);
+            put(c + 1, rb, rxb);
+            seq0 += count;
+        }
+        return;
+    }
+    const int cw = __builtin_amdgcn_readfirstlane((threadIdx.x >> 5) - mmh_ring::LOADERS);
+    const int q  = lane & 3;
+    const LaneWindow<K> win(lane);
+    uint32_t round = 0, seq0 = 0;
+    for (int it = blockIdx.x; it < n_items; it += gridDim.x) {
+        const int g = it % groups, sp = it / groups;
+        float acc0[R], acc1[R];
+#pragma unroll
+        for (int r = 0; r < R; ++r) {
+            acc0[r] = acc1[r] = 0.f;
+        }
+        for (int c = 0; c < count; ++c) {
+            const uint32_t gs = seq0 + c;
+            control.WaitReady(gs);
+            const uint32_t * slot = payload + (gs % mmh_ring::SLOTS) * SW;
+#pragma unroll
+            for (int f = 0; f < mmh_ring::CHUNK; ++f) {
+                const uint32_t * tile = slot + (f * 8 + cw) * T;   // as mmh_ring_gemv (kMulU24)
+                __half2 P[4];
+                DecodeLane<K, kMulU24>(tile[win.d0], tile[(win.d0 + 1) % T], tile[(win.d0 + 2) % T], win.shift, P);
+#pragma unroll
+                for (int r = 0; r < R; ++r) {
+                    const uint32_t * xw = slot + mmh_ring::SLOT_WORDS + r * mmh_ring::ROW_WORDS + f * 8;
+                    const uint32_t xa = xw[q], xb = xw[4 + q];
+                    const __half2 ha = *reinterpret_cast<const __half2 *>(&xa), hb = *reinterpret_cast<const __half2 *>(&xb);
+                    acc0[r] = Dot2(P[0], ha, acc0[r]);
+                    acc0[r] = Dot2(P[1], hb, acc0[r]);
+                    acc1[r] = Dot2(P[2], ha, acc1[r]);
+                    acc1[r] = Dot2(P[3], hb, acc1[r]);
+                }
+            }
+            control.Release(gs, lane);
+        }
+        seq0 += count;
+#pragma unroll
+        for (int r = 0; r < R; ++r) {
+            acc0[r] = acc0[r] + __shfl_xor(acc0[r], 1);
+            acc0[r] = acc0[r] + __shfl_xor(acc0[r], 2);
+            acc1[r] = acc1[r] + __shfl_xor(acc1[r], 1);
+            acc1[r] = acc1[r] + __shfl_xor(acc1[r], 2);
+        }
+        float * pg = part + ((int64_t) sp * groups + g) * R * MMH_NG;
+        if (q == 0) {
+#pragma unroll
+            for (int r = 0; r < R; ++r) {
+                pg[r * MMH_NG + 16 * cw + lane / 4]     = acc0[r];
+                pg[r * MMH_NG + 16 * cw + lane / 4 + 8] = acc1[r];
+            }
+        }
+        __threadfence();
+        mmh_ring::consumer_barrier(&arrived, ++round, lane);
+        // the flag is written after this barrier and read before the next item's first one
+        if (cw == 0) {
+            bool last = S == 1;
+            if (!last && lane == 0) {
+                last = __hip_atomic_fetch_add(tickets + g, 1, __ATOMIC_ACQ_REL, __HIP_MEMORY_SCOPE_AGENT) == S - 1;
+                if (last) {
+                    __hip_atomic_store(tickets + g, 0, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_AGENT);
+                }
+            }
+            if (lane == 0) {
+                s_last = last;
+            }
+        }
+        mmh_ring::consumer_barrier(&arrived, ++round, lane);
+        if (s_last && cw < R) {
+            __builtin_amdgcn_fence(__ATOMIC_ACQUIRE, "agent");
+            const char * rout = mmh_rot_row(p, p.rot_out, p.rout_nb1, 0) + (int64_t) g * MMH_NG * p.rout_nb0;
+            float ro[4];
+            mmh_rot4(rout, p.rout_f16, 0, lane, p.rout_nb0 / (p.rout_f16 ? 2 : 4), ro);
+            const int r = cw;
+            float v[4];
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                float sum = 0.0f;
+                for (int s2 = 0; s2 < S; ++s2) {
+                    sum += part[(((int64_t) s2 * groups + g) * R + r) * MMH_NG + 32 * j + lane];
+                }
+                v[j] = sum;
+            }
+            mmh_fwht(v, lane, p.had, p.hscale);
+            float * out = mmh_dst_row(p, r) + (int64_t) g * MMH_NG;
+#pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                mmh_store(p, out, 32 * j + lane, v[j] * ro[j]);
+            }
+        }
+    }
+}
+#endif // defined(GGML_USE_HIP)
 
 // WMMA GEMM (RDNA4), fp16 input: 8 waves, wave w owns column tile w of the 128-row group; mt rows per block. Per step
 // of 32 k: the block stages the fp16 rows in LDS (two buffers, one barrier per step), each wave decodes its 2 tiles
@@ -3466,6 +4012,117 @@ static void mmh_launch(ggml_backend_cuda_context & ctx, const mmh_params & p, co
     const int64_t per_exp = (p.n_rows + used - 1)/used;
 
     if (inline_rows) {
+#if defined(GGML_USE_HIP)
+        // strixllama: a dense op of one row with a mul1 EXL3 weight of 4 to 6 bits takes the stream ring (STRIX_MMH_RING=0:
+        // the GEMV). 4.05 one-token decode +3.4%, MTP +1.5-3%; its fp16 input (as the GEMV's for 2+ rows) moved the decode
+        // KLD 0.02526 -> 0.02561
+        {
+            static const bool ring_on = !getenv("STRIX_MMH_RING") || atoi(getenv("STRIX_MMH_RING")) != 0;
+            constexpr int b2 = mmh_exl3_b2(type);
+            if constexpr (mmh_is_exl3(type) && mmh_exl3_codebook(type) == 0 && b2 % 2 == 0 && b2 / 2 >= 4 && b2 / 2 <= 6) {
+                // one row; 2 .. 4 rows (MTP verification) take the R-row ring (mmh_ring_rows, STRIX_MMH_RING2=0: the GEMV),
+                // the ring with its own staged input only on request (dev: STRIX_MMH_RING_ROWS; measured slower than the GEMV)
+                static const int ring_rows = getenv("STRIX_MMH_RING_ROWS") ? atoi(getenv("STRIX_MMH_RING_ROWS")) : 1;
+                static const bool ring2_on = !getenv("STRIX_MMH_RING2") || atoi(getenv("STRIX_MMH_RING2")) != 0;
+                const bool rows2 = ring2_on && p.n_rows >= 2 && p.n_rows <= 4;
+                if (ring_on && !p.ids && p.n_rows >= 1 && (rows2 || p.n_rows <= std::min(4, ring_rows)) && p.n_exp == 1 && !p.row_w &&
+                        !p.cmap && !p.trace && !p.gn_x && p.had == 128 && p.k % 128 == 0 && n_groups >= 1 && n_groups <= 16384) {
+                    const int A = (int) (p.k / 16);
+                    const int R = (int) p.n_rows;
+                    int S = 1;
+                    // several rows of the ring's own input: spans of at most 80 k tiles, so that they stay small in LDS; the
+                    // R-row ring splits as one row does, so that its rows come out as the one-row ring gives them
+                    while ((n_groups * S < 80 || (R > 1 && !rows2 && A / S > 80)) && A % (2 * S) == 0 && (A / (2 * S)) % 8 == 0) {
+                        S *= 2;
+                    }
+                    if ((A / S) % 8 == 0 && rows2) {
+                        int * tk = S > 1 ? mmh_fused_tickets(ctx.device, stream, n_groups) : nullptr;
+                        if (S == 1 || tk) {
+                            ggml_cuda_pool_alloc<float> part(ctx.pool(), (size_t) S * n_groups * R * MMH_NG);
+                            ggml_cuda_pool_alloc<half>  xr(ctx.pool(), (size_t) R * p.k);
+                            mmh_ring_rows_in<<<dim3((unsigned) ((A / 8 + 7) / 8), R), 256, 0, stream>>>(p, xr.get());
+                            const int n_it = (int) (S * n_groups);
+                            const dim3 grid(std::min(mmh_ring_grid(n_it), n_it));
+                            switch (R) {
+                                case 2:  mmh_ring_rows<b2 / 2, 2><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                case 3:  mmh_ring_rows<b2 / 2, 3><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                default: mmh_ring_rows<b2 / 2, 4><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                            }
+                            CUDA_CHECK(cudaGetLastError());
+                            static unsigned hits = 0;
+                            if (hits++ < 2) {
+                                fprintf(stderr, "MMH_RING R-row GEMV: k %lld groups %lld rows %d S %d K %d\n", (long long) p.k,
+                                        (long long) n_groups, R, S, b2 / 2);
+                            }
+                            // DEV: STRIX_MMH_RING2_CHECK=1 - every row against the one-row ring (bitwise), the first 64 ops
+                            static const bool check = getenv("STRIX_MMH_RING2_CHECK") && atoi(getenv("STRIX_MMH_RING2_CHECK")) != 0;
+                            static int n_checked = 0;
+                            hipStreamCaptureStatus capturing = hipStreamCaptureStatusNone;
+                            if (check) {
+                                CUDA_CHECK(hipStreamIsCapturing(stream, &capturing));
+                            }
+                            if (check && p.glu == 0 && n_checked < 64 && capturing == hipStreamCaptureStatusNone) {
+                                ++n_checked;
+                                CUDA_CHECK(cudaStreamSynchronize(stream));
+                                std::vector<float> got((size_t) n), ref((size_t) n);
+                                ggml_cuda_pool_alloc<float> tmp(ctx.pool(), (size_t) n);
+                                ggml_cuda_pool_alloc<float> part1(ctx.pool(), (size_t) S * n_groups * MMH_NG);
+                                size_t n_bad = 0;
+                                double max_diff = 0.0;
+                                for (int r = 0; r < R; ++r) {
+                                    const int i1 = r % p.ne1, i2 = (r / p.ne1) % p.ne2, i3 = r / (p.ne1 * p.ne2);
+                                    mmh_params p1 = p;
+                                    p1.x      = (const float *) ((const char *) p.x + i1 * p.nb11 + i2 * p.nb12 + i3 * p.nb13);
+                                    p1.n_rows = 1; p1.ne1 = 1; p1.ne2 = 1;
+                                    p1.dst    = tmp.get(); p1.nb1 = p1.nb2 = p1.nb3 = (size_t) n * sizeof(float);
+                                    int * tk1 = S > 1 ? mmh_fused_tickets(ctx.device, stream, n_groups) : nullptr;
+                                    const int xs_words = (A / S) * 8;
+                                    mmh_ring_gemv<b2 / 2, 1><<<grid, 320, 2 * xs_words * sizeof(uint32_t), stream>>>(p1, w, (int) n_groups, S,
+                                            part1.get(), tk1, xs_words);
+                                    CUDA_CHECK(cudaStreamSynchronize(stream));
+                                    CUDA_CHECK(cudaMemcpy(ref.data(), tmp.get(), (size_t) n * sizeof(float), cudaMemcpyDeviceToHost));
+                                    CUDA_CHECK(cudaMemcpy(got.data(), (const char *) p.dst + i1 * p.nb1 + i2 * p.nb2 + i3 * p.nb3,
+                                            (size_t) n * sizeof(float), cudaMemcpyDeviceToHost));
+                                    for (int64_t c = 0; c < n; ++c) {
+                                        if (got[c] != ref[c]) {
+                                            ++n_bad;
+                                            max_diff = std::max(max_diff, (double) fabsf(got[c] - ref[c]));
+                                        }
+                                    }
+                                }
+                                fprintf(stderr, "MMH_RING2_CHECK k %lld n %lld rows %d S %d: %zu of %lld values differ, max |diff| %g\n",
+                                        (long long) p.k, (long long) n, R, S, n_bad, (long long) n * R, max_diff);
+                            }
+                            return;
+                        }
+                    }
+                    if ((A / S) % 8 == 0 && !rows2) {
+                        int * tk = S > 1 ? mmh_fused_tickets(ctx.device, stream, n_groups) : nullptr;
+                        if (S == 1 || tk) {
+                            ggml_cuda_pool_alloc<float> part(ctx.pool(), (size_t) S * n_groups * R * MMH_NG);
+                            const int xs_words = R * (A / S) * 8;
+                            const int n_it = (int) (S * n_groups);
+                            const dim3 grid(std::min(mmh_ring_grid(n_it), n_it));
+                            const size_t lds = 2 * xs_words * sizeof(uint32_t);
+                            switch (R) {
+                                case 1:  mmh_ring_gemv<b2 / 2, 1><<<grid, 320, lds, stream>>>(p, w, (int) n_groups, S, part.get(), tk, xs_words); break;
+                                case 2:  mmh_ring_gemv<b2 / 2, 2><<<grid, 320, lds, stream>>>(p, w, (int) n_groups, S, part.get(), tk, xs_words); break;
+                                case 3:  mmh_ring_gemv<b2 / 2, 3><<<grid, 320, lds, stream>>>(p, w, (int) n_groups, S, part.get(), tk, xs_words); break;
+                                default: mmh_ring_gemv<b2 / 2, 4><<<grid, 320, lds, stream>>>(p, w, (int) n_groups, S, part.get(), tk, xs_words); break;
+                            }
+                            CUDA_CHECK(cudaGetLastError());
+                            static unsigned hits = 0;
+                            if (hits++ < 2) {
+                                fprintf(stderr, "MMH_RING dense GEMV: k %lld groups %lld rows %d S %d K %d\n", (long long) p.k,
+                                        (long long) n_groups, R, S, b2 / 2);
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+#endif // defined(GGML_USE_HIP)
         const int64_t n_items = p.ids ? p.n_rows : p.n_exp;
         // with ids, an expert of several tokens is decoded once for up to MMH_GEMV_IDS_ROWS of its rows per pass (an
         // expert of one token takes the one-row pass of the same kernel)
@@ -3639,6 +4296,8 @@ static void mmh_launch(ggml_backend_cuda_context & ctx, const mmh_params & p, co
                 if (mmh_pwave4_ok(p)) {
                     if (mmh_pwave1_ok(p)) {
                         mmh_prologue_wave4<true, true><<<(unsigned) ((p.n_rows + 7)/8), 256, 0, stream>>>(p, xh.get(), rscale.get());
+                    } else if (mmh_prow_ok(p)) {
+                        mmh_prologue_row<true><<<(unsigned) p.n_rows, 256, 0, stream>>>(p, xh.get(), rscale.get());
                     } else {
                         mmh_prologue_wave4<true><<<(unsigned) ((p.n_rows + 7)/8), 256, 0, stream>>>(p, xh.get(), rscale.get());
                     }

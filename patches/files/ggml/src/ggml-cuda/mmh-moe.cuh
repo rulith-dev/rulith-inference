@@ -33,7 +33,42 @@ struct ggml_cuda_mmh_moe_args {
     int64_t *       offsets;       // [E + 1]
     int32_t *       tiles;         // [slots]
     int32_t *       num_tiles;     // [1]
+    // decode-sized batches (ggml_cuda_mmh_moe_run_dec): the picks grouped by expert ("jobs"), the rotated gate / up
+    // inputs [2A][H] halves, the gate / up products [2A][I] floats; the down product goes to buf_had as [A][H] floats
+    int32_t *       job_e;         // [A] expert of job j
+    int32_t *       job_n;         // [A] picks of job j
+    int32_t *       job_s;         // [A][T] the picks (token-major index s) of job j, in token order
+    int32_t *       n_jobs;        // [1]
+    uint32_t *      done;          // [A] finished gate / up workgroups of job j
+    void *          xh;
+    float *         part_gu;
+    // the shared expert as one more job of the decode pipeline (job n_jobs, every token; null s_w_gate: not folded):
+    // its weights (one I x H matrix each, an expert's shape), F16 rotations (one row each) and width. Its rotated
+    // inputs and gate / up products take rows 2A + m T + r of xh and part_gu, its down product's rows s_raw [T][H],
+    // which the reduce rotates and adds times sg as the graph's MUL and ADD do
+    const void *    s_w_gate, * s_w_up, * s_w_down;
+    const void *    s_rin_g, * s_rout_g, * s_rin_u, * s_rout_u, * s_rin_d, * s_rout_d;
+    int             bits_s;
+    float *         s_raw;
+    uint32_t *      next;          // the decode ring's item counter (zeroed by its plan)
+    // the shared expert's gate: sigmoid(s_gin_w . x) per token, made by the prep launch into s_gate (null s_gin_w:
+    // the graph's own nodes make sg); its weight row F32, or BF16 when s_gin_bf16
+    const void *    s_gin_w;
+    int             s_gin_bf16;
+    float *         s_gate;
+    int             batch_loads;   // the reduce: every pick's loads before the sums (DEV A/B)
 };
+
+// decode-sized batches: at most this many tokens, n_used <= 16
+#define GGML_CUDA_MMH_MOE_DEC_MAX_T 4
+// bytes of the decode pipeline's scratch for a model (one fixed buffer: decode runs inside captured graphs)
+size_t ggml_cuda_mmh_moe_dec_scratch_bytes(int E, int H, int I);
+void   ggml_cuda_mmh_moe_dec_carve(ggml_cuda_mmh_moe_args & a, void * scratch);
+// group the picks by expert, gather, then gate / up and down in one launch: buf_had then holds the down product's rows
+// (token-major), which ggml_cuda_mmh_moe_run_reduce sums as for the prompt pipeline
+void   ggml_cuda_mmh_moe_run_dec(const ggml_cuda_mmh_moe_args & a, void * stream);
+// whether the decode pipeline can take a shared expert of width bits_s and I_s rows along with T tokens' picks
+bool   ggml_cuda_mmh_moe_dec_shexp_ok(int T, int n_used, int I, int bits_gu, int I_s, int bits_s);
 
 struct ggml_cuda_mmh_moe_scratch {
     int64_t A, nb, slots;

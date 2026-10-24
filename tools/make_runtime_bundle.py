@@ -10,7 +10,7 @@ The result is what the installer ships under <install dir>/runtime:
     bin/.kpack/        the kernel packs those ROCm DLLs load their own kernels from (rocBLAS's GEMV)
     tools/manager.py   the manager, unchanged; downloader.py and model_catalog.json beside it (Downloads)
     python/            CPython's embeddable distribution - the manager is standard library only
-    licenses/          NOTICE.md and the license texts of the code in bin/hip (llama.cpp, hipfire, ExLlamaV3)
+    licenses/          NOTICE.md and the license texts of the code in bin/hip (llama.cpp, hipfire, ExLlamaV3, Crucible)
     BUNDLE.json        what went in, from where, and the upstream pin it was built from
 
 Nothing here is specific to the machine it was made on except the GPU: the kernel libraries are
@@ -194,7 +194,9 @@ def main():
                       (tree / 'LICENSE', 'LICENSE-llama.cpp'),
                       (tree / 'licenses' / 'LICENSE-hipfire-APACHE', 'LICENSE-hipfire-APACHE'),
                       (tree / 'licenses' / 'NOTICE-hipfire', 'NOTICE-hipfire'),
-                      (tree / 'ggml' / 'src' / 'ggml-cuda' / 'vendors' / 'kyojin' / 'LICENSE', 'LICENSE-exllamav3')):
+                      (tree / 'ggml' / 'src' / 'ggml-cuda' / 'vendors' / 'kyojin' / 'LICENSE', 'LICENSE-exllamav3'),
+                      (tree / 'ggml' / 'src' / 'ggml-cuda' / 'vendors' / 'crucible' / 'LICENSE', 'LICENSE-crucible-APACHE'),
+                      (tree / 'ggml' / 'src' / 'ggml-cuda' / 'vendors' / 'crucible' / 'NOTICE', 'NOTICE-crucible')):
         if not src.is_file():
             sys.exit(f'license text missing: {src}')
         take(src, lic / name, 'licenses')
