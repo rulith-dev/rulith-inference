@@ -32,7 +32,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.6.8'
+VERSION = '0.6.9'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -41,7 +41,7 @@ JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
 # browser preview uses (fixtures.ts, imported only by development builds).
 UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'DownloadsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
             'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
-            'attachments.ts', 'compact.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
+            'attachments.ts', 'compact.ts', 'dates.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
 NSIS_HOOKS = r"""Var LegacyDir
 Var MovedFrom
@@ -424,6 +424,7 @@ def main():
     web_tools()
     chat_width()
     compaction()
+    date_notes()
     concurrent_tools()
     brand(KEEP_DATA_DIR)
     brand_text()
@@ -1322,6 +1323,24 @@ def chat_width():
                  "            '" + col + " -mt-20',\n")
     replace_once(JAN / 'web-app/src/routes/project/$projectId.tsx', '        <div className="mx-auto w-full md:w-4/5 xl:w-4/6">\n',
                  '        <div className="' + col + '">\n')
+
+
+def date_notes():
+    """Today's date for the model (components/strixllama/dates.ts). brand_text takes the "Current date" line out of the
+    default system prompt, where a new date at midnight broke every cached conversation; without it the model guessed the
+    date from its training data (a user, 10-24: "it says it is 26th October 2024"). The transport now puts the date
+    before the text of a conversation's first user message and of the first one of each later day, from the message's
+    own time, so the history reads the same on every request and stays cached.
+    """
+    t = JAN / 'web-app/src/lib/custom-chat-transport.ts'
+    # after compaction()'s import: two patches inserting after the same line would each miss the other's text on a
+    # second run of apply.py and insert again
+    replace_once(t, "import { compactConversation, INSTRUCTION } from '@/components/strixllama/compact'\n",
+                 "import { compactConversation, INSTRUCTION } from '@/components/strixllama/compact'\n"
+                 "import { withDateNotes } from '@/components/strixllama/dates'\n")
+    replace_once(t, "    const messagesToConvert = splitAssistantToolWaves(options.messages)\n",
+                 "    // strixllama: today's date in the user message that starts a day (components/strixllama/dates.ts)\n"
+                 "    const messagesToConvert = withDateNotes(splitAssistantToolWaves(options.messages))\n")
 
 
 def compaction():

@@ -29,8 +29,9 @@ def apply_test_overlay(tree):
         changes.append((path, text))
     for path, text in changes:
         path.write_text(text, encoding='utf-8', newline='\n')
-    shutil.copyfile(here / 'tests/compact.test.ts', tree / 'web-app/src/components/strixllama/compact.test.ts')
-    print(f'Jan tests: {len(changes)} files adapted; compaction tests installed')
+    for name in ('compact.test.ts', 'dates.test.ts'):
+        shutil.copyfile(here / 'tests' / name, tree / 'web-app/src/components/strixllama' / name)
+    print(f'Jan tests: {len(changes)} files adapted; compaction and date-note tests installed')
 
 
 if __name__ == '__main__':

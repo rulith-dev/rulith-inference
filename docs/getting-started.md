@@ -2,210 +2,121 @@
 
 *[中文](getting-started.zh.md)*
 
-This page is for running Rulith Inference (formerly Strix Llama) from the release installer. Nothing on it needs Python, ROCm,
-Visual Studio or a source checkout — the installer carries the whole runtime. Building it yourself
-is a different page: [install.md](install.md).
+This page is for running Rulith Inference from the release installer. Nothing on it needs Python, ROCm, Visual Studio
+or a source checkout: the installer carries the whole runtime. Building it yourself is a different page:
+[install.md](install.md).
 
-The whole path is: install the app, download five files into one folder, point the app at the
-folder, press *Load model*, chat.
+The whole path is: install the app, download a model from inside it, press *Load model*, chat.
 
 ## What you need
 
 | | |
 |---|---|
-| Machine | **Ryzen AI Max+ 395** — Radeon 8060S, `gfx1151`, 128 GB unified memory. The bundled kernels are compiled for gfx1151 only; on any other GPU the model will not load. |
-| GPU carve | **96 GB**, set in the BIOS (the option is usually called *UMA frame buffer size* or *dedicated graphics memory*). 64 GB works too since 0.4.7: the experts that do not fit are read from system memory at the same speed. |
+| Machine | **Ryzen AI Max+ 395**: Radeon 8060S, `gfx1151`, 128 GB unified memory. The bundled kernels are compiled for gfx1151 only; on any other GPU the model will not load. |
+| GPU memory | **64 GB** or **96 GB**, set in the BIOS (the option is usually called *UMA frame buffer size* or *dedicated graphics memory*). At 64 GB the app keeps the experts that do not fit in system memory, which the GPU reads at the same speed; 96 GB leaves the conversation cache more room. |
 | Windows | 11 |
-| Disk | about 100 GB for the model files, 0.5 GB for the app |
-| Download | five files, about 97 GB, from Hugging Face |
+| Disk | 83-112 GB for the model files, depending on the file (104 GB for the recommended one), 0.5 GB for the app |
 
 ## 1. Install the app
 
 Download `Rulith-Inference_<version>_x64-setup.exe` from the
-[releases page](https://github.com/rulith-dev/rulith-inference/releases) and run it. That is the whole
-installation: the app, `llama-server` built from our fork, the ROCm libraries it needs, the process
-manager and its own Python are all inside. Nothing else has to be installed.
+[releases page](https://github.com/rulith-dev/rulith-inference/releases) and run it. That is the whole installation:
+the app, `llama-server` built from our fork, the ROCm libraries it needs, the process manager and its own Python are
+all inside.
 
-From 0.2.5 on, the app updates itself. It checks this project's GitHub releases when it starts, and when
-there is a newer one it offers it in a prompt, and as **New version** at the foot of the sidebar. The
-setup it downloads is installed only if its signature verifies against the key the app was built
-with. The model is unloaded first, because the update replaces the runtime. Chats and settings are kept.
-To upgrade by hand, or from 0.2.4 or earlier, run the newer installer over the old one; where GitHub
-cannot be reached, download the setup yourself.
+The app updates itself. It checks this project's GitHub releases when it starts, and when there is a newer one it
+offers it in a prompt, and as **New version** at the foot of the sidebar. The setup it downloads is installed only if
+its signature verifies against the key the app was built with. The model is unloaded first, because the update
+replaces the runtime; chats and settings are kept. To upgrade by hand, run the newer installer over the old one.
 
-## 2. Download the model files — all into one folder
+## 2. Download a model
 
-The app loads three kinds of file, and it finds the second and third **by name, next to the first**,
-so all of them must sit in the same folder. Keep the file names exactly as they are.
+Open **Model › Download**. *Recommended* lists the files Rulith Inference is tuned for and every published number was
+measured with:
 
-The folder we recommend is the one LM Studio would use:
+| File | Size | | |
+|---|---:|---|---|
+| **Qwen3.8-Flash-Next EXL3 4.05 bpw** | 104.3 GB | recommended: closest to the full model | [Rulith](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF) |
+| Qwen3.8-Flash-Next EXL3 3.05 bpw | 82.4 GB | smaller and faster, twice the KL divergence | [Rulith](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF) |
+| Qwen3.8-Flash-Next UD-Q4_K_XL | 111.3 GB | | [Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF) |
+| Qwen3.8-Flash-Next UD-IQ4_XS | 93.7 GB | | [Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF) |
 
-```
-D:\models\unsloth\Qwen3.8-Flash-Next-GGUF\
-```
+Pick one; *Download options* switches between the versions of a repository. *Files that go with it* are the MTP draft
+(speculative decoding: about 1.5-2x faster answers), the vision projector (image input) and, for the Unsloth files,
+Rulith's draft head (faster drafting); leave them on. **Download** asks for the source (Hugging Face, or its mirror in
+China) and the folder, and shows the free space there. Every file is checked against its SHA-256 when it is complete; a
+download can be paused and continues where it stopped, also after a restart. When it is done, the model is in the
+Library and **Load now** loads it.
 
-If LM Studio has already downloaded this model, you have most of the files and can skip to the
-next section — the app reads LM Studio's folder in place, nothing is copied.
+The search box finds other GGUF repositories on Hugging Face. Files Rulith Inference has its own kernels for are marked
+*Tuned*; other models are not tested by Rulith and run on llama.cpp's stock kernels.
 
-All five come from one Hugging Face repository,
-[unsloth/Qwen3.8-Flash-Next-GGUF](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF). The links and
-commands below are pinned to its revision `38bb39e`, the one every file was checked against (sha256,
-2026-09-26):
+### Files you already have
 
-| # | Path in the repository | Size | What it is |
-|---|---|---|---|
-| 1 | [`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf) | 11 MB | the model, shard 1 of 3 (metadata) |
-| 2 | [`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf) | 49.8 GB | the model, shard 2 |
-| 3 | [`UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf) | 43.8 GB | the model, shard 3 |
-| 4 | [`MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf) | 1.9 GB | the MTP draft: speculative decoding, roughly +60% decode speed |
-| 5 | [`mmproj-F16.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/mmproj-F16.gguf) | 904 MB | the vision projector: image input |
+The app reads model files where they are; it never copies them. If LM Studio is installed, its download folder is
+registered automatically. Otherwise add the parent folder (for example `D:\models`) under **Model › Library › Model
+folders** with **Browse…** or by pasting its path, and press **Save and scan**; folders are scanned recursively. Keep
+a model's draft, projector and head in the same folder as its first shard, under their original names: the app pairs
+them by name.
 
-**Why exactly these.** Every number this project publishes was measured on the `UD-IQ4_XS` quant;
-other quants of the same model load, but nothing here is tuned or verified for them. Files 1–3 are
-the model and are required. Files 4 and 5 are optional: the draft and the projector are switched on
-automatically when they are in the folder and left off when they are not, and the Configuration
-page says which of the two it did not find. Without the draft, decode is about 40% slower.
-(`mtp-…-shared-Q8_0.gguf` works in place of file 4; the two are within 1% of each other.)
-
-**One more, optional: the draft head** — [`mtp-Qwen3.8-Flash-Next-head-lr512.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf), 149 MB,
-from this project's [releases page](https://github.com/rulith-dev/rulith-inference/releases). Put it in the
-same folder as file 4. On the next rescan the app combines the two into
-`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-lr512.gguf` (a few seconds, once) and prefers it: drafting
-reads 135 MB instead of a 338-521 MB output projection, with the same or better acceptance. See [section 5](#5-optional-the-faster-draft-head-5-9-decode).
-
-### Downloading
-
-With [aria2](https://aria2.github.io/) in PowerShell — this puts the five files flat into one folder,
-resumes if interrupted, and is the fastest way we know of for files this size:
-
-```powershell
-$base = "https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/38bb39ee97821de2c9009abb7e93950eec396e66"
-$dir  = "D:\models\unsloth\Qwen3.8-Flash-Next-GGUF"
-New-Item -ItemType Directory -Force $dir | Out-Null
-foreach ($f in
-    "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
-    "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf",
-    "UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf",
-    "MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf",
-    "mmproj-F16.gguf") {
-  aria2c -x 8 -s 8 -c -d $dir -o (Split-Path $f -Leaf) "$base/$f"
-}
-# optional: the draft head (section 5)
-aria2c -x 8 -s 8 -c -d $dir "https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf"
-```
-
-If Hugging Face is slow or unreachable where you are, use the mirror: replace `huggingface.co` in
-`$base` with `hf-mirror.com`.
-
-With the Hugging Face CLI instead (`pip install huggingface_hub`):
+To download by hand instead, with the Hugging Face CLI (`pip install huggingface_hub`; set
+`HF_ENDPOINT=https://hf-mirror.com` first for the mirror):
 
 ```bash
-hf download unsloth/Qwen3.8-Flash-Next-GGUF --revision 38bb39ee97821de2c9009abb7e93950eec396e66 \
-  --local-dir D:\models\unsloth\Qwen3.8-Flash-Next-GGUF \
-  --include "UD-IQ4_XS/*" "MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf" "mmproj-F16.gguf"
+hf download Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF --local-dir D:\models\rulith --include "EXL3-4.05bpw/*" "mtp-*.gguf" "mmproj-F16.gguf"
 ```
 
-This one keeps the repository's sub-folders (`UD-IQ4_XS\`, `MTP\`), so afterwards **move the four
-files up** into the folder beside `mmproj-F16.gguf`. For the mirror, set `HF_ENDPOINT=https://hf-mirror.com`
-before running it. (Older installs call the command `huggingface-cli download`.)
+The CLI keeps the repository's folders, so afterwards move `mtp-Qwen3.8-Flash-Next-lr512-ownhead.gguf` and
+`mmproj-F16.gguf` into `EXL3-4.05bpw\`, next to the shards.
 
-A browser works too: open each of the five paths on the repository page, download, and save all of
-them into the same folder.
+## 3. Load it and chat
 
-## 3. Tell the app where the folder is
+Press **Load model** on the welcome screen, on the model's row under **Model › Library**, or in the model server panel
+at the foot of the sidebar. There is nothing to set first: the defaults are the configuration every published number
+was measured with: context 262144, eight conversation slots, flash attention, sparse attention, the MTP draft and image
+input on, thinking depth *medium*. **Model › Logs** shows the load progressing. The first load reads the whole file
+from disk; later ones are faster.
 
-Open the app. The welcome screen looks for the model files.
+When it is ready the chat opens by itself, with the model selected: just type. Attach a picture to ask about it. The
+app does not load a model on its own when it starts unless **Model › Configuration › Startup** says to.
 
-- If LM Studio is installed, its download folder is registered automatically and the model is
-  already found.
-- Otherwise press **Model folders**, add the parent folder — `D:\models` — with **Browse…** or by
-  pasting its path, and press **Save and scan**. Folders are scanned recursively, so the parent is
-  enough.
-
-The same list is under **Model › Library** in the sidebar: the model shows up as one row, *IQ4_XS ·
-93.7 GB · 3 shards*. *Incomplete* means a shard is missing. The list is cached: after adding or
-moving files, press **Rescan**. Switch the file-type filter to *MTP drafts* or *Vision projectors*
-to check that files 4 and 5 were seen.
-
-## 4. Load it and chat
-
-Press **Load model** on the welcome screen (or on the model's row under **Model › Library**). There
-is nothing to set first: the defaults are the configuration every published number was measured
-with — context 262144, batch and ubatch 8192, flash attention, sparse attention, the MTP draft and
-image input all on, thinking depth *medium*. **Model › Logs** shows the load progressing. The first
-load reads 93.7 GB from disk; later ones are faster.
-
-When it is ready the chat opens by itself, with the model selected — just type. Image input works by
-attaching a picture to the message. The app does not load a model on its own when it starts: press
-**Load model** in the strip above the chat or in the model server panel, or turn on **Model ›
-Configuration › Startup** to have it load the last used model. The strip also says when a model is
-loading. The model server panel at the foot of the sidebar
-shows the same state, with the same button, on every page.
-
-What to expect, measured on the reference machine:
+What to expect with EXL3 4.05 bpw (0.6.9, 64 GB setting):
 
 | | |
 |---|---|
-| short context | about 41 tok/s |
-| 86K tokens of context | about 33 tok/s; prefill about 1180 t/s |
-| three / four conversations at once | about 54 / 61 tok/s summed; *Concurrent conversations* is 8 by default (Model › Configuration › Concurrency), and each keeps its conversation resident. Agent tools need one for each session they run at once |
+| one conversation | 58 tok/s for an explanation, 70 writing code, 46 for prose (with MTP; speed depends on how predictable the text is) |
+| after 86K tokens of context | 46 tok/s; a long prompt is read at about 1,330 tokens a second |
+| eight conversations at once | about 85 tok/s summed. Agent tools need one slot for each session they run at once; *Concurrent conversations* is under Model › Configuration › Concurrency |
 
-With *Keep conversations on disk* on (Model › Configuration; off by default), a conversation you
-come back to later is not processed again: its state is kept on disk (about 30 KB per token, up to
-16 GB) and read back in about a second.
+With *Keep conversations on disk* on (Model › Configuration; off by default), a conversation you come back to later is
+not processed again: its state is kept on disk (about 30 KB a token, up to 16 GB) and read back in about a second.
 
-If the load fails with out of memory, this configuration does not fit: raise the carve in the BIOS,
-lower the context length under Model › Configuration, or give Windows a larger page file (RAM plus
-page file is the limit that runs out first; see [install.md](install.md)).
+If the load fails with out of memory, this configuration does not fit: raise the GPU memory in the BIOS, lower the
+context length under Model › Configuration, or give Windows a larger page file (RAM plus page file is the limit that
+runs out first; see [install.md](install.md)).
 
-The server is also an ordinary OpenAI-compatible endpoint at `http://127.0.0.1:8080/v1` while the
-model is loaded, for any other client. Model › Configuration › Network changes its port, lets other
-devices on your network use it and sets an API key for them; Model › Logs shows the addresses in use.
-
-## 5. Optional: the faster draft head (+5–9% decode)
-
-Unsloth's `shared-*` drafts have no output projection of their own: every draft step streams the
-model's 521 MB one to pick a single token. Two downloads on the
-[releases page](https://github.com/rulith-dev/rulith-inference/releases) shorten that. Everything else on
-this page works without either.
-
-- `mtp-Qwen3.8-Flash-Next-head-lr512.gguf`, 149 MB (0.4.6, the one to use): a rank-512 pre-score of the
-  vocabulary picks 512 candidates, and only their rows of the model's own projection are computed. The
-  model's first choice is among them 99.9-100% of the time; decode is 3.6% faster greedy and 4.9%
-  faster sampled than with the head below, greedy output unchanged.
-- `mtp-Qwen3.8-Flash-Next-head-iq4_xs.gguf`, 349 MB (0.1.2): the draft's own IQ4_XS copy of the
-  projection, 5% faster than borrowing the model's on English and 9% on Chinese. The decode figures
-  above were measured with it.
-
-Download one into the model's folder, next to file 4, and press **Rescan** under Model › Library. The
-app writes `mtp-Qwen3.8-Flash-Next-shared-Q4_K_M-head-<lr512 or iq4_xs>.gguf` beside them (a
-byte-for-byte splice of the two files, a few seconds, done once; it is the only file the app ever writes
-into a model folder), reports it in a notice, and every profile that has not chosen a draft by hand uses
-it from then on. With both, the lr512 one is used, and a profile saved with the iq4_xs one moves to it.
-The draft list under Model › Configuration shows them all.
-
-Building the head yourself instead needs a source checkout with the toolchain:
-[install.md, section 5](install.md#5-model-files).
+While a model is loaded the server is also an OpenAI- and Anthropic-compatible endpoint at `http://127.0.0.1:8080/v1`
+for other clients, coding agents included; the [README](../README.md#use-it-from-other-programs) has the settings for
+Codex and Claude Code. Model › Configuration › Network changes its port, lets other devices on your network use it and
+sets an API key for them; Model › Logs shows the addresses in use.
 
 ## If something goes wrong
 
-- **The model library is empty.** Check *Model folders*: only `.gguf` files under a registered
-  folder are listed, and a split model is listed by its `-00001-of-` shard. Press *Rescan*.
-- **MTP or image input is off and Model › Configuration says it did not find the file.** File 4 or
-  5 is not in the model's folder (or is named differently). Add it and *Rescan*; the switch turns
-  itself on. A load only refuses to start over these when a saved profile has the switch on by hand
-  and the file has since gone.
-- **The load starts, then dies.** Read Model › Logs. The usual causes are a GPU other than
-  gfx1151, or a carve or page file too small for the context length.
-- **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running;
-  the model pages adopt it and can unload it. Anything else on that port has to be stopped by hand, or
-  the server moved to another port under Model › Configuration › Network.
+- **The model library is empty.** Check *Model folders*: only `.gguf` files under a registered folder are listed, and a
+  split model is listed by its `-00001-of-` shard. Press *Rescan*.
+- **MTP or image input is off and Model › Configuration says it did not find the file.** The draft or the projector is
+  not in the model's folder (or is named differently). Add it and *Rescan*; the switch turns itself on. A load only
+  refuses to start over these when a saved profile has the switch on by hand and the file has since gone.
+- **The load starts, then dies.** Read Model › Logs. The usual causes are a GPU other than gfx1151, or GPU memory or a
+  page file too small for the context length.
+- **Port 8080 is in use.** A `llama-server` from an earlier instance of this app is still running; the model pages
+  adopt it and can unload it. Anything else on that port has to be stopped by hand, or the server moved to another
+  port under Model › Configuration › Network.
 - **Where things are.** The app is `%LOCALAPPDATA%\Rulith Inference\rulith-inference.exe`. Up to 0.6.1 an install
   made before the rename stayed in `%LOCALAPPDATA%\Strix Llama` as `strixllama.exe`; the 0.6.2 setup renames that
-  folder in place (it stays where it was if a program holds a file in it) and re-points the shortcuts and a
-  taskbar pin; if a pin still shows a blank icon, pin the app again. The manager's settings, model catalog and
-  prompt cache are in `runtime\config\jan\` under it, the server's logs in `runtime\logs\` (the newest ten runs and
-  at most 4 GB are kept; past 1 GB a run's console log is cut back to the end of the load, and its request log keeps
-  its newest two 1 GB files, since 0.6.5); chats are in `%APPDATA%\strixllama\data`. Uninstalling removes the app;
-  the settings and the prompt cache go too
-  when you tick *Delete the application data*, and chats stay either way.
+  folder in place (it stays where it was if a program holds a file in it) and re-points the shortcuts and a taskbar
+  pin; if a pin still shows a blank icon, pin the app again. The manager's settings, model catalog and prompt cache are
+  in `runtime\config\jan\` under it, the server's logs in `runtime\logs\` (the newest ten runs and at most 4 GB are
+  kept; past 1 GB a run's console log is cut back to the end of the load, and its request log keeps its newest two 1 GB
+  files); chats are in `%APPDATA%\strixllama\data`. Uninstalling removes the app; the settings and the prompt cache go
+  too when you tick *Delete the application data*, and chats stay either way.

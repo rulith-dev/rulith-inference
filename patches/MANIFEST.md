@@ -24,6 +24,23 @@ to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
 
+### 0.6.9: several conversations decoding together (fork `511901542`)
+
+- `ggml/src/ggml-cuda/mul-mat-had.cu`: EXL3 dense products of 5-8 rows (eight conversations decoding together, the MTP
+  verifications of two) take the R-row LDS ring as 2-4 rows did (`mmh_ring_rows<K, 5..8>`); the GEMV they went to read
+  the weights at 100-163 GB/s. Every row is bit for bit the one-row ring's (`STRIX_MMH_RING2_CHECK`: 0 differing values
+  on 8-row products of 4.05 and 3.05). `STRIX_MMH_RING2_MAX=4`: the GEMV from 5 rows.
+- `common/sampling.cpp`: the exact fast top-k of 0.6.3 also for a stored row (`common_sampler_sample_logits`, the path
+  the server samples generating slots on together), which built all 248K candidates for the full chain. Its scan skips
+  eight logits at a time with SSE2 while none can enter the candidates (no biased token, no NaN, none above the current
+  (k + 1)-th). `common_sampler_fast_applies` says whether the next token takes it.
+- `tools/server/server-context.cpp`: rows the fast top-k takes are sampled in turn, the others on threads as before:
+  starting the threads of an eight-row step cost more than its rows. CPU between two eight-row steps 1.57 -> 0.50 ms.
+- EXL3 4.05, eight conversations, MTP off: 86.9 -> 94.0 tok/s summed; MTP on unchanged (its verifications are 16-32
+  rows); one conversation unchanged. `STRIX_FAST_SAMPLE_CHECK`: every fast sample identical to the full chain.
+- Dead end, not shipped: the MoE decode ring for 5-8 tokens. Eight tokens route to ~75 of 512 experts a layer
+  (~188 MB), which the id-GEMVs already read at ~193 GB/s: 46.5 vs 46.8 ms of an 80.7 ms step.
+
 ### 0.6.8: copies to the host under the polling sync (fork `ee07b49d0`)
 
 - `ggml/src/ggml-cuda/ggml-cuda.cu`: the polling sync of 0.4.9 (`STRIX_POLL_SYNC`) launches a mark kernel and spins on

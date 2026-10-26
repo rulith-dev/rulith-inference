@@ -1,99 +1,75 @@
 # Rulith Inference
 
-在一台 AMD Strix Halo 机器上、在 Windows 下，把 125B 的 MoE 模型跑快。
+在一台 AMD Strix Halo 电脑上、在 Windows 下，把 125B 的 MoE 模型跑快。
 
-目标平台：**Ryzen AI Max+ 395**（Radeon 8060S，gfx1151，128 GB 统一内存），模型
-**Qwen3.8-Flash-Next**（125B-A6B），经打过补丁的 llama.cpp 服务：以 Unsloth UD-IQ4_XS（93.7 GB）为基准文件，
-UD-Q4_K_XL（111.3 GB）也经过调优。
+Rulith Inference 是一个桌面应用加本地服务器，在 **Ryzen AI Max+ 395**（Radeon 8060S，gfx1151，128 GB 统一内存）上运行
+**Qwen3.8-Flash-Next**（总参数 125B，每个 token 激活 6B）。一个安装包包含全部运行环境；应用自己下载模型，供它自带的聊天窗口
+和任何兼容 OpenAI 或 Anthropic 接口的客户端使用，包括编程智能体。底层是 llama.cpp，为这块 GPU 和这个模型改了 181 个文件。
 
-*[English](README.md)*
+*[English](README.md)* · *原名 Strix Llama*
 
-*原名 **Strix Llama**，0.3.6 起改为现名。*
+## 速度
 
-## 当前水平
-
-本机用 0.5.1 实测（2026-10-08，64 GB 显存划分），推测解码开启，应用的默认设置（8 个对话槽、MTP、图像输入开启）：
-预填充为 95.6K token 真实文本；解码为在同一文本的 86K token 之后、以及只有一句提问之后各生成 400 token；多路为 4 个槽下
-几个各约 4K 上下文的对话同时解码，每轮换一个采样种子。最后一行关闭 MTP。括号里是 0.4.0 用同样方法测得的数字（2026-10-01，
-96 GB 显存划分）：
+Rulith Inference 0.6.9，目标机器，应用默认设置（GPU 显存 64 GB 档、8 个对话槽、MTP 推测解码），推荐的 EXL3 4.05 bpw 文件：
 
 | | |
 | --- | --- |
-| 预填充 | **1328 t/s**（0.4.0：1237） |
-| 解码，86K 上下文 | **25.9 ms/token**（38.6 tok/s，草稿接受率 60%；0.4.0：23.9，接受率 65%，每次前向同为约 70 ms） |
-| 解码，短上下文 | **20.7 ms/token**（48.2 tok/s，接受率 67%；0.4.0：21.7，接受率 65%） |
-| 解码，3 / 4 路同时 | **66.9 / 75.1 tok/s** 合计（同样测法下单路 42.1 的 1.59 / 1.78 倍；0.4.0 为 59.8 / 69.1 与 42.1；合计随各轮采样的接受率浮动 ±10%） |
-| 关闭 MTP 解码，8 个约 40K token 的对话同时 | 512K token q8_0 池中合计 **95.0 tok/s**（0.4.0：91.0）；8 个约 20K 的对话、f16 缓存 97.7（0.4.0：95.6）；单个对话 3K / 50K / 110K 时 27.8 / 27.5 / 27.0 tok/s（0.4.0：27.5 / 27.0 / 26.5） |
-| 图像输入 | 支持（Qwen3-VL 投影模型） |
+| 读提示词 | 16.9K-86K token **1,300-1,330 t/s** |
+| 单个对话，MTP 开 | 解释说明 **58 tok/s**（草稿接受率 66%），写代码 **70 tok/s**（84%），散文 **46 tok/s**（45%） |
+| 单个对话，MTP 关 | **33 tok/s** |
+| 86K token 上下文之后 | **46 tok/s**（MTP 开，接受率 59%） |
+| 8 个对话同时 | 合计 **85 tok/s**（MTP 关 91） |
 
-本仓库里的每个数字都附带产生它的命令，见 [docs/results.md](docs/results.md)。凡是改动无法在噪声
-之上分辨的，就直接写明分辨不出，而不是算作收益；解码数字一律带上草稿接受率——开着推测解码时，脱离
-接受率谈吞吐，描述的是那段提示词，不是这套运行时。
+开着推测解码时，速度取决于文本有多好预测，所以每个 MTP 数字都带上草稿接受率（接受的草稿 token / 提出的草稿 token）。
+本仓库里每个数字都附带产生它的命令（[docs/results.md](docs/results.md)）；[docs/measuring.md](docs/measuring.md)
+列出了这个项目曾经测错自己的各种方式。
 
-**Linux。** 没有 Linux 安装包，但打过补丁的 llama.cpp 可以在 Linux 上编译。有用户在 Linux 上用 ROCm 编译了
-[rulith-dev/llama.cpp](https://github.com/rulith-dev/llama.cpp) 的补丁分支（当时叫 `strixllama`，0.4.3 起叫 `rulith`），用 `llama-bench`
-测量（`-b 8192 -ub 8192 -fa 1`，并导出应用使用的开关）：UD-IQ4_XS 预填充 1254 t/s（pp2048）、生成
-27.8 tok/s（tg128，关闭 MTP），与 Windows 相同；UD-Q4_K_XL 为 804 和 26.0（[帖子](https://www.reddit.com/r/StrixHalo/comments/1wv2x6c/comment/pdgodkl/)），
-当时调优过的专家内核只针对 UD-IQ4_XS 里的量化类型。0.4.2 起也覆盖了 UD-Q4_K_XL 的类型：本机 2K token 的提示
-预填充 876 → 1127 t/s，95.6K 为 850 → 1054；它的生成速度本来就到了读取量多 8.5% 所允许的水平。该模型的其他量化
-版本也能加载、正常回答，但走的是 llama.cpp 原版内核，预填充相应更慢：调优内核只针对这两个文件
-（[#8](https://github.com/rulith-dev/rulith-inference/issues/8)）。
-这些开关是 [tools/manager.py](tools/manager.py) 中的 `HIP_GATES` 和 `HIP_QSA_GATES`；不设置时，服务端
-接近原版 llama.cpp。
+## 开始使用
 
-## 只想跑起来？
+1. **安装。** 从 [Releases 页面](https://github.com/rulith-dev/rulith-inference/releases) 下载
+   `Rulith-Inference_<版本>_x64-setup.exe` 并运行。不需要 Python、ROCm 或编译工具：运行环境都在里面。之后应用会自动更新，
+   只安装签名校验通过的更新。
+2. **设置 GPU 显存**：在 BIOS 里设为 64 GB 或 96 GB（选项通常叫 *UMA frame buffer size* 之类）。64 GB 时放不下的专家
+   留在系统内存里，读取速度相同。
+3. **下载模型。** 打开 **模型 › 下载**，在 *推荐* 里选一个文件，排第一的是 EXL3 4.05 bpw。应用会从 Hugging Face
+   （或其镜像）下载模型、它的 MTP 草稿和视觉投影模型，逐个校验 SHA-256 后加入模型库。已经有的文件（比如 LM Studio
+   的目录）原地读取：在 **模型 › 模型库 › 模型文件夹** 里加上它们的文件夹即可。
+4. **加载并聊天。** 点 **加载模型**。默认设置就是上面那些数字的测量配置，不需要先调任何东西。附上一张图片即可针对图片提问。
 
-**[docs/getting-started.zh.md](docs/getting-started.zh.md)**——从
-[Releases 页面](https://github.com/rulith-dev/rulith-inference/releases)装安装包、要下载的五个模型文件和
-放在哪、点什么。不涉及 Python、ROCm 或任何编译工具。
+[docs/getting-started.zh.md](docs/getting-started.zh.md) 逐步说明每一步该看到什么、某一步失败时怎么办。
 
-## 模型文件
+## 模型
 
-**0.6.0 起推荐 EXL3 4.05 bpw。** turboderp 的 EXL3 量化，为本引擎重新打包成 GGUF：
-[Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF)
-（104.3 GB，自带 MTP 草稿）。在我们的评测集上它最接近 BF16 原模型（KL 散度 0.022；UD-Q4_K_XL 0.024，UD-IQ4_XS 0.048），
-回答速度和 UD-Q4_K_XL 相同（单路 56 tok/s，读提示 1,230 t/s）。应用里在“下载 › 推荐模型”中直接下载；所需内存和完整对比见模型卡。
-只能在 Rulith Inference 0.6.0 及以上加载。下面的 GGUF 文件继续支持。
+调优并实测过的是 Qwen3.8-Flash-Next 的四个文件。质量用与 BF16 模型的 KL 散度（越低越接近）和六类文本上的 top-1
+一致率表示；速度是单个对话开 MTP 写代码（括号内为草稿接受率），以及读一个 16.9K token 的提示（0.6.8，64 GB 档；0.6.9 的单对话路径与之相同）。
 
-这里的每个数字都是用下面这些文件测的。链接固定在核对过的 Hugging Face 版本上（`38bb39e`：
-2026-09-26 逐个文件比对过 sha256）：
+| 文件 | 大小 | KLD | top-1 | 代码，MTP 开 | 读提示词 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **EXL3 4.05 bpw**（推荐） | 104.3 GB | **0.022** | **96.0%** | 70.9 tok/s（84%） | 1,332 t/s |
+| EXL3 3.05 bpw | 82.4 GB | 0.044 | 94.5% | 75.9 tok/s（81%） | 1,327 t/s |
+| UD-Q4_K_XL | 111.3 GB | 0.024 | 95.9% | 58.8 tok/s（91%） | 1,379 t/s |
+| UD-IQ4_XS | 93.7 GB | 0.048 | 94.4% | 63.6 tok/s（88%） | 1,414 t/s |
 
-| | 文件 | 大小 |
-| --- | --- | --- |
-| **模型**，必需 | Unsloth 的 Qwen3.8-Flash-Next-GGUF，[`UD-IQ4_XS`，三个分片](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/tree/38bb39ee97821de2c9009abb7e93950eec396e66/UD-IQ4_XS) | 93.7 GB |
-| **MTP 草稿**：推测解码，解码约 +60% | [`mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/MTP/mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf) | 1.9 GB |
-| **视觉投影**：图像输入 | [`mmproj-F16.gguf`](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/blob/38bb39ee97821de2c9009abb7e93950eec396e66/mmproj-F16.gguf) | 904 MB |
-| **草稿头**，本项目提供：先用秩 512 的低秩打分挑出 512 个候选，只对它们用模型自己的输出投影精确计算；解码比 0.1.2 的 IQ4_XS 草稿头快 3.6–4.9% | [`mtp-Qwen3.8-Flash-Next-head-lr512.gguf`](https://github.com/rulith-dev/rulith-inference/releases/download/v0.4.6/mtp-Qwen3.8-Flash-Next-head-lr512.gguf) | 149 MB |
+EXL3 文件是 turboderp 的量化，为本引擎重新打包：
+[Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF)，
+带自己的 MTP 草稿，只能在 Rulith Inference 里加载。UD 文件来自
+[Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF)。NVIDIA Nemotron 3.5 Super（120B-A12B，Q4_K_M）也能加载，
+支持图像输入和它自己的 MTP 层。该模型的其他量化版本也能加载，走 llama.cpp 原版内核。
 
-四样都平铺放进同一个文件夹：应用按文件名在模型第一个分片旁边找草稿、投影和草稿头。下载命令见
-[docs/getting-started.zh.md](docs/getting-started.zh.md)。
+## 给其他程序用
 
-## 快速开始（从源码）
+模型加载后，服务器在 `http://127.0.0.1:8080/v1` 提供 OpenAI 的 Chat Completions 与 Responses 接口和 Anthropic 的
+Messages 接口，支持流式输出和工具调用。**模型 › 配置 › 网络** 可以改端口、开放给局域网、设置 API 密钥
+（`Authorization: Bearer <密钥>`）。请求里的模型名就是文件名去掉分片后缀（`Qwen3.8-Flash-Next-EXL3-4.05bpw`）；只加载了
+一个模型时，任何名字都会应答。
 
-```bash
-python bootstrap/bootstrap.py --toolchain          # 把 ROCm SDK 和 ninja 装进 toolchain/，约 5 GB
-python bootstrap/bootstrap.py --fetch --patch --build
-python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
-```
+同时保留 8 个对话；一个槽只接收接续它已有内容的请求，所以在同一段长系统提示上跑多个会话的智能体工具不会互相截断历史。
+别的会话已经读过的系统提示在 GPU 上直接复制，不再重读。
 
-`bootstrap.py` 按固定版本号克隆上游 `ggml-org/llama.cpp`、应用补丁集、对着 ROCm SDK 构建。
-`tools/manager.py` 是一个从 stdin 读 JSON 的进程管理器：启动参数、环境开关和运行时都由它掌握，
-所以一套配置是可复现的，而不是靠记忆。
-
-它启动的服务器是一个 OpenAI 兼容接口，默认在 `http://127.0.0.1:8080/v1`。在应用里，**模型 › 配置 › 网络**
-可以改端口、让局域网里的其他设备也能使用服务器（这时它监听 0.0.0.0，Windows 第一次可能会询问是否允许
-llama-server 通过防火墙），还可以设置 API 密钥，请求须以 `Authorization: Bearer <密钥>` 带上它。这项设置
-保存在 `config/jan/settings.json`（`"network": {"port": 8080, "lan": false, "api_key": ""}`），更新应用时
-不会被覆盖；环境变量 `RULITH_PORT`、`RULITH_HOST`（要绑定的地址，例如 `0.0.0.0`）和 `RULITH_API_KEY`
-优先于它。请求里的模型名是文件名去掉分片后缀（`"model": "Qwen3.8-Flash-Next-UD-IQ4_XS"`，即 `/v1/models`
-列出、日志页显示的名字）；只加载一个模型时，服务器对任何名字都会回答。
-
-编程智能体也可以用这个服务器。0.5.3 起它对 OpenAI Responses 接口（`/v1/responses`）的支持足以运行 Codex：
-自由格式（`custom`）工具、归在 `namespace` 里的工具、对话中途插入的 developer 消息都能用。`web_search`
-这类托管工具不会执行，响应头 `X-Rulith-Unsupported-Tools` 会列出它们。Codex 在 `~/.codex/config.toml` 里这样配：
+**Codex**，在 `~/.codex/config.toml` 里：
 
 ```toml
-model = "Qwen3.8-Flash-Next-UD-IQ4_XS"
+model = "Qwen3.8-Flash-Next-EXL3-4.05bpw"
 model_provider = "rulith"
 
 [model_providers.rulith]
@@ -103,113 +79,75 @@ wire_api = "responses"
 # env_key = "RULITH_API_KEY"   # 服务器设了 API 密钥时
 ```
 
-Claude Code 走 Anthropic Messages 接口（`/v1/messages`，含流式输出和 `tool_use` / `tool_result`）。用环境变量
-指向服务器：`ANTHROPIC_BASE_URL=http://127.0.0.1:8080`，`ANTHROPIC_AUTH_TOKEN` 设为 API 密钥（没有密钥时随便填），
-`ANTHROPIC_MODEL` 和 `ANTHROPIC_SMALL_FAST_MODEL` 设为模型名。两者都用 Codex 0.160 和 Claude Code 2.1.247 验证过。
+**Claude Code**：设置 `ANTHROPIC_BASE_URL=http://127.0.0.1:8080`，`ANTHROPIC_AUTH_TOKEN` 设为 API 密钥（没有密钥时
+任意文本），`ANTHROPIC_MODEL` 和 `ANTHROPIC_SMALL_FAST_MODEL` 设为模型名。`web_search` 这类托管工具不会执行；响应会在
+`X-Rulith-Unsupported-Tools` 头里列出它们。
 
-**先读 [docs/install.md](docs/install.md)。** 有三件事不是可选的，也不显然：显存划分应为 96 GB，0.4.7 起
-64 GB 也可以（放不下的专家权重从系统内存读取，速度不变；96 GB 给 KV 池留的空间更大）；ROCm SDK 必须用 TheRock 10.2 而不是
-系统的 7.1（同样的源码，预填充 +60%）；而实测所用的 SDK 版本来自一个约 27 天滚动窗口的 nightly
-索引——也就是说这个钉死的版本号迟早会失效，那篇文档写了届时怎么办。模型文件是另外约 95 GB 的下载。
+## 引擎里有什么
 
-可选：`integrations/jan/apply.py` 把模型页面（模型库、配置、日志）、替换 Jan 引导页的欢迎页、侧栏和
-聊天页上方的模型状态，以及 Rulith 的设计风格叠加进 [Jan](https://github.com/menloresearch/jan) 的源码树，
-中英双语。
+相对上游 llama.cpp 的改动，按用途归类。[docs/engine.zh.md](docs/engine.zh.md) 逐项列出测量数字、所在版本和开关。
 
-## 里面到底有什么
+- **读提示词。** 专家内核按 gfx1151 的执行方式重写（它的向量单元和矩阵核心从不同时工作，内核每花一条指令解包权重，
+  就损失一份矩阵时间）：IQ3_S、Q4_K 和 EXL3 专家走矩阵核心，delta net 以 16 token 为块在矩阵核心上计算，专家周围的
+  零碎工作融合掉。
+- **生成。** 解码按内存带宽的速度读权重：EXL3 权重经 GPU 本地内存里的环形缓冲流入，一步里所有被路由的专家在一次
+  启动里完成，稀疏注意力只收集选中的缓存单元，主机等待 GPU 时绕开运行时约 0.65 ms 的延迟。
+- **推测解码。** 模型自带的 MTP 层配合 Rulith 的低秩草稿头起草；草稿长度按接受率和同时生成的对话数调整，采样时每个
+  token 的分布与模型单独采样完全相同。
+- **多对话与智能体。** 所有正在回答的对话不论长短共用一次前向，在后续提示会分叉的位置保存检查点，提示缓存可以保存到
+  磁盘，delta net 状态每九个 token 才写回一次。
+- **内存。** 应用先算出一次加载需要多少内存，把 GPU 显存档放不下的专家放进锁页系统内存，读取速度不变；Q8_0 K/V 缓存
+  可选。
+- **同样的输入，同样的输出。** 释放的缓存单元会清零，草稿的状态跟随对话经过回退和缓存，所以回答不受之前运行过什么的影响。
 
-相对上游 llama.cpp 的全部改动是 **181 个文件**——3880 个里改了 119 个、新增 62 个。主要几项：
-
-| | |
-| --- | --- |
-| **IQ3_S 走矩阵核** | 这个模型 52% 的主体以 IQ3_S 存储，而 MMB 反量化 GEMM 不接受这种格式，于是一半权重从未到达矩阵核。预填充 +5.6%。 |
-| **按这块 GPU 定价的专家内核** | gfx1151 上向量单元和矩阵核从不同时运行，反量化 GEMM 用来解包权重的每条指令都是矩阵核少算的时间。据此重写了路由专家的 IQ3_S gate/up（预填充里最大的内核）：每层 35.9 → 19.9 ms，预填充 +10%，输出逐位不变。 |
-| **预填充批次的其余部分** | 专家内核到了极限之后，一个批次仍有约四分之一的 GPU 时间花在本应很便宜的工作上：4 个输出的投影走 64 行宽的 GEMM 分块、激活行全落在同一组内存通道上、索引器打分拆成多遍、稀疏注意力每层把缓存完整复制两遍。这些现在逐一融合或重写：2K token 批次 GPU 时间 1860 → 1573 ms，64K 深度 2276 → 1788 ms；95.6K token 提示词 992 → 1187 t/s。困惑度相同，但不再逐位相同。 |
-| **解码期稀疏注意力** | 稀疏内核需要只有预填充才构建的打包布局，所以解码一个 token 要在整个缓存上做稠密注意力。改为聚集被选中的单元：97K 解码 59.0 → 49.3 ms/token，上下文斜率从每千 token 0.188 降到 0.067 ms。 |
-| **可选的 Q8_0 K/V 缓存** | 稀疏注意力内核只读 f16，所以 Q8_0 缓存每个批次先反量化成它的布局：262144 token 时 K/V 缓存从 6 GB 降到 3.2 GB，解码不变，预填充慢 1–2%。默认仍是 f16。 |
-| **MTP 推测解码调优** | 草稿头配自己的 IQ4_XS 输出投影，三个草稿 token，n-gram 草稿关闭。85K 解码 21.5 → 34.9 tok/s。 |
-| **按并发调整草稿长度** | 这个 MoE 里每个待验证的草稿 token 都要多读约 10 个专家的权重，同时解码的几个对话无法共享。同时生成的对话越多，草稿越短（3，然后到四路为止是 2，五路起不起草）。同一步里各路草稿补齐到相同长度：长短不一的草稿会让混合记忆把一次验证拆成整个模型的好几次前向，三路 4K 上下文开草稿只有 34 tok/s、不开反而 46；现在开草稿也是 46。几路一起验证的一步（5-16 个 token）里，小乘积改走向量 kernel，不再用填不满的分块 kernel：0.2.3 起是 MoE 路由和被路由到的专家（9 token 一步 120-123 → 103-104 ms；同样草稿接受率下三路 +13%，四路现在也起草，+8%），0.2.4 起又加了三个（106 → 103 ms；三路 +2%，四路 +4.5%）。 |
-| **输出不再依赖之前跑过什么** | 释放的 KV 单元会被清零：稀疏注意力的矩阵核求和曾在最末一位受先前对话或被拒草稿留在其中的数据影响。MTP 起草器携带的状态会随对话经过回退和 prompt 缓存：同一 prompt 发两次，草稿和回答都相同。 |
-| **跟得上智能体的前缀缓存** | 递归状态只能从保留了检查点的位置接续，所以检查点现在放在后续提示会分叉的地方：系统提示结束处、每条用户消息处、每个提示的末尾。新会话用的系统提示如果别的槽已经算过，就在 GPU 上复制过来，不再重算；同时开始的几个会话会等第一个算完再复制。一个 agent 负载（10K token 系统提示、3 个会话同时开始、3 个子智能体）：处理量 73K → 29K token，提示耗时 172 → 60 秒。 |
-| **多个智能体同时跑** | 智能体工具每个子智能体一个会话，共用一个很长的系统提示，于是每个槽看起来都和新会话 97% 相似，新会话会抢走得分最高的槽，截掉另一个智能体的历史。现在只有请求确实是某个槽里对话的延续时才用那个槽，默认同时保留 8 个对话。正在回答的对话不论长短共用一遍前向，新提示单独一遍；对话在回答时，每步最多处理 2048 个提示 token。六个智能体，0.2.6（默认 4 槽）对比 0.2.7（默认 8 槽）：处理量 75K → 45K token，首 token 时间中位数 10.1 → 3.4 秒，流式输出中最长的停顿 6.2 → 2.7 秒；一条 19K token 的新提示让正在输出的对话每次只停 2.2 秒，而不是 7 秒。 |
-| **不存快照的回滚** | 推测验证每验一个 token 就保存一份递归状态（每层 3 MB），以备草稿被拒。现在只记录重算被拒部分所需的数据（每 token 33 KB），下一步再重放：三 / 四路同时时每个验证步缩短 2.8% / 4.0%，输出逐位不变。 |
-| **delta net 状态九个 token 才写一次** | 四层里有三层为每个对话保存一份 3 MB 的状态，每个 token 都要读一遍、写一遍：八个对话时每层每个 token 要写 24 MB，比读还费时间。现在每个 token 只写 33 KB 的更新记录，攒满八条才把状态写回显存，用的是同样的记录和同样的运算；每个 warp 也改成一次读两列。八个约 20K 的对话、关闭 MTP：89.4 → 97.1 tok/s（0.4.0），输出逐位不变。 |
-| **更短的提示词处理** | 把一次提示词处理放在一条连续的 GPU 时间线上看，路由专家约占 2K token 批次的 40%，它周围还有一些本不必单独占一趟的工作。现在共享专家带门控的输出在路由专家的加权求和里一并加上；超连接的几路流在下一个投影读取它们的地方现算，不再以 F32 写出；delta net 的 q/k 归一化合成一个内核；专家的行列表从 64 个 token 起就排序（以前要超过 4096）；提示词分块要用的逐层嵌入行，在这一趟要用之前就从 SSD 读好。全新提示词 1K / 2K / 4K / 8K / 16K token：920 / 1072 / 1122 / 1267 / 1245 → 964 / 1148 / 1227 / 1302 / 1301 t/s（0.4.3）；输出逐位不变。 |
-| **UD-Q4_K_XL 的专家走矩阵核心** | 调优过的预填充内核是给 UD-IQ4_XS 里的量化类型写的，UD-Q4_K_XL 的专家（Q4_K、Q5_1）只能走 llama.cpp 的通用路径。现在有了专门的内核：Q4_K_XL 预填充 2K token 876 → 1127 t/s，95.6K 为 850 → 1054（0.4.2）。困惑度在误差范围内不变；UD-IQ4_XS 不受影响。 |
-| **解码小内核和 BF16 副本** | 在 HIP 图里逐个派发打时间戳的剖析显示，每个 token 有约 3 ms 花在受延迟限制的小内核上：融合的逐元素链每次启动都要取一大段展开的通用寻址代码（8.4 → 2.7 us），top-k 没用 DPP。另有 264 个 F32 权重（路由、门控、注入）的值全是 bfloat16，换成 BF16 副本，乘积不变、读的字节减半。单个对话、关闭 MTP，3K 上下文 25.9 → 27.3 tok/s（0.4.0），输出不变。 |
-| **运行时补上 rocBLAS 自己的 kernel** | Issue #11：运行时里带了 rocBLAS 的 Tensile kernel，但没带它自己那部分 kernel 所在的 kernel pack（`bin/.kpack/blas_lib_gfx1151.kpack`，5 MB）；在我们用的这版 ROCm SDK 里，这部分 kernel 是单独打包的。结果只有一列、用 f32 累加的 hipBLAS 矩阵乘（f32 输入，或 bf16 / f16 输入、f32 计算）都会报 `hipErrorInvalidKernelFile`，服务器随即退出。用 Unsloth 模型文件时，计算图从不把这种矩阵乘交给 hipBLAS；GSQ-RCO 模型配 BF16 投影器时就会。现在运行时会带上它的 DLL 引用到的所有 kernel pack。在打包的运行时上，ggml 的 MUL_MAT 测试以前一碰到这种矩阵乘就退出，现在全部通过，输出逐位不变（0.5.0）。 |
-| **等 GPU 时不再受运行时拖累** | 在 Windows 上，一个 2,000 个 kernel 的 graph 跑完之后，hipStreamSynchronize 还要约 0.65 ms 才返回；而且一次 launch 的最后一批工作要等主机同步时才会提交（[ROCm/TheRock#8786](https://github.com/ROCm/TheRock/issues/8786)，附独立复现）。现在由流的末尾往主机内存写一个序号，用一次事件查询把工作提交出去，主机轮询这个序号。等待超过 100 ms（prefill）时改用运行时自己的等待。单路：关 MTP 每个 token 少 0.6 ms（-1.7%），开 MTP 快 1.9%；8 路：每步少 1.0–1.7 ms。输出逐位不变。代价是解码时多占约 0.4 个 CPU 核；`STRIX_POLL_SYNC=0` 可关闭（0.4.9）。 |
-| **长对话之后的 prefill** | 每轮对话开始时要先给 delta net 的状态存一个检查点，这需要在 CPU 上重放最近几个 token 尚未落地的更新，每轮约 109 ms。现在改由 GPU 用前向计算本身的 kernel 重放，约 3 ms。另外做了三处融合（路由乘法、delta net 的 beta/alpha 两个乘法、注意力 gate 与其 norm），专家 kernel 的屏障不再等待全部加载完成，UD-IQ4_XS 里还走 llama.cpp 通用路径的六个专家层（五个 Q8_0 down、一个 IQ4_XS gate/up）也换到了调优过的 kernel。在应用里（UD-IQ4_XS，关闭 MTP，两个会话槽），156K token 的 prompt 约 115 秒，1,359 t/s。和 0.5.0 相比，新会话里处理一条消息快约 3%，已有 4K~32K token 历史时快约 7%。这六层现在和其余 90 层一样用 bf16 计算，所以输出不再与 0.5.0 逐位一致；40 个 chunk 的困惑度 2.8134 → 2.8070。`STRIX_MMB_Q8=0` 可恢复原路径（0.5.1）。|
-| **只在真正的轮次处切分 prompt** | 一段从头读入的对话（重启之后，或关了磁盘层时被换出）以前会在第一条用户消息、以及历史里按间距挑出的轮次起点处切批：151K token、35 轮的对话切出 10 个短 ubatch。现在历史当作一整段上下文处理，只有最后一条用户消息单独起一批（编辑这条消息时从这里分叉）；其余检查点放在本来就有的批次边界上，间距和以前一样。实测这些切分并不花时间（这段 prompt 切与不切都是 122.6 s）。用户能感觉到的是一起修的淘汰问题：长 prompt 把检查点列表占满时，最后一条用户消息处的检查点不再第一个被淘汰，编辑这条消息只需算 1,881 个 token，以前要 5,895 个（0.4.8）。 |
-| **专家放置把整次加载都算进去** | 0.4.7 的估算漏了随 KV 池增长的那部分计算缓冲区（每个单元约 6.7 KiB），把 MTP 草稿的 K/V 按主模型的类型算（实际是 f16），还把整个显存划分都当成可用（驱动会留约 4%）。64 GB 划分、512K q8_0 KV 池、开 MTP 时，它只把 15 层专家放进系统内存，实际需要 18 层，于是约 2 GB 溢出，156K token 的 prompt 只有 1,089 t/s；现在是 1,237。放到 32 层（37 GiB）时，GPU 报告剩余显存为 0，llama.cpp 按剩余显存切分层时出现 0/0，MTP 草稿加载失败；现在全为零时平均切分。32 层时 prefill 不变（1,233.5 t/s），MTP 解码比 18 层慢约 2%（0.4.8）。 |
-| **专家权重放到系统内存** | 显存划分比一次加载的需求小时（64 GB 设置，或 96 GB 下设了很大的 KV 池），以前溢出交给显卡驱动处理，驱动把最后分配的东西放进共享内存：KV 缓存和计算缓冲区，而它们每个 token 都要零碎地读。64 GB 因此慢 28%；一位用户在 96 GB 下 KV 池溢出 8 GB，长上下文慢了 10–12%。现在应用会先算出这次加载需要多少显存，把放不下的最后几层专家权重放进锁页的系统内存，GPU 读它和读显存一样快。64 GB 下 16 层专家放在系统内存：关 MTP 时 prefill 1343–1368 t/s、解码 28.5 tok/s，开 MTP 时贪心 43.7、采样 43.1 tok/s，和 96 GB 一样；f16 / MTP / q8_0 三个探针和 0.4.4 逐位一致（0.4.7）。 |
-| **图片分批不再受其他对话影响** | Issue #10：限制图片批次稠密输入内存的那个上限按整个 KV 池计算，另一个槽位里的长对话会让这个对话的图片分成不同的批次，贪心输出也随之改变。现在只按本对话自己的单元计算（修复来自 @obsidience；0.4.7）。 |
-| **更省的草稿头** | 草稿每一步都要读完整的输出投影才能挑出一个 token：IQ4_XS 草稿头也有 338 MB，而且它挑出的第一名和模型自己的只有 96.5–97% 一致。现在先用秩 512 的低秩打分（135 MB）在全词表里挑出 512 个候选，只对它们用模型自己的输出投影精确计算；模型的第一名落在候选里的比例为 99.9–100%（英文、中文，以及拟合时没用到的对话）。比 IQ4_XS 草稿头解码贪心 +3.6%、采样 +4.9%（接受率 0.687 → 0.702），贪心输出逐位不变（0.4.6）。 |
-| **采样时的 MTP** | 温度大于 0 时，草稿 token 只有在模型恰好抽中同一个 token 时才算数。现在草稿头按请求的采样设置从自己的分布里抽候选，再用推测采样逐个接受，接受的概率保证每个 token 仍然严格服从模型单独采样时的分布：温度 0.7 时第一个候选的保留率从 63% 提到 67%。保留率低，每步值得猜的就少，所以采样请求在一两个对话时猜 2 个、三四个对话时猜 1 个。Jan 的默认设置下，单个对话 33.6 → 36.2 tok/s，三个对话 61.3 → 67.1（0.4.1）。贪心解码的输出逐位不变。 |
-| **三个正确性修复** | 推测验证批次跑了无 causal mask 的稠密注意力，长答案会跑偏并提前结束。图像输入曾以三种不同方式在 QSA 块机制里让服务端崩溃，第二个已加载的对话收到图片时还有第四种。 |
-| **提示词处理换上新内核** | 提示词的 delta net 现在以 16 个 token 为一块在矩阵核上计算，不再逐 token 递推（5K token 时每层 5.6 → 约 3.1 ms）；EXL3 的路由专家整段走一条分组流水线，中间按专家排好行（每层 28.1 → 25.6 ms）；超连接（HC）的门控混合让 GEMM 与读残差重叠（每次 2.13 → 1.64 ms，逐位一致）。EXL3 4.05 和 3.05 读提示快 7-11%，UD-IQ4_XS 快 5-7%。delta net 和专家这两个内核不是逐位一致：相对 BF16 的 KLD 仍在其他数值改动的波动范围内。`STRIX_GDN_WY=0` / `STRIX_MMH_MOE=0` / `STRIX_HC_GM_SWZ=0` / `STRIX_MMB_TALL320=0` 可恢复原路径（0.6.6）。 |
-| **解码走流式环** | 解码一步的 EXL3 权重现在经 GPU 本地内存里的一个环流过：一个工作组的两个 wave 用宽加载取下一块，八个 wave 解码当前块；稠密投影和输出头（单行，以及 MTP 验证的 2-4 行，每行与单行路径逐位一致）和路由专家都这样走。一步的专家合成一次启动，工作组空出来就取下一项（原来的固定轮转让最忙的工作组多读 1.4 倍的平均字节），共享专家和它的门控也成了其中一项：每层少四次启动。环的权重加载带上“只读一次”的缓存策略位（每 token GPU 时间 30.2 → 28.6 ms），解码一步从系统内存读的逐层嵌入行改由内核拷贝，不再走约 0.3 ms 的 DMA 传输。EXL3 4.05 关 MTP 生成 29.8 → 34.5 tok/s，开 MTP 快 14-19%；3.05 为 32.5 → 38.4，开 MTP 快 15-31%。与 0.6.6 不是逐位一致：解码路径相对 BF16 的 KLD 0.0253 → 0.0255（top-1 一致率 95.70 → 95.77%），提示词困惑度不变。`STRIX_MMH_RING=0` / `STRIX_MMH_RING2=0` / `STRIX_MMH_MOE_DEC=0` / `STRIX_MMH_MOE_RING=0` / `STRIX_MMH_MOE_SHEXP=0` / `STRIX_CPY_HOST_KERNEL=0` 可恢复原路径（0.6.7）。 |
-| **测量仪表** | 逐图、逐派发、逐阶段计时，全部默认关闭，需设环境变量才启用。 |
-
-`patches/MANIFEST.md` 说明配方的结构；`patches/history/` 保留 0.6.4 及以前按改动拆分的脚本，每个都写了改动的理由。
-
-## 构建怎么验证
-
-**无法重放的补丁集会悄悄腐烂。** 两个工具保证这件事诚实：
+## 从源码构建
 
 ```bash
-python bootstrap/bootstrap.py --record    # 记录补丁集产出的哈希
-python bootstrap/bootstrap.py --verify    # 当前树是否仍然完全一致
+python bootstrap/bootstrap.py --toolchain          # ROCm SDK + ninja 装进 toolchain/，约 5 GB
+python bootstrap/bootstrap.py --fetch --patch --build
+python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 ```
 
-`--verify` 回答的是弱问题：这棵树是不是配方产出的？手改完再重新记录一遍哈希，它照样通过。强问题
-是配方今天还能不能从零重建出这棵树，这有单独的工具：
+`bootstrap.py` 在固定版本克隆上游 [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)，打上补丁集，用 ROCm SDK
+编译。同一份改动在 fork 上可以直接看 diff：[rulith-dev/llama.cpp 的 `rulith` 分支](https://github.com/rulith-dev/llama.cpp/tree/rulith)。
+`tools/manager.py` 掌管启动参数、环境变量和运行环境，所以配置是可复现的，而不是靠记忆。先读
+[docs/install.md](docs/install.md)：ROCm SDK 必须用 TheRock 的（同一份源码预填充快 60%），而它的 nightly 索引只保留每个
+版本约四周。
 
-```bash
-python tools/replay_bootstrap.py          # 干净上游 + 补丁集 == 那 181 个文件，逐字节相同
-```
+`python tools/replay_bootstrap.py` 从干净的上游加配方重建 181 个改动文件并逐字节比较，结果是 **181 / 181**。
+`patches/MANIFEST.md` 记录每项改动及其测量；`integrations/jan/apply.py` 把应用的页面构建到一份
+[Jan](https://github.com/menloresearch/jan) 源码上。
 
-它按 `bootstrap/UPSTREAM.json` 里记的 blob 哈希，从克隆自带的 git 对象里取回那 119 个文件的上游版
-本——干净上游是重建出来的，不是信来的——然后重放整文件和全部脚本再比对。结果是 **181 / 181**。
-
-从 0.6.5 起，基线换成上游 [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)（合并进 fork），
-每当 fork 合入更新的上游，`tools/make_recipe.py` 就从两个提交重新生成整套配方：按模块生成的补丁脚本，
-`patches/files/` 下 fork 新增或大改的整文件，以及哈希记录；写出之前先在上游上重放一遍。0.6.4 及以前的
-配方（基于 `pwilkin/llama.cpp` @ `f5daaa3`）按改动拆成 141 个脚本，每个都写了理由，保存在 `patches/history/`。
-
-一开始并非如此。24 个里有 5 个没有任何脚本负责，其中就包括项目里最大的单项收益（干净重建会把它
-静默丢掉）；另有 3 个脚本已经漂移到打不上去。`tools/make_patch_script.py` 从两棵树生成补丁脚本、
-锚点自动扩展到唯一，这些缺口就是这样补上的——手写锚点正是最初腐烂的原因。
+打过补丁的服务器也能在 Linux 上用 ROCm 编译，有用户在 Linux 上测得与 Windows 相同的速度（UD-IQ4_XS）。没有 Linux 安装包。
 
 ## 适用范围与限制
 
-- **仅 Windows。** 管理器用 Win32 进程 API；构建目标是 gfx1151。单独的补丁版服务端也能在 Linux 上编译，
-  这是用户实测的，不是本机测的（见上文"Linux"）。
-- **单一模型族。** 注意力部分专属于 `qwen4exp`。内核部分（IQ3_S MMB、MMVQ 每工作组行数）适用面更广。
-- **不是 llama.cpp 的分叉。** 本仓库只放补丁、工具和实测数据，不含模型权重、上游源码或二进制。
+- **只支持 Windows 11 和 gfx1151。** 随附的内核只为 Radeon 8060S 编译；换别的 GPU 模型加载不了。
+- **只针对一个模型系列调优。** 注意力和专家方面的工作专门针对 Qwen3.8-Flash-Next（`qwen4exp`）；Nemotron 3.5 Super
+  有它自己较小的一套。
+- **这里没有权重和二进制文件。** 本仓库存放补丁、应用页面、工具和测量结果。安装包在 Releases 页面，模型文件在
+  Hugging Face。
 
 ## 目录结构
 
 ```
-bootstrap/   拉取、打补丁、构建运行时；UPSTREAM.json 是这份 delta 的哈希记录
-patches/     补丁集（按模块的脚本 + 整文件）、清单、配方的历史
-tools/       管理器、测量工具、验证工具
-integrations/jan/   可选的 Jan 管理页面
-docs/        install.md · results.md · measuring.md · decode-budget.md · dead-ends.md
+bootstrap/          获取、打补丁、编译运行环境；UPSTREAM.json 是改动的哈希记录
+patches/            补丁集（每个领域一个脚本 + 整文件）、清单、配方历史
+tools/              进程管理器、下载器、测量工具、验证
+integrations/jan/   应用页面（构建在 Jan 源码上）
+docs/               getting-started · install · engine · results · measuring · decode-budget · dead-ends
 ```
-
-在相信本仓库任何数字（包括上面那几个）之前，先读 [docs/measuring.md](docs/measuring.md)——那是一份
-这个项目把自己测错的方式清单。
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。第三方署名见 [NOTICE.md](NOTICE.md)——特别是本项目修改的是
-[llama.cpp](https://github.com/ggml-org/llama.cpp)（MIT），Jan 覆盖层用于
-[Jan](https://github.com/menloresearch/jan) 的源码树（Apache-2.0）。
+MIT，见 [LICENSE](LICENSE)。第三方署名见 [NOTICE.md](NOTICE.md)：本项目为 [llama.cpp](https://github.com/ggml-org/llama.cpp)
+（MIT）打补丁，部分解码内核改编自 Apache-2.0 代码（其许可随安装附在 `runtime\licenses`），应用构建在
+[Jan](https://github.com/menloresearch/jan)（Apache-2.0）之上。
 
-如果这些补丁对你的项目有用，欢迎注明出自 Rulith Inference，并附上[本仓库](https://github.com/rulith-dev/rulith-inference)的链接。这是请求，不是许可条款。
+如果这些补丁对你的项目有用，请在致谢中注明 Rulith Inference 并附上[本仓库](https://github.com/rulith-dev/rulith-inference)
+的链接。这是请求，不是许可条件。
 
 ---
 
-Rulith Inference 由 [Rulith](https://rulith.ai) 开发。Rulith 做面向 AI 智能体的可验证执行基础设施。
-提问、建议和交流：[Rulith 社区讨论区](https://github.com/rulith-dev/community/discussions)。
+Rulith Inference 由 [Rulith](https://rulith.ai) 制作：面向 AI 智能体的可验证执行基础设施。
+问题、想法与帮助：[Rulith 社区讨论区](https://github.com/rulith-dev/community/discussions)。

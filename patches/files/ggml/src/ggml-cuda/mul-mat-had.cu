@@ -4020,11 +4020,13 @@ static void mmh_launch(ggml_backend_cuda_context & ctx, const mmh_params & p, co
             static const bool ring_on = !getenv("STRIX_MMH_RING") || atoi(getenv("STRIX_MMH_RING")) != 0;
             constexpr int b2 = mmh_exl3_b2(type);
             if constexpr (mmh_is_exl3(type) && mmh_exl3_codebook(type) == 0 && b2 % 2 == 0 && b2 / 2 >= 4 && b2 / 2 <= 6) {
-                // one row; 2 .. 4 rows (MTP verification) take the R-row ring (mmh_ring_rows, STRIX_MMH_RING2=0: the GEMV),
+                // one row; 2 .. 8 rows (MTP verification, conversations decoding together) take the R-row ring
+                // (mmh_ring_rows, STRIX_MMH_RING2=0: the GEMV; STRIX_MMH_RING2_MAX=4: the GEMV from 5 rows, as before 0.6.9),
                 // the ring with its own staged input only on request (dev: STRIX_MMH_RING_ROWS; measured slower than the GEMV)
                 static const int ring_rows = getenv("STRIX_MMH_RING_ROWS") ? atoi(getenv("STRIX_MMH_RING_ROWS")) : 1;
                 static const bool ring2_on = !getenv("STRIX_MMH_RING2") || atoi(getenv("STRIX_MMH_RING2")) != 0;
-                const bool rows2 = ring2_on && p.n_rows >= 2 && p.n_rows <= 4;
+                static const int ring2_max = getenv("STRIX_MMH_RING2_MAX") ? std::max(2, std::min(8, atoi(getenv("STRIX_MMH_RING2_MAX")))) : 8;
+                const bool rows2 = ring2_on && p.n_rows >= 2 && p.n_rows <= ring2_max;
                 if (ring_on && !p.ids && p.n_rows >= 1 && (rows2 || p.n_rows <= std::min(4, ring_rows)) && p.n_exp == 1 && !p.row_w &&
                         !p.cmap && !p.trace && !p.gn_x && p.had == 128 && p.k % 128 == 0 && n_groups >= 1 && n_groups <= 16384) {
                     const int A = (int) (p.k / 16);
@@ -4046,7 +4048,11 @@ static void mmh_launch(ggml_backend_cuda_context & ctx, const mmh_params & p, co
                             switch (R) {
                                 case 2:  mmh_ring_rows<b2 / 2, 2><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
                                 case 3:  mmh_ring_rows<b2 / 2, 3><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
-                                default: mmh_ring_rows<b2 / 2, 4><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                case 4:  mmh_ring_rows<b2 / 2, 4><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                case 5:  mmh_ring_rows<b2 / 2, 5><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                case 6:  mmh_ring_rows<b2 / 2, 6><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                case 7:  mmh_ring_rows<b2 / 2, 7><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
+                                default: mmh_ring_rows<b2 / 2, 8><<<grid, 320, 0, stream>>>(p, w, (int) n_groups, S, xr.get(), part.get(), tk); break;
                             }
                             CUDA_CHECK(cudaGetLastError());
                             static unsigned hits = 0;

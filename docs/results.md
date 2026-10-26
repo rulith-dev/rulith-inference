@@ -9,19 +9,52 @@ acceptance — it says so. See [measuring.md](measuring.md) before comparing any
 | | |
 |---|---|
 | CPU / GPU | Ryzen AI Max+ 395, Radeon 8060S (gfx1151) |
-| Memory | 128 GB unified, **96 GB carved to the GPU** (Windows is left 31.6 GB) |
+| Memory | 128 GB unified; **64 GB carved to the GPU** since the 0.5.1 headline, 96 GB before (Windows is left 31.6 GB at 96) |
 | Power | 140 W |
 | OS | Windows 11 |
 | Runtime | `pwilkin/llama.cpp` @ `f5daaa3` + this patch set up to 0.6.4, `ggml-org/llama.cpp` @ `19ab5a5` + the patch set from 0.6.5; built against TheRock ROCm 10.2 (10.1 up to 0.2.2) |
-| Model | Qwen3.8-Flash-Next 125B-A6B, Unsloth UD-IQ4_XS, 93.7 GB |
-| Server flags | ctx 262144, batch/ubatch 8192, `-np 1`, flash attention on, KV f16, MTP draft, `--load-mode none --lazy-mode on-direct` |
+| Model | Qwen3.8-Flash-Next 125B-A6B: EXL3 4.05 bpw (104.3 GB, the recommended file since 0.6.0) for the 0.6.8 headline; Unsloth UD-IQ4_XS (93.7 GB) for the earlier headlines and most sections below |
+| Server flags | the manager's defaults: ctx 262144, batch/ubatch 8192, eight slots (`-np 1` in the early sections), flash attention on, KV f16, MTP draft, `--load-mode none --lazy-mode on-direct` |
 
-The carve is not a detail. At 64 GB the model does not fit, ~9.8 GB spills into shared memory, and
+The carve is not a detail. Before 0.4.7, at 64 GB the model did not fit, ~9.8 GB spills into shared memory, and
 the driver pages during decode: prefill 839 vs 942 t/s, decode 49.6 vs 38.6 ms/token, multi-turn
 17-19 vs 26-30 tok/s — and that comparison was already in the 64 GB arm's favour, at 140 W against
-120 W. **Set the carve before tuning anything else.**
+120 W. **Set the carve before tuning anything else.** Since 0.4.7 the app keeps the experts that do not fit the carve
+in pinned system memory, which the GPU reads at the carve's speed, so 64 GB and 96 GB measure the same.
 
 ## Headline
+
+Measured 2026-10-25 on 0.6.8 (`bin/hip-068`, the release's runtime) with EXL3 4.05 bpw at the manager's defaults (64 GB
+carve, eight slots, MTP with three drafts, f16 K/V; image input off, which `tmp/kvr/with_server.py` sets), a freshly
+started server for each run, greedy:
+
+| | | |
+|---|---|---|
+| prefill, 86K tokens of real text | **1,340 t/s** | 1361 / 1330 / 1330 over 3 runs, the runs of the 86K decode row |
+| prefill, 16.9K tokens | **1,332 t/s** | 1316 / 1353 / 1311 / 1347, cache off (`tmp/rel060/speed.py` under `with_server.py`; script `tmp/mtp/card_speed.sh`, log `tmp/mtp/card_speed.out`) |
+| decode, 86K context | **46 tok/s** (21.7 ms/token) | 46.84 / 45.58 / 45.69, draft acceptance 59% (254/432), 2.74 tokens per pass (`tools/decode_lab.py --config base --words 700 --n 4 --gen 400 --gen-prefix tmp/realtext.txt --gen-prefix-chars 302000`; script `tmp/readme/long_ctx.sh`, log `tmp/readme/long_ctx.out`) |
+| decode, short context | **59 tok/s** (16.96 ms/token) | 58.50 / 58.99 / 59.40, acceptance 66% (264/402), 2.94 tokens per pass: the same without the prefix, the lab's one-line B-tree question |
+| decode, writing code | **70.9 tok/s** | 70.1 / 71.5 / 70.2 / 71.9, acceptance 84% (429/510): 600 tokens of an ISO 8601 duration parser with tests (`tmp/rel060/speed.py`) |
+| decode, MTP off | **34.4 tok/s** | 256-token answers, the 0.6.8 release notes' rows (`tmp/rel068`) |
+| 8 conversations at once | **83 tok/s** summed (87 with MTP off) | eight short distinct prompts (stories, explanations, code, two in Chinese), 384-token greedy answers, two rounds of two runs; MTP on 78.6 / 86.3 / 79.2 / 86.8, off 84.1 / 88.7 / 85.4 / 88.8 (`tmp/mtp/conc8.py --n 8 --tokens 384`; script `tmp/readme/c8_068.sh`) |
+
+The same protocols on the other files are in the README's model table: EXL3 3.05 bpw 1,327 t/s and 75.9 tok/s writing
+code (81%), UD-Q4_K_XL 1,379 and 58.8 (91%), UD-IQ4_XS 1,414 and 63.6 (88%).
+
+0.6.9 (`bin/hip-069`) changes only decoding of several conversations together. One conversation is the same: the
+probes are bitwise 0.6.8's, and the short decode interleaved gives 58.47 tok/s on 0.6.9 against 58.23 on 0.6.8 (the
+first pair of that check, 49.8 / 54.2, and the 17:43-18:05 runs overlapped other load on the machine). Eight
+conversations, interleaved with 0.6.8, three rounds of two runs (`tmp/rel069/speed_069.sh`, `speed2_069.sh`): MTP off
+84.8 -> **91.2** tok/s summed (82.4 / 85.4 / 82.7 / 86.1 / 84.6 / 87.4 against 87.4 / 91.6 / 89.8 / 93.3 / 91.1 / 94.0);
+MTP on 81.3 -> 84.9, within what the adaptive drafter moves the sum between runs (0.6.8 80.6 / 89.0 / 81.3 / 87.0 /
+73.0 / 76.7, 0.6.9 80.2 / 89.7 / 81.9 / 88.6 / 81.0 / 88.1). The README rounds the runs of both versions.
+
+Eight conversations are bound by memory bandwidth: a step of eight tokens routes them to ~75 of the 512 experts in
+every layer (~188 MB of expert weights a layer), which the step reads at ~193 GB/s (GPU timeline, 46.8 of 80.7 ms).
+The first runs of a round include the eight prompts' prefill; MTP's sum also loses at the end, where streams that
+drafted well finish early and leave fewer to batch.
+
+### Earlier headlines, UD-IQ4_XS
 
 Measured 2026-10-08 on 0.5.1 with the same protocol (tmp/rel051/headline_051.sh, log tmp/rel051/headline_051.log), now
 at the 64 GB VRAM carve (0.4.0 was measured at 96 GB):
@@ -45,7 +78,7 @@ prompt's end, so seven of eight conversations recomputed ~7.7K tokens inside the
 
 Measured 2026-10-01 on 0.4.0, at temperature 0, `cache_prompt: false` so each run pays a full prefill,
 **on a freshly started server** (see the image note below — that qualifier is load-bearing), with the
-model files of [the README's list](../README.md#model-files) and the app's default settings (eight
+model files of [the README's list](../README.md#models) and the app's default settings (eight
 slots, MTP with three drafts, images on, f16 K/V); log `tmp/dec041/headline_040.log`:
 
 | | | |

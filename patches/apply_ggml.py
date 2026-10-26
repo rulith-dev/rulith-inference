@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """apply_ggml: the fork's changes to 13 upstream file(s) of this area.
 
-Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork ee07b49d0837. Regenerated whole by tools/make_recipe.py when the fork moved
+Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork 511901542956. Regenerated whole by tools/make_recipe.py when the fork moved
 to this upstream; the scripts it replaced, one per change with its reasons, are in
 patches/history/ (see patches/MANIFEST.md).
 
