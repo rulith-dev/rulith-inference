@@ -236,6 +236,46 @@ class WorkerTests(Base):
         self.assertEqual((out / 'f.gguf').read_bytes(), b'short')
 
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows share modes')
+    def test_locked_state_is_not_read_as_empty(self):
+        # a worker that started from {} would fetch the finished chunks of its .part files again (GitHub issue #23)
+        jd = self.job([])
+        D.write_json(jd / 'state.json', {'files': {'a.gguf': {'done': [0, 1, 2]}}})
+        with locked(jd / 'state.json'), patch.object(D, 'BUSY_WAIT', 0.1):
+            with self.assertRaises(PermissionError): D.Job(jd)
+        j = D.Job(jd); j.log_file.close()
+        self.assertEqual(j.state['files']['a.gguf']['done'], [0, 1, 2])
+
+    def test_busy_progress_save_goes_on(self):
+        jd = self.job([])
+        j = D.Job(jd); self.addCleanup(j.log_file.close)
+        with patch.object(D, 'write_json', side_effect=PermissionError(13, 'busy')):
+            j.save()                                     # a progress update: logged, the download goes on
+            with self.assertRaises(PermissionError): j.save(True)
+
+
+def locked(path):
+    """path held open with no sharing, as another program might"""
+    import contextlib
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL('kernel32', use_last_error=True)
+    k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                              wintypes.DWORD, wintypes.HANDLE]
+    k.CreateFileW.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    @contextlib.contextmanager
+    def hold():
+        h = k.CreateFileW(str(path), 0x80000000, 0, None, 3, 0, None)
+        assert h != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+        try:
+            yield
+        finally:
+            k.CloseHandle(h)
+    return hold()
+
+
 class RepoTests(Base):
     def test_parse_repo(self):
         self.assertEqual(D.parse_repo('https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF'),
@@ -377,6 +417,31 @@ class ManagerDownloadTests(Base):
             with self.assertRaises(self.m.ManagerError) as e:
                 self.m.dl_start({'kind': 'catalog', 'model': 'tm', 'source': 't', 'folder': str(self.root / 'lms' / 'x')})
             self.assertEqual(e.exception.code, 'dl_folder_lmstudio')
+
+    def test_job_files_written_while_read(self):
+        # GitHub issue #23: on Windows the worker's save of state.json failed while the manager read it, and the read
+        # failed while the file was replaced; threads collide like processes (share modes are per handle)
+        for write, read in ((D.write_json, lambda p: self.m.read_json(p, None)), (self.m.atomic_json, D.read_json)):
+            path = self.root / 'busy.json'
+            write(path, {'n': 0})
+            errors, end = [], time.monotonic() + 1.0
+
+            def writer():
+                n = 0
+                while time.monotonic() < end:
+                    n += 1
+                    try: write(path, {'n': n, 'done': list(range(500))})
+                    except OSError as e: errors.append(e)
+
+            def reader():
+                while time.monotonic() < end:
+                    try:
+                        if read(path) is None: errors.append('nothing read')
+                    except (OSError, ValueError) as e: errors.append(e)
+            threads = [threading.Thread(target=f) for f in (writer, reader, reader)]
+            for t in threads: t.start()
+            for t in threads: t.join()
+            self.assertEqual(errors[:3], [], write.__module__)
 
 
 if __name__ == '__main__':

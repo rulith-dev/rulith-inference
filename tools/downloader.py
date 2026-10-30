@@ -43,6 +43,7 @@ RETRIES = 5                      # per chunk, with backoff, once the source has 
 FIRST_TRIES = 2                  # a source that never delivered is given up after this many failures
 TIMEOUT = 30
 STATE_EVERY = 0.5
+BUSY_WAIT = 2.0                  # seconds a job file another program holds open is waited for (retry_busy)
 SPACE_MARGIN = 2 << 30
 HOSTS = ('huggingface.co', 'hf.co', 'hf-mirror.com', 'github.com', 'githubusercontent.com', 'gh-proxy.com')
 SCHEMES = ('https',)
@@ -445,9 +446,27 @@ def now():
     return dt.datetime.now().astimezone().isoformat(timespec='seconds')
 
 
+def retry_busy(fn):
+    """fn(), again while it fails with PermissionError, for up to BUSY_WAIT seconds. On Windows a file cannot be
+    replaced while another handle has it open, and opening one while it is being replaced fails as well: the manager
+    reading state.json for the Downloads page as the worker saves it, or a virus scanner or the search indexer
+    looking at either. Both pass in milliseconds; a file refused for longer is a real error (GitHub issue #23)."""
+    end = time.monotonic() + BUSY_WAIT
+    while True:
+        try:
+            return fn()
+        except PermissionError:
+            if time.monotonic() >= end: raise
+            time.sleep(0.02)
+
+
 def read_json(path, default=None):
+    """default for a missing or broken file; one that stays locked raises, so that a worker never starts from an
+    empty state.json and fetches the finished chunks again"""
     try:
-        return json.loads(Path(path).read_text(encoding='utf-8'))
+        return json.loads(retry_busy(lambda: Path(path).read_text(encoding='utf-8')))
+    except PermissionError:
+        raise
     except (OSError, ValueError):
         return default
 
@@ -455,8 +474,12 @@ def read_json(path, default=None):
 def write_json(path, data):
     path = Path(path)
     temp = path.with_name(path.name + '.tmp')
-    temp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
-    os.replace(temp, path)
+    text = json.dumps(data, ensure_ascii=False)
+
+    def write():
+        temp.write_text(text, encoding='utf-8')
+        os.replace(temp, path)
+    retry_busy(write)
 
 
 def _kernel32():
@@ -517,7 +540,11 @@ class Job:
         self.written = t
         self.state['updated_at'] = now()
         with self.lock:
-            write_json(self.dir / 'state.json', self.state)
+            try:
+                write_json(self.dir / 'state.json', self.state)
+            except PermissionError as e:
+                if force: raise
+                self.log(f'progress not saved this time: {e!r}')      # the next update saves it; the download goes on
 
     def check_control(self):
         c = read_json(self.dir / 'control.json', {}) or {}

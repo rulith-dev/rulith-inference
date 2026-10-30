@@ -314,9 +314,23 @@ DEFAULTS = dict(context=262144, gpu_layers=999, threads=16, batch=8192, ubatch=8
                 prompt_cache_disk_mib=PROMPT_CACHE_DISK_MIB)
 
 
+def retry_busy(fn, wait=2.0):
+    """fn(), again while it fails with PermissionError, for up to wait seconds: on Windows a file another handle has
+    open cannot be replaced, and opening one while it is being replaced fails too (the download worker saving
+    state.json as the Downloads page reads it, two threads here, a virus scanner or the search indexer). Both pass in
+    milliseconds (GitHub issue #23; downloader.retry_busy is the worker's copy)."""
+    end = time.monotonic() + wait
+    while True:
+        try:
+            return fn()
+        except PermissionError:
+            if time.monotonic() >= end: raise
+            time.sleep(0.02)
+
+
 def read_json(path, default):
     try:
-        return json.loads(path.read_text(encoding='utf-8'))
+        return json.loads(retry_busy(lambda: path.read_text(encoding='utf-8')))
     except FileNotFoundError:
         return default
 
@@ -325,7 +339,10 @@ def atomic_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-    os.replace(temp, path)
+    try:
+        retry_busy(lambda: os.replace(temp, path))
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 _LMSTUDIO = []
