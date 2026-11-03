@@ -243,8 +243,10 @@ function BrowseSection({ cat, onDownload, source, setSource }: { cat: DlCatalog 
 
   // recommended models by model, their variants in catalog order (the first is the recommended one)
   const groups = groupModels(cat?.models || [])
-  // the first recommended model is shown until something else is picked
-  const shown: Pick | null = pick || (groups.length ? { kind: 'catalog', id: groups[0].key } : null)
+  // the recommended one: the first whose files fit this PC (a 64 GB one gets Qwen3.6-35B-A3B), else the first
+  const top = groups.find(g => g.models.some(m => m.fits !== false)) || groups[0]
+  // and it is shown until something else is picked
+  const shown: Pick | null = pick || (top ? { kind: 'catalog', id: top.key } : null)
   const openRepo = (id: string) => setPick({ kind: 'repo', id })
 
   const search = async () => {
@@ -292,7 +294,7 @@ function BrowseSection({ cat, onDownload, source, setSource }: { cat: DlCatalog 
                   : groups.map(g => (
                     <ListRow key={g.key} active={shown?.kind === 'catalog' && shown.id === g.key} onClick={() => setPick({ kind: 'catalog', id: g.key })}
                       title={g.name} sub={`${g.owner} · ${g.models.map(m => m.variant).join(' · ')}`}
-                      badge={<span className={BLUE_BADGE}>{tr(g === groups[0] ? 'dl.recommendedOne' : 'dl.tested')}</span>} />
+                      badge={<span className={BLUE_BADGE}>{tr(g === top ? 'dl.recommendedOne' : 'dl.tested')}</span>} />
                   ))}
                 <p className="px-3 py-3 text-xs text-muted-foreground">{tr('dl.searchHint')}</p>
               </>
@@ -316,7 +318,7 @@ function BrowseSection({ cat, onDownload, source, setSource }: { cat: DlCatalog 
             : shown.kind === 'catalog'
               ? (() => {
                   const g = groups.find(x => x.key === shown.id)
-                  return g ? <PickDetail key={g.key} group={g} top={g === groups[0]} running={running} onDownload={onDownload} source={source} setSource={setSource} onOpen={openRepo} /> : null
+                  return g ? <PickDetail key={g.key} group={g} top={g === top} running={running} onDownload={onDownload} source={source} setSource={setSource} onOpen={openRepo} /> : null
                 })()
               : <RepoDetail key={`${shown.id}@${shown.path || ''}@${doneJobs}`} id={shown.id} path={shown.path} source={source} setSource={setSource}
                   running={running} onDownload={onDownload} onOpen={openRepo} />}

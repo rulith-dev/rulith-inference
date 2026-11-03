@@ -62,7 +62,10 @@ The EXL3 files are turboderp's quantization repacked for this engine:
 [Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF), with
 their own MTP draft; they load only in Rulith Inference. The UD files are
 [Unsloth's](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF). NVIDIA Nemotron 3.5 Super (120B-A12B, Q4_K_M)
-loads too, with image input and its own MTP layer. Other quantizations of Qwen3.8-Flash-Next load and run on
+loads too, with image input and its own MTP layer. Qwen3.6-35B-A3B (since 0.6.11; Unsloth's UD-Q4_K_XL MTP file,
+22.9 GB, in the Downloads page) loads whole on the 64 GB setting, with image input and its own MTP layer: one
+conversation writes 56-58 tok/s with MTP off and 73-76 with it on, and reads a 4K prompt at about 2,600 t/s; it runs
+on the kernels its shapes meet, none of them its own yet. Other quantizations of Qwen3.8-Flash-Next load and run on
 llama.cpp's stock kernels.
 
 ## Use it from other programs
@@ -144,7 +147,7 @@ The patched server also builds on Linux with ROCm; a user measured it there at t
 - **Windows 11 and gfx1151 only.** The bundled kernels are compiled for the Radeon 8060S; on another GPU the model does
   not load.
 - **One model family tuned.** The attention and expert work is specific to Qwen3.8-Flash-Next (`qwen4exp`); Nemotron
-  3.5 Super has its own smaller set.
+  3.5 Super has its own smaller set; Qwen3.6-35B-A3B runs on what its shapes meet.
 - **No weights or binaries here.** This repository holds the patches, the app's pages, the tools and the measurements.
   The installer is on the releases page and the model files on Hugging Face.
 

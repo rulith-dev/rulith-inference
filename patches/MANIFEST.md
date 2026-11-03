@@ -24,6 +24,28 @@ to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
 
+### 0.6.11: equal-length prompts, the media marker, UD decode products (fork `0364508f0`)
+
+- `src/llama-batch.cpp`, `src/models/qwen4exp.cpp`: issue #25. When every set of a ragged ubatch had the same count,
+  the splitter made an ordinary equal-length ubatch and `qwen4exp_seq_groups` put the sets into one multi-sequence
+  group, which the prompt kernels of the recurrent net (`gated_delta_net.cu`: WY, R16, tiled) do not take: two
+  2048-token prompts sent together read at ~800 t/s against ~1,230 for 2047 + 2049. Equal counts of 16 tokens or more
+  now stay ragged, one group a set: ~1,180-1,240 t/s. Decode and MTP verification sets stay below the bound and keep
+  sharing a group. `STRIX_RAGGED_EQUAL`: the bound (0 = off).
+- `tools/server/server-common.cpp`: issue #26. Copies of the server's media marker in a request's message text and
+  tools become a neutral `<__media__>` before the media parts get their markers. An agent that quoted `/props` in a
+  tool result sent the marker back as text; `mtmd_tokenize` took it for an image without a bitmap and every later
+  request of the conversation failed with HTTP 400 "Failed to tokenize prompt".
+- `ggml/src/ggml-cuda/mmvq.cu`: on RDNA3.5 a one-token product over K 352-1024 (the routed and shared experts' down
+  projections) gives a single-wave workgroup four rows: the Q5_1 down of UD-Q4_K_XL 4.05 -> 3.28 ms a token. MTP
+  verifications of 2-8 tokens run the unfused Q5_1 / Q8_0 expert products four rows a workgroup: 9.29 -> 8.41 ms a
+  4-row step. Each row's sum as before. `STRIX_MMVQ_SK`, `STRIX_MMVQ_MOE_R4`.
+- `ggml/src/ggml-cuda/mmvf.cu`: the few-rows F32 / BF16 loop up to 1024 rows (was 128): the router's BF16 product
+  908 -> 828 us a token on UD-Q4_K_XL, 713 -> 641 on EXL3 4.05, the same multiply-adds in the same order.
+- UD-Q4_K_XL decode ~3% less time a token, MTP verification 2%. One-conversation probes bit for bit as 0.6.10 on UD
+  f16, UD MTP and EXL3 4.05. Qwen3.6-35B-A3B (`qwen35moe`) runs on these kernels; the app's support for it is in
+  `tools/manager.py`.
+
 ### 0.6.9: several conversations decoding together (fork `511901542`)
 
 - `ggml/src/ggml-cuda/mul-mat-had.cu`: EXL3 dense products of 5-8 rows (eight conversations decoding together, the MTP

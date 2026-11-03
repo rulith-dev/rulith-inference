@@ -54,7 +54,10 @@ EXL3 文件是 turboderp 的量化，为本引擎重新打包：
 [Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF](https://huggingface.co/Rulith/Qwen3.8-Flash-Next-Rulith-EXL3-GGUF)，
 带自己的 MTP 草稿，只能在 Rulith Inference 里加载。UD 文件来自
 [Unsloth](https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF)。NVIDIA Nemotron 3.5 Super（120B-A12B，Q4_K_M）也能加载，
-支持图像输入和它自己的 MTP 层。该模型的其他量化版本也能加载，走 llama.cpp 原版内核。
+支持图像输入和它自己的 MTP 层。Qwen3.6-35B-A3B（0.6.11 起；下载页里的 Unsloth UD-Q4_K_XL MTP 文件，22.9 GB）在 64 GB
+设置下整个放在 GPU 上，支持图像输入和它自己的 MTP 层：单个对话关 MTP 每秒 56-58 个 token，开 MTP 73-76 个，4K 提示词
+读取约 2,600 t/s；它走的是形状对得上的现有内核，还没有专门为它写的。Qwen3.8-Flash-Next 的其他量化版本也能加载，走
+llama.cpp 原版内核。
 
 ## 给其他程序用
 
@@ -124,7 +127,7 @@ python tools/manager.py <<< '{"op":"start","data":{"id":"<model-id>"}}'
 
 - **只支持 Windows 11 和 gfx1151。** 随附的内核只为 Radeon 8060S 编译；换别的 GPU 模型加载不了。
 - **只针对一个模型系列调优。** 注意力和专家方面的工作专门针对 Qwen3.8-Flash-Next（`qwen4exp`）；Nemotron 3.5 Super
-  有它自己较小的一套。
+  有它自己较小的一套；Qwen3.6-35B-A3B 用的是形状对得上的现有内核。
 - **这里没有权重和二进制文件。** 本仓库存放补丁、应用页面、工具和测量结果。安装包在 Releases 页面，模型文件在
   Hugging Face。
 

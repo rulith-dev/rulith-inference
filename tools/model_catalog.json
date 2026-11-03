@@ -306,6 +306,37 @@
      "gh": "rulith-dev/rulith-inference@v0.4.6:mtp-Qwen3.8-Flash-Next-head-lr512.gguf"
     }
    ]
+  },
+  {
+   "id": "qwen3.6-35b-a3b-mtp-ud-q4_k_xl",
+   "name": "Qwen3.6 35B A3B",
+   "variant": "UD-Q4_K_XL MTP",
+   "owner": "unsloth",
+   "repo": "Qwen3.6-35B-A3B-MTP-GGUF",
+   "license": "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+   "capabilities": [
+    "images",
+    "tools",
+    "mtp"
+   ],
+   "files": [
+    {
+     "name": "Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+     "role": "model",
+     "required": true,
+     "size": 22853663008,
+     "sha256": "55983c5a75a1ab969824077b3bb3de4146e82a9234072b48ad4e8f92ad3fe9f1",
+     "hf": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF@5bc3e238d916f48a861bac2f8a1990a0e9b7e98d:Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+    },
+    {
+     "name": "mmproj-F16.gguf",
+     "role": "projection",
+     "required": false,
+     "size": 899283584,
+     "sha256": "71f3cbc1f7cc0f30d09d41cfa924c0060827ebc33bf15ace7e86661e856f0160",
+     "hf": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF@5bc3e238d916f48a861bac2f8a1990a0e9b7e98d:mmproj-F16.gguf"
+    }
+   ]
   }
  ]
 }

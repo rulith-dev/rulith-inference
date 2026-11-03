@@ -75,6 +75,16 @@ HIP_QSA_GATES = dict(
 # The MTP draft and the attention work are specific to this model family, so the defaults that
 # depend on them key off the file's name rather than one machine's path to it.
 MODEL_FAMILY = 'Qwen3.8-Flash-Next'
+# The second family (GitHub issue #24): Qwen3.6-35B-A3B, architecture qwen35moe. 40 blocks - a gated delta net in three
+# of every four, full attention (2 K/V heads of 256) in every fourth - 256 experts of 512 with 8 used and a shared one,
+# n_embd 2048: 22.85 GB at UD-Q4_K_XL, so it loads whole on a 64 GB machine. Unsloth's *-MTP-GGUF files append its MTP
+# block (blk.40, nextn_predict_layers 1) and the server drafts from that (builtin_mtp); a file without it (LM Studio's,
+# Unsloth's plain repository) drafts from a file of the block alone beside it, mtp-Qwen3.6-35B-A3B-*.gguf (the fork
+# loads an MTP-only GGUF with its own embeddings and head). Known by its name, since a Qwen3.5 file of the same shape has
+# another MTP block. It runs on the kernels its shapes meet; none are its own yet.
+QWEN36_FAMILY = 'Qwen3.6-35B-A3B'
+# the architectures whose drafts may come from a draft file of the MTP block alone, besides qwen4exp's
+DRAFT_FILE_ARCHS = ('qwen35moe',)
 # Unsloth's shared-Q4_K_M MTP head plus its own IQ4_XS copy of the LM head (tools/make_draft_head.py).
 # The shared-* files borrow the target's Q6_K output.weight, 521 MB streamed on every draft step; the
 # IQ4_XS copy is 338 MB. Every drafted token is verified by the target, so a coarser draft can only
@@ -179,8 +189,9 @@ ERRORS = {
     'mmproj_missing': 'No vision projector ({name}) beside the model: add it, pick a file, or turn image input off',
     'qsa_architecture': 'Sparse attention (QSA) applies to Qwen3.8 Flash Next (qwen4exp) only',
     'qsa_needs_fa': 'Sparse attention (QSA) needs Flash Attention on',
-    'mtp_architecture': 'MTP is enabled for qwen4exp models and models with their own MTP layer only',
+    'mtp_architecture': 'MTP is enabled for qwen4exp models, models with their own MTP layer and Qwen3.6-35B-A3B with an MTP draft file only',
     'draft_missing': "No MTP draft model found: put Unsloth's mtp-*.gguf beside the model, or turn MTP off",
+    'draft_mismatch': 'The draft {name} is not an MTP draft for this model',
     'head_mismatch': 'The draft head {head} does not belong to {base}',
     'identity_changed': 'The process identity has changed; refusing to unload it',
     'log_path': 'The log path is outside the project directory',
@@ -482,7 +493,20 @@ def mmproj_path(cfg, model):
     return min(found, key=rank) if found else folder / MMPROJ_NAME
 
 
+_METADATA = {}
+
+
 def metadata(path):
+    """GGUF metadata only (read_metadata), kept for the rest of this process - one request, the manager being started per
+    request - by the file's size and modification time: a request reads a model's header from several places (its
+    profile, MTP block, estimate), 0.15 s each for Qwen3.6-35B-A3B's 248K-token vocabulary."""
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _METADATA: _METADATA[key] = read_metadata(path)
+    return dict(_METADATA[key])
+
+
+def read_metadata(path):
     """Read GGUF metadata only, seeking past large tokenizer arrays."""
     with path.open('rb') as f:
         def exact(n):
@@ -717,6 +741,54 @@ def is_exl3(model):
     return bool(model) and str(model.get('quant', '')).startswith('EXL3')
 
 
+def family_of(model):
+    """The family a model belongs to, for its drafts: MODEL_FAMILY for qwen4exp; QWEN36_FAMILY for a qwen35moe file whose
+    name or general.name says so (Unsloth's Qwen3.6-35B-A3B-*, LM Studio's Qwen_Qwen3.6-35B-A3B-*, "Qwen_Qwen3.6 35B
+    A3B"); else None."""
+    arch = model.get('architecture')
+    if arch == 'qwen4exp': return MODEL_FAMILY
+    if arch in DRAFT_FILE_ARCHS:
+        names = (Path(model['path']).name, re.sub(r'\s+', '-', str(model.get('name') or '')))
+        if any(QWEN36_FAMILY.lower() in n.lower() for n in names): return QWEN36_FAMILY
+    return None
+
+
+def draft_of_family(model, path):
+    """whether a draft file is named for this model's family (mtp-<family>-*.gguf)"""
+    family = family_of(model)
+    return bool(family) and Path(path).name.lower().startswith(f'mtp-{family}-'.lower())
+
+
+def file_draft(model):
+    """A qwen35moe model's draft file: none when the model carries its own MTP block, which the server drafts from, or
+    belongs to no family known here; else the family's mtp-<family>-*.gguf of its architecture, one beside the model
+    first."""
+    if not family_of(model) or builtin_mtp(model): return None
+    folder = Path(model['path']).parent
+    drafts = [m['path'] for m in catalog()['models'] if m.get('role') == 'draft' and not m.get('error')
+              and m.get('architecture') == model.get('architecture') and draft_of_family(model, m['path'])]
+    drafts.sort(key=lambda p: (Path(p).parent != folder, p))
+    return drafts[0] if drafts else None
+
+
+def draft_architecture(path):
+    """a draft file's architecture: the catalog's, else its header's; None when it cannot be read"""
+    target = str(Path(path).resolve())
+    found = next((m.get('architecture') for m in catalog()['models'] if m.get('path') == target), None)
+    if found: return found
+    try: return metadata(Path(path)).get('general.architecture')
+    except (OSError, ValueError, struct.error): return None
+
+
+def draft_matches(model, path):
+    """whether a draft file can run beside this qwen35moe model: an MTP block of its architecture and width"""
+    arch = model.get('architecture')
+    try: d, t = metadata(Path(path)), metadata(Path(model['path']))
+    except (OSError, ValueError, struct.error): return False
+    return (d.get('general.architecture') == arch and bool(appended_blocks(d, arch))
+            and d.get(f'{arch}.embedding_length') == t.get(f'{arch}.embedding_length'))
+
+
 def family_draft(model=None):
     """The MTP draft for this family, if one is on disk: the repository's own first, then the best
     file under the model roots - a merged *-head-* draft (merge_draft_head) over Unsloth's
@@ -724,7 +796,9 @@ def family_draft(model=None):
     then profile() leaves MTP off instead of pointing at a file that is not there.
     An EXL3 target cannot lend the draft rows of its output head (its output rotation mixes 128 rows), so an *-ownhead
     draft (a head of its own) goes first for it: 56.1 vs 52.4 tok/s with the same tokens (10-20); the other drafts
-    still run there, multiplying the whole head per draft token. Other targets never take an ownhead draft."""
+    still run there, multiplying the whole head per draft token. Other targets never take an ownhead draft.
+    A qwen35moe model takes its own family's draft file, or none (file_draft)."""
+    if model and model.get('architecture') in DRAFT_FILE_ARCHS: return file_draft(model)
     own = is_exl3(model)
     if DEFAULT_DRAFT.is_file() and not own:
         return str(DEFAULT_DRAFT)
@@ -744,7 +818,8 @@ def profile(model):
     # refuses to start because a companion file is missing is the wrong first experience; the
     # switch turns itself on once the file appears and the directories are rescanned.
     default['draft'] = family_draft(model) or ''
-    default['mtp'] = (MODEL_FAMILY in Path(model['path']).name and bool(default['draft'])) or builtin_mtp(model)
+    file_drafts = MODEL_FAMILY in Path(model['path']).name or model.get('architecture') in DRAFT_FILE_ARCHS
+    default['mtp'] = (file_drafts and bool(default['draft'])) or builtin_mtp(model)
     default['vision'] = mmproj_path({}, model).is_file()
     # sparse attention is this architecture's, and above 64K context it is what makes the load fit
     default['qsa'] = model.get('architecture') == 'qwen4exp'
@@ -767,9 +842,17 @@ def profile(model):
         cfg['draft'] = default['draft']
     if is_exl3(model) and '-ownhead' in Path(default['draft']).name.lower() and '-ownhead' not in Path(cfg['draft'] or '').name.lower():
         cfg['draft'] = default['draft']
+    # likewise a qwen35moe model's: a draft of another architecture cannot run beside it (a profile an earlier version
+    # saved holds Qwen3.8-Flash-Next's, the default then for every model)
+    if (model.get('architecture') in DRAFT_FILE_ARCHS and cfg['draft']
+            and draft_architecture(cfg['draft']) != model.get('architecture')):
+        cfg['draft'] = default['draft']
     if type(cfg['thinking']) is bool: cfg['thinking'] = 'high' if cfg['thinking'] else 'off'
     # draft_min 0.3 in a profile saved before PROFILE_VERSION 2 is the old default, not a choice (see DEFAULTS)
     if saved.get('version', 1) < 2 and saved.get('draft_min') == 0.3: cfg['draft_min'] = DEFAULTS['draft_min']
+    # Qwen3.6-35B-A3B leaves most of the carve free: the pool holds several full-length conversations (carve_kv_pool)
+    if model.get('architecture') in DRAFT_FILE_ARCHS and 'kv_pool' not in saved:
+        cfg['kv_pool'] = carve_kv_pool(model, cfg)
     return cfg
 
 
@@ -804,7 +887,12 @@ def validate_profile(raw, model):
             fail('qsa_architecture')
         if cfg['flash_attention'] != 'on': fail('qsa_needs_fa')
     if cfg['mtp'] and model['architecture'] != 'qwen4exp':
-        if not builtin_mtp(model): fail('mtp_architecture')
+        # a model with its own MTP block drafts from it; a qwen35moe one without from a draft file of the block alone
+        if not builtin_mtp(model):
+            if model['architecture'] not in DRAFT_FILE_ARCHS: fail('mtp_architecture')
+            if not cfg['draft'] or not Path(cfg['draft']).is_file(): fail('draft_missing')
+            checked_file(cfg['draft'])
+            if not draft_matches(model, cfg['draft']): fail('draft_mismatch', name=Path(cfg['draft']).name)
     elif cfg['mtp']:
         if not cfg['draft'] or not Path(cfg['draft']).is_file(): fail('draft_missing')
         checked_file(cfg['draft'])
@@ -1029,9 +1117,10 @@ def measured_error(model, cfg):
 
 def gpu_need_raw(model, cfg, tb):
     """The estimate: weights, KV pool, recurrent states, compute buffers and the MTP draft's own. The constants above
-    are qwen4exp's; other architectures get gpu_need_generic's."""
+    are qwen4exp's; qwen35moe has its own terms (gpu_need_qwen35), other architectures get gpu_need_generic's."""
     meta = metadata(Path(model['path']))
     arch = meta.get('general.architecture')
+    if arch in DRAFT_FILE_ARCHS: return gpu_need_qwen35(model, meta, arch, cfg, tb)
     if arch != 'qwen4exp': return gpu_need_generic(model, meta, arch, cfg, tb)
     cells, slots = kv_pool_cells(cfg), cfg.get('parallel', 1)
     n_attn = meta[f'{arch}.block_count'] // max(1, meta.get(f'{arch}.full_attention_interval', 1))
@@ -1124,6 +1213,111 @@ def gpu_need_generic(model, meta, arch, cfg, tb):
         mm = mmproj_path(cfg, model)
         if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
     return need
+
+
+# qwen35moe (Qwen3.6-35B-A3B): the terms from its own graph and memory, not fitted yet - no load of it has been measured
+# here; the first load with each setting corrects the next through placement.json, as for every model.
+# - Recurrent states: a row per conversation in each gated-delta-net layer, f32: the conv rows ((d_conv - 1) x the q/k/v
+#   channels) and the state (d_state x d_inner), 2.1 MiB a layer. With MTP every conversation keeps as many rows again
+#   as a draft is long (n_rs_seq = --spec-draft-n-max) to roll a rejected draft back: 8 slots x 4 rows x 30 layers, 2 GiB.
+# - Compute buffer: the graph is reserved for a ubatch over the whole pool, so the f16 attention mask, cells x ubatch,
+#   is in it (16 KiB a cell at ubatch 8192, near the K/V's 20); then the rows a token holds at once in the widest layer
+#   (qwen35_token_rows), and PROMPT_GROWTH as for qwen4exp.
+# - MTP draft context (its own block, or a draft file of the block alone): f16 K/V of the one layer, its mask and rows
+#   at the draft ubatch (draft_ubatch).
+def qwen35_token_rows(meta, arch):
+    """f32 values a token holds at once in the widest layer of a qwen35moe graph: a delta-net layer's q/k/v projection,
+    conv input and output, z, the net's output and its gated norm, and the residuals; or an MoE layer's gate, up and
+    their product and the down rows of each used expert, and the residual, norm and sum"""
+    def one(key):
+        v = meta.get(f'{arch}.{key}')
+        return max(v or [0]) if isinstance(v, list) else (v or 0)
+    n_embd, d_inner, d_state, groups = (one(k) for k in ('embedding_length', 'ssm.inner_size', 'ssm.state_size', 'ssm.group_count'))
+    used, ff = one('expert_used_count'), one('expert_feed_forward_length')
+    channels = d_inner + 2 * groups * d_state
+    return max(3 * channels + 3 * d_inner + 2 * n_embd, used * (3 * ff + 2 * n_embd) + 3 * n_embd)
+
+
+def qwen35_need(model, meta, arch, cfg, weights, draft, drafts):
+    """What a qwen35moe load puts on the GPU besides `weights` (the target's on the GPU) and `draft` (a draft file's):
+    see above. `drafts`: whether an MTP draft context runs."""
+    def one(key):
+        v = meta.get(f'{arch}.{key}')
+        return max(v or [0]) if isinstance(v, list) else (v or 0)
+    nextn = appended_blocks(meta, arch)
+    n_layer = meta[f'{arch}.block_count'] - len(nextn)
+    interval = one('full_attention_interval') or 4
+    n_attn = sum(1 for i in range(n_layer) if (i + 1) % interval == 0)
+    kvh, n_head, n_embd = one('attention.head_count_kv'), one('attention.head_count'), one('embedding_length')
+    kl = one('attention.key_length') or (n_embd // n_head if n_head else 0)
+    vl = one('attention.value_length') or kl
+    d_inner, d_state, groups = one('ssm.inner_size'), one('ssm.state_size'), one('ssm.group_count')
+    d_conv = one('ssm.conv_kernel') or 4
+    cells, slots, ub = kv_pool_cells(cfg), cfg.get('parallel', 1), cfg['ubatch']
+    # f16 with flash attention; without it the mask is f32 and the scores of every head are a tensor of their own
+    mask = 2 if cfg.get('flash_attention', 'on') != 'off' else 4 + 4 * n_head
+    rows = qwen35_token_rows(meta, arch) * 4
+    need = weights + draft + cells * n_attn * kvh * (kl + vl) * KV_ELEM_BYTES.get(cfg['kv'], 2.0)
+    rs_rows = slots * (1 + (draft_limit(cfg) if cfg.get('mtp') else 0))
+    need += rs_rows * (n_layer - n_attn) * ((d_conv - 1) * (d_inner + 2 * groups * d_state) + d_state * d_inner) * 4
+    need += ub * (rows + PROMPT_GROWTH_BYTES_PER_UBATCH_TOKEN) + cells * ub * mask
+    if drafts:
+        # the draft context caps its ubatch below the target's (STRIX_SPEC_DRAFT_UBATCH); its K/V are f16
+        dub = min(ub, draft_ubatch(cells))
+        need += cells * max(1, len(nextn)) * kvh * (kl + vl) * 2 + dub * rows + cells * dub * mask
+    if cfg.get('vision'):
+        mm = mmproj_path(cfg, model)
+        if mm.is_file(): need += mm.stat().st_size + VISION_EXTRA
+    return need
+
+
+def gpu_need_qwen35(model, meta, arch, cfg, tb):
+    nextn = appended_blocks(meta, arch)
+    builtin = bool(cfg.get('mtp')) and bool(nextn)
+    block = lambda name: int(name.split('.')[1]) if re.match(r'blk\.\d+\.', name) else -1
+    # the MTP block is loaded only when it drafts (the fork skips its tensors otherwise)
+    weights = sum(v for k, v in tb.items() if k not in CPU_TENSORS and (builtin or block(k) not in nextn))
+    draft = 0
+    if cfg.get('mtp') and not nextn and cfg.get('draft') and Path(cfg['draft']).is_file():
+        # a draft file of the block alone: its embeddings stay in system memory, its head and block go to the GPU
+        draft = sum(v for k, v in tensor_bytes([Path(cfg['draft'])]).items() if k not in CPU_TENSORS)
+    if cfg.get('trunk_decode_q6k'):
+        weights += trunk_twin_bytes(model_shards(model))      # the runtime makes them for every model's Q8_0 matrices
+    return qwen35_need(model, meta, arch, cfg, weights * 1.01, draft * 1.01, builtin or draft > 0)
+
+
+# Qwen3.6-35B-A3B leaves most of a carve free, so its pool (kv_pool) holds the most full-length conversations of
+# POOL_CONVERSATIONS that the estimate fits in the carve with nothing in system memory - with the defaults two at the
+# 64 GB carve and four at the 96 GB one (~42 KiB a cell: K/V 20, the target's mask 16, the draft's K/V and mask 6) -
+# else the context alone. Other programs' share of the carve is taken as POOL_OTHERS, not read, so that the default
+# stays the same from one call to the next; a saved kv_pool is the user's.
+# 11-03: off (pool = context, as for Flash-Next) until measured: qwen35moe's hybrid memory has no KV regions, so a
+# conversation late in a larger pool reads every earlier conversation's cells on each step
+POOL_CONVERSATIONS = ()
+POOL_OTHERS = 2 << 30
+
+
+def carve_kv_pool(model, cfg, dedicated=None):
+    if cfg.get('parallel', 1) < 2: return 0
+    dedicated = dedicated_vram_bytes() if dedicated is None else dedicated
+    if not dedicated: return 0
+    try:
+        meta = metadata(Path(model['path']))
+        arch = meta.get('general.architecture')
+        if arch not in DRAFT_FILE_ARCHS: return 0
+        # the files' sizes: no tensor table to read, and the embeddings and the MTP block they count are room to spare
+        weights = model.get('size') or sum(p.stat().st_size for p in model_shards(model))
+        nextn = appended_blocks(meta, arch)
+        draft = Path(cfg['draft']).stat().st_size if cfg.get('mtp') and not nextn and cfg.get('draft') and Path(cfg['draft']).is_file() else 0
+        drafts = bool(cfg.get('mtp')) and (bool(nextn) or draft > 0)
+        room = dedicated * CARVE_USABLE - POOL_OTHERS - OTHERS_GROWTH - HOST_EXPERT_MARGIN
+        for n in POOL_CONVERSATIONS:
+            pool = min(KV_POOL_MAX, n * cfg['context'])
+            if pool > cfg['context'] and qwen35_need(model, meta, arch, dict(cfg, kv_pool=pool), weights, draft, drafts) <= room:
+                return pool
+    except (OSError, ValueError, KeyError, TypeError, struct.error):
+        pass
+    return 0
 
 
 def builtin_mtp(model):
@@ -2225,10 +2419,14 @@ def handle(op, data):
     if op=='slots': return slots()
     if op=='profile':
         m=model_by_id(data['id'])
-        # what the companion switches can be turned on with: the page explains an off switch by it
-        companions={'draft':family_draft(m),'mmproj':mmproj_path({},m).is_file(),
-                    'draft_head':any('-head-' in Path(p).name.lower() for p in [family_draft(m) or '']),
-                    'mtp_builtin':builtin_mtp(m)}
+        # what the companion switches can be turned on with: the page explains an off switch by it. mtp_file: the model
+        # drafts from a draft file - qwen4exp, or a file of a known qwen35moe family without its MTP block - which the
+        # page then offers
+        draft,builtin,family=family_draft(m),builtin_mtp(m),family_of(m)
+        companions={'draft':draft,'mmproj':mmproj_path({},m).is_file(),
+                    'draft_head':any('-head-' in Path(p).name.lower() for p in [draft or '']),
+                    'mtp_builtin':builtin,'family':family,
+                    'mtp_file':m.get('architecture')=='qwen4exp' or (m.get('architecture') in DRAFT_FILE_ARCHS and bool(family) and not builtin)}
         return {'model':m,'profile':profile(m),'companions':companions}
     if op=='roots':
         roots=data['roots']

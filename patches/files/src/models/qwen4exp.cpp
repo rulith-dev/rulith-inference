@@ -2194,11 +2194,18 @@ struct qwen4exp_seq_group {
 };
 
 static std::vector<qwen4exp_seq_group> qwen4exp_seq_groups(const llama_ubatch & ub) {
+    // strixllama: sets of a prompt-sized count each make a group of their own (issue #25): the recurrent net's
+    // prompt kernels (gated_delta_net.cu: WY, R16, tiled) take one sequence; decode and MTP verify sets still share one
+    static const int64_t own_group = [] {
+        const char * e = getenv("STRIX_RAGGED_EQUAL");
+        return e ? (int64_t) atoi(e) : (int64_t) 16;
+    }();
     std::vector<qwen4exp_seq_group> res;
     for (uint32_t s = 0; s < ub.n_seqs; ++s) {
         const int64_t n  = ub.ntok(s);
         const int64_t t0 = ub.tok0(s);
-        if (!res.empty() && res.back().n_tok == n && res.back().t0 + res.back().n_seqs * n == t0) {
+        if (!res.empty() && res.back().n_tok == n && res.back().t0 + res.back().n_seqs * n == t0 &&
+                (!ub.ragged() || own_group <= 0 || n < own_group)) {
             res.back().n_seqs++;
         } else {
             res.push_back({ (int64_t) s, 1, n, t0 });

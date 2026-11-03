@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """apply_llama: the fork's changes to 26 upstream file(s) of this area.
 
-Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork 511901542956. Regenerated whole by tools/make_recipe.py when the fork moved
+Upstream https://github.com/ggml-org/llama.cpp @ 19ab5a5e6573 -> fork 0364508f0b24. Regenerated whole by tools/make_recipe.py when the fork moved
 to this upstream; the scripts it replaced, one per change with its reasons, are in
 patches/history/ (see patches/MANIFEST.md).
 
@@ -314,10 +314,22 @@ llama_ubatch llama_batch_allocr::split_ragged(uint32_t n_ubatch, uint32_t n_keep
         seq_ntok.push_back(take[s]);
     }
 
-    // one count for all: an ordinary equal-length ubatch
+    // one count for all: an ordinary equal-length ubatch - unless the sets are prompt chunks (issue #25: two
+    // 2048-token prompts at once prefilled at 880 tok/s against 1350 for 2047 + 2049). As an equal-length ubatch the
+    // model ran their recurrent layers as one two-sequence net, which has no prompt-sized fast kernel (gated_delta_net.cu
+    // takes n_seqs == 1), and the per-token rest as [n_seq_tokens, n_seqs] tensors the fused paths skip. Ragged, each
+    // set is a group of its own (qwen4exp_seq_groups) and the rest one set of all the tokens, as for unequal counts.
+    // STRIX_RAGGED_EQUAL = the smallest such count (0 = off; decode and MTP verify sets stay below it)
+    static const uint32_t ragged_equal = [] {
+        const char * e = getenv("STRIX_RAGGED_EQUAL");
+        return e ? (uint32_t) atoi(e) : 16u;
+    }();
     bool uniform = true;
     for (const uint32_t t : seq_ntok) {
         uniform = uniform && t == seq_ntok[0];
+    }
+    if (uniform && ragged_equal > 0 && seq_ntok.size() > 1 && seq_ntok[0] >= ragged_equal) {
+        uniform = false;
     }
 
     return ubatch_add(idxs, (uint32_t) seq_ntok.size(), true, uniform ? nullptr : &seq_ntok);

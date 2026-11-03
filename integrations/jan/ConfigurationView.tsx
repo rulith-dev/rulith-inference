@@ -33,11 +33,15 @@ export default function ConfigurationView() {
 
   const models = catalog?.models.filter(m => m.role === 'model') || []
   const model = catalog?.models.find(m => m.id === selected)
-  const drafts = catalog?.models.filter(m => m.role === 'draft') || []
   const projectors = catalog?.models.filter(m => m.role === 'projection') || []
   const qsaModel = model?.architecture === 'qwen4exp'
-  // a model with its own MTP layer (Nemotron 3.5 Super) drafts from it: no draft file to pick
+  // a model with its own MTP layer (Nemotron 3.5 Super, Unsloth's Qwen3.6-35B-A3B MTP files) drafts from it: no draft
+  // file to pick
   const builtinMtp = !qsaModel && !!companions?.mtp_builtin
+  // a Qwen3.6-35B-A3B file without that layer (LM Studio's) drafts from a draft file of the layer alone, as qwen4exp does
+  const fileMtp = qsaModel || (!builtinMtp && !!companions?.mtp_file)
+  // and runs only a draft of its own architecture
+  const drafts = catalog?.models.filter(m => m.role === 'draft' && (qsaModel || m.architecture === model?.architecture)) || []
   const running = !!status?.identity && status.model_path === model?.path
   const profileDirty = !!profile && !sameProfile(profile, saved)
   const netDirty = !!network && !!netDraft && !sameNetwork(netDraft, network.saved)
@@ -128,11 +132,13 @@ export default function ConfigurationView() {
 
         <Section label={tr('config.speculative.title')}>
           <Row title={tr('config.speculative.mtp')} info={tr('config.speculative.mtpInfo')}
-            description={qsaModel ? tr('config.speculative.mtpHelp') : builtinMtp ? tr('config.speculative.mtpBuiltinHelp') : tr('config.speculative.mtpUnsupported')}
-            control={<Switch aria-label={tr('config.speculative.mtp')} checked={p.mtp} disabled={!qsaModel && !builtinMtp} onCheckedChange={set('mtp')} />}
-            note={qsaModel && companions && !companions.draft && <Notice tone="warning">{tr('config.speculative.noDraft')}</Notice>} />
+            description={qsaModel ? tr('config.speculative.mtpHelp') : builtinMtp ? tr('config.speculative.mtpBuiltinHelp')
+              : fileMtp ? tr('config.speculative.mtpFileHelp') : tr('config.speculative.mtpUnsupported')}
+            control={<Switch aria-label={tr('config.speculative.mtp')} checked={p.mtp} disabled={!fileMtp && !builtinMtp} onCheckedChange={set('mtp')} />}
+            note={fileMtp && companions && !companions.draft && <Notice tone="warning">{tr(qsaModel ? 'config.speculative.noDraft' : 'config.speculative.noDraftFile')}</Notice>} />
           <Row title={tr('config.speculative.draftModel')} disabled={!p.mtp || builtinMtp}
-            description={builtinMtp ? tr('config.speculative.draftBuiltin') : companions?.draft && !companions.draft_head ? tr('config.speculative.draftHelp') : tr('config.speculative.draftHelpHead')}
+            description={builtinMtp ? tr('config.speculative.draftBuiltin') : fileMtp && !qsaModel ? tr('config.speculative.draftHelpFile')
+              : companions?.draft && !companions.draft_head ? tr('config.speculative.draftHelp') : tr('config.speculative.draftHelpHead')}
             control={<Choice ariaLabel={tr('config.speculative.draftModel')} className="max-w-72" disabled={!p.mtp || builtinMtp} value={p.draft} onChange={set('draft')}
               options={[
                 // a saved draft outside the scanned folders would otherwise show as whichever option comes first

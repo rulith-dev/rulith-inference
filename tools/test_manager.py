@@ -34,6 +34,27 @@ def gguf_tensors(path,tensors,arch='qwen4exp'):
     head=b'GGUF'+struct.pack('<IQQ',3,len(tensors),2)+kv+infos
     path.write_bytes(head+b'\0'*(-len(head)%32)+data)
 
+def gguf_q35(path,blocks=41,nextn=1,name='Qwen3.6-35B-A3B',trunk=True,arch='qwen35moe'):
+    """A qwen35moe GGUF header with Qwen3.6-35B-A3B's shape keys and tiny tensors (32 bytes each): the embeddings, the
+    head, an expert tensor per trunk block and the MTP block (blk.<trunk>) when nextn; trunk=False makes a draft file of
+    the MTP block alone, as one extracted from Unsloth's MTP file would be."""
+    def s(text):
+        b=text.encode();return struct.pack('<Q',len(b))+b
+    kv=[('general.architecture',8,arch),('general.name',8,name),(f'{arch}.block_count',4,blocks),(f'{arch}.context_length',4,262144),
+        (f'{arch}.embedding_length',4,2048),(f'{arch}.attention.head_count',4,16),(f'{arch}.attention.head_count_kv',4,2),
+        (f'{arch}.attention.key_length',4,256),(f'{arch}.attention.value_length',4,256),(f'{arch}.expert_used_count',4,8),
+        (f'{arch}.expert_feed_forward_length',4,512),(f'{arch}.ssm.conv_kernel',4,4),(f'{arch}.ssm.state_size',4,128),
+        (f'{arch}.ssm.group_count',4,16),(f'{arch}.ssm.inner_size',4,4096),(f'{arch}.full_attention_interval',4,4)]
+    if nextn: kv.append((f'{arch}.nextn_predict_layers',4,nextn))
+    fields=b''.join(s(k)+struct.pack('<I',t)+(s(v) if t==8 else struct.pack('<I',v)) for k,t,v in kv)
+    n_layer=blocks-nextn
+    names=['token_embd.weight','output.weight']+([f'blk.{i}.ffn_up_exps.weight' for i in range(n_layer)] if trunk else [])
+    names+=[f'blk.{i}.{t}' for i in range(n_layer,blocks) for t in ('nextn.eh_proj.weight','ffn_up_exps.weight')]
+    infos=b''.join(s(n)+struct.pack('<IQIQ',1,8,0,32*i) for i,n in enumerate(names))
+    head=b'GGUF'+struct.pack('<IQQ',3,len(names),len(kv))+fields+infos
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(head+b'\0'*(-len(head)%32)+b'w'*32*len(names))
+
 def first_model(refresh=True):
     # the catalog sorts by role, and the draft and projector created in setUp sort before the model
     return next(x for x in m.catalog(refresh)['models'] if x['role']=='model')
@@ -1022,5 +1043,155 @@ class ManagerTests(unittest.TestCase):
         with patch.object(m,'ROOT',local/'Strix Llama'/'runtime'):
             self.assertEqual(m.settings()['roots'][0],old)
         self.assertEqual(m.moved_root(str(self.root/'gone'/'models')),str(self.root/'gone'/'models'))
+
+    # ---- Qwen3.6-35B-A3B: qwen35moe, GitHub issue #24 ----
+    def qwen36(self):
+        """Unsloth's MTP file with its projector; LM Studio's plain file with a draft file of the MTP block beside it"""
+        mtp=self.root/'models'/'unsloth'/'Qwen3.6-35B-A3B-MTP-GGUF'/'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf';gguf_q35(mtp)
+        gguf(mtp.with_name(m.MMPROJ_NAME))
+        plain=self.root/'models'/'lmstudio-community'/'Qwen3.6-35B-A3B-GGUF'/'Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf'
+        gguf_q35(plain,blocks=40,nextn=0,name='Qwen_Qwen3.6 35B A3B')
+        draft=plain.with_name('mtp-'+m.QWEN36_FAMILY+'-Q8_0.gguf');gguf_q35(draft,trunk=False,name='Qwen3.6-35B-A3B MTP')
+        listed={x['filename']:x for x in m.catalog(True)['models']}
+        return listed[mtp.name],listed[plain.name],draft
+    def test_qwen36_files_are_listed_with_and_without_their_mtp_block(self):
+        mtp,plain,draft=self.qwen36()
+        self.assertEqual((mtp['role'],mtp['architecture'],mtp['quant'],mtp['context']),('model','qwen35moe','Q4_K_XL',262144))
+        self.assertEqual((plain['role'],plain['architecture'],plain['quant'],plain['context']),('model','qwen35moe','Q4_K_M',262144))
+        listed={x['filename']:x for x in m.catalog()['models']}
+        self.assertEqual((listed[draft.name]['role'],listed[draft.name]['architecture']),('draft','qwen35moe'))
+        self.assertTrue(m.builtin_mtp(mtp));self.assertFalse(m.builtin_mtp(plain))
+        self.assertEqual(m.appended_blocks(m.metadata(Path(mtp['path'])),'qwen35moe'),{40})
+        # a header is read once a request, and again once the file is another
+        gguf_q35(Path(mtp['path']),blocks=40,nextn=0)
+        self.assertFalse(m.builtin_mtp(mtp))
+        gguf_q35(Path(mtp['path']))
+        # the family by the file's name or general.name; a Qwen3.5 file of the same shape has another MTP block
+        self.assertEqual((m.family_of(mtp),m.family_of(plain)),(m.QWEN36_FAMILY,m.QWEN36_FAMILY))
+        self.assertEqual(m.family_of({'architecture':'qwen35moe','path':'x/model.gguf','name':'Qwen_Qwen3.6 35B A3B'}),m.QWEN36_FAMILY)
+        self.assertIsNone(m.family_of({'architecture':'qwen35moe','path':'x/Qwen3.5-35B-A3B-Q4_K_M.gguf','name':'Qwen3.5-35B-A3B'}))
+        self.assertEqual(m.family_of(self.model),m.MODEL_FAMILY)
+    def test_qwen36_drafts_from_its_own_mtp_block_with_image_input_and_no_sparse_attention(self):
+        mtp,_,_=self.qwen36()
+        with patch.object(m,'dedicated_vram_bytes',return_value=None):
+            cfg=m.profile(mtp)
+            # MTP from the block (no draft file, not Qwen3.8-Flash-Next's beside the other model), the projector beside it
+            self.assertEqual((cfg['mtp'],cfg['vision'],cfg['qsa'],cfg['draft']),(True,True,False,''))
+            self.assertEqual((cfg['context'],cfg['parallel'],cfg['kv'],cfg['ubatch'],cfg['kv_pool']),(262144,8,'f16',8192,0))
+            run=m.validate_profile({},mtp)
+            args=m.argv(mtp,run)
+            self.assertNotIn('-md',args)                                                   # the draft context is the model's
+            self.assertEqual(args[args.index('--spec-type')+1],'draft-mtp')
+            self.assertEqual(args[args.index('--spec-draft-n-max')+1],'3')
+            self.assertEqual(Path(args[args.index('--mmproj')+1]),Path(mtp['path']).with_name(m.MMPROJ_NAME))
+            env=m.runtime_environment(run)
+            self.assertEqual((env['LLAMA_QSA_SPARSE'],env['LLAMA_QSA_QUERY_STRIP'],env['STRIX_SPEC_DRAFT_UBATCH']),('0','0','2048'))
+            self.assertEqual(env['STRIX_SPEC_DRAFT_BY_SLOTS'],'3,2,2,2,0')
+            with self.assertRaisesRegex(ValueError,'qwen4exp'):m.validate_profile({'qsa':True},mtp)
+            # a profile an earlier version saved with Qwen3.8-Flash-Next's draft does not keep it
+            s=m.settings();s['profiles'][mtp['id']]={'draft':str(self.draft)};m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(m.profile(mtp)['draft'],'')
+            # the page: MTP from the model's own layer, no draft file to pick
+            c=m.handle('profile',{'id':mtp['id']})['companions']
+            self.assertEqual((c['mtp_builtin'],c['mtp_file'],c['draft'],c['family'],c['mmproj']),(True,False,None,m.QWEN36_FAMILY,True))
+            Path(mtp['path']).with_name(m.MMPROJ_NAME).unlink()
+            self.assertFalse(m.profile(mtp)['vision'])                                     # no projector beside it: off
+    def test_a_qwen36_file_without_its_mtp_block_drafts_from_a_draft_file_of_its_family(self):
+        mtp,plain,draft=self.qwen36()
+        with patch.object(m,'dedicated_vram_bytes',return_value=None):
+            self.assertEqual(Path(m.family_draft(plain)).resolve(),draft.resolve())        # not Qwen3.8-Flash-Next's
+            self.assertIsNone(m.family_draft(mtp))                                         # its own block needs none
+            cfg=m.profile(plain)
+            self.assertTrue(cfg['mtp']);self.assertEqual(Path(cfg['draft']).resolve(),draft.resolve())
+            run=m.validate_profile({},plain)
+            args=m.argv(plain,run)
+            self.assertEqual(Path(args[args.index('-md')+1]).resolve(),draft.resolve())
+            self.assertEqual(args[args.index('--spec-type')+1],'draft-mtp')
+            c=m.handle('profile',{'id':plain['id']})['companions']
+            self.assertEqual((c['mtp_builtin'],c['mtp_file'],c['family']),(False,True,m.QWEN36_FAMILY))
+            # on the GPU: the draft file's head and block (its embeddings stay in system memory), the draft's rows to roll
+            # back per conversation (8 x 3 x 30 delta-net layers) and the draft context: f16 K/V of one layer, its mask
+            # and rows at the draft ubatch
+            tb=m.tensor_bytes(m.model_shards(plain))
+            extra=m.gpu_need_raw(plain,run,tb)-m.gpu_need_raw(plain,dict(run,mtp=False),tb)
+            state=((4-1)*(4096+2*16*128)+128*4096)*4
+            self.assertAlmostEqual(extra,3*32*1.01+8*3*30*state+262144*2*(256+256)*2+2048*51200*4+262144*2048*2,delta=1)
+            # another family's draft cannot run beside it
+            with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'mtp':True,'draft':str(self.draft)},plain)
+            self.assertEqual((caught.exception.code,caught.exception.params),('draft_mismatch',{'name':self.draft.name}))
+            # without a draft file MTP is off, and cannot be turned on
+            draft.unlink();m.catalog(True)
+            self.assertFalse(m.profile(plain)['mtp'])
+            with self.assertRaises(m.ManagerError) as caught:m.validate_profile({'mtp':True},plain)
+            self.assertEqual(caught.exception.code,'draft_missing')
+    def test_qwen36_pool_holds_as_many_full_conversations_as_the_carve_has_room_for(self):
+        mtp,_,_=self.qwen36()
+        real={**mtp,'size':22853663008}                                                    # UD-Q4_K_XL's 22.85 GB
+        GiB=1<<30
+        # ~42 KiB a cell with MTP at ubatch 8192: the 96 GB carve holds four conversations, the 64 GB one two
+        # shipped off (pool = context) until measured: no KV regions in qwen35moe's hybrid memory
+        with patch.object(m,'dedicated_vram_bytes',return_value=96*GiB):
+            self.assertEqual(m.POOL_CONVERSATIONS,())
+            self.assertEqual(m.profile(real)['kv_pool'],0)
+        for carve,pool in ((96*GiB,1048576),(64*GiB,524288),(48*GiB,0),(32*GiB,0),(None,0)):
+            with self.subTest(carve=carve),patch.object(m,'dedicated_vram_bytes',return_value=carve),\
+                    patch.object(m,'POOL_CONVERSATIONS',(4,2)):
+                self.assertEqual(m.profile(real)['kv_pool'],pool)
+        with patch.object(m,'dedicated_vram_bytes',return_value=64*GiB),patch.object(m,'other_programs_dedicated',return_value=0),\
+                patch.object(m,'POOL_CONVERSATIONS',(4,2)):
+            args=m.argv(real,m.validate_profile({},real))
+            self.assertEqual((args[args.index('-c')+1],args[args.index('--kv-unified-per-slot')+1]),('524288','262144'))
+            self.assertNotIn('-ot',args)                                                   # all of it on the GPU
+            # with one slot there is no pool; a saved pool is the user's
+            s=m.settings();s['profiles'][real['id']]={'parallel':1};m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(m.profile(real)['kv_pool'],0)
+            s['profiles'][real['id']]={'kv_pool':300000};m.atomic_json(m.DATA/'settings.json',s)
+            self.assertEqual(m.profile(real)['kv_pool'],300000)
+    def test_qwen35moe_estimate_counts_its_attention_layers_states_mask_and_mtp_block(self):
+        # 8 trunk blocks - attention in 3 and 7, a gated delta net in the others - and the MTP block 8
+        meta={'general.architecture':'qwen35moe','qwen35moe.block_count':9,'qwen35moe.nextn_predict_layers':1,
+              'qwen35moe.embedding_length':16,'qwen35moe.attention.head_count':4,'qwen35moe.attention.head_count_kv':2,
+              'qwen35moe.attention.key_length':16,'qwen35moe.attention.value_length':16,'qwen35moe.full_attention_interval':4,
+              'qwen35moe.ssm.inner_size':32,'qwen35moe.ssm.state_size':4,'qwen35moe.ssm.group_count':2,'qwen35moe.ssm.conv_kernel':4,
+              'qwen35moe.expert_used_count':2,'qwen35moe.expert_feed_forward_length':8}
+        tb={'token_embd.weight':1000,'blk.0.attn_qkv.weight':100,'blk.3.attn_q.weight':100,'blk.1.ffn_up_exps.weight':300,
+            'blk.8.ffn_up_exps.weight':300,'blk.8.nextn.eh_proj.weight':50}
+        model={**self.model,'id':'q35','architecture':'qwen35moe'}
+        cfg={'kv':'f16','ubatch':8,'parallel':2,'kv_pool':0,'context':256,'vision':False,'mtp':False,'draft_max':3,'flash_attention':'on'}
+        rows=(3*(32+2*2*4)+3*32+2*16)*4                                                     # the delta-net layer's: wider than the MoE's
+        state=((4-1)*(32+2*2*4)+4*32)*4                                                     # conv rows and state, f32
+        kv=256*2*2*(16+16)*2.0                                                              # blocks 3 and 7
+        growth=m.PROMPT_GROWTH_BYTES_PER_UBATCH_TOKEN
+        with patch.object(m,'metadata',return_value=meta):
+            self.assertEqual(m.qwen35_token_rows(meta,'qwen35moe')*4,rows)
+            off=(100+100+300)*1.01+kv+2*6*state+8*(rows+growth)+256*8*2                      # no embeddings, no MTP block
+            self.assertAlmostEqual(m.gpu_need_raw(model,cfg,tb),off,places=3)
+            # with MTP: its block, a draft's rows to roll back per conversation, the draft context's K/V, mask and rows
+            on=(100+100+300+350)*1.01+kv+2*(1+3)*6*state+8*(rows+growth)+256*8*2+256*2*(16+16)*2+8*rows+256*8*2
+            self.assertAlmostEqual(m.gpu_need_raw(model,dict(cfg,mtp=True),tb),on,places=3)
+            # without flash attention the mask is f32 and every head's scores are a tensor of their own
+            self.assertAlmostEqual(m.gpu_need_raw(model,dict(cfg,flash_attention='off'),tb)-off,256*8*(4+4*4-2),places=3)
+            # placement: the MTP block's experts move first while it drafts; otherwise it is not loaded at all
+            with patch.object(m,'tensor_bytes',return_value=tb),patch.object(m,'gpu_need_bytes',return_value=1000):
+                self.assertEqual(m.host_expert_layers(model,dict(cfg,mtp=True),dedicated=800),[8])
+                self.assertEqual(m.host_expert_layers(model,cfg,dedicated=800),[1])
+    def test_the_download_list_offers_qwen36_and_recommends_it_where_the_big_model_does_not_fit(self):
+        D=m._dl();cat=D.load_catalog()
+        q=next(x for x in cat['models'] if x['id']=='qwen3.6-35b-a3b-mtp-ud-q4_k_xl')
+        self.assertEqual([(f['name'],f['role'],f['required']) for f in q['files']],
+                         [('Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf','model',True),('mmproj-F16.gguf','projection',False)])
+        self.assertEqual((q['owner'],q['repo'],q['capabilities']),('unsloth','Qwen3.6-35B-A3B-MTP-GGUF',['images','tools','mtp']))
+        for f in q['files']:
+            spec=D.SPEC.fullmatch(f['hf'])
+            self.assertEqual((spec[1],spec[2],len(spec[3]),spec[4]),('unsloth','Qwen3.6-35B-A3B-MTP-GGUF',40,f['name']))  # pinned
+            self.assertEqual(len(f['sha256']),64)
+            self.assertTrue(all(D.allowed(u) for s in ('hf','hfm') for u in D.entry_urls(cat,f,s)))
+        # the recommended list's first entry still Qwen3.8-Flash-Next's: the page recommends the first that fits
+        self.assertTrue(cat['models'][0]['id'].startswith('qwen3.8'))
+        # a 64 GB PC (32 GB carve): none of Qwen3.8-Flash-Next's files fit, Qwen3.6-35B-A3B's do
+        with patch.object(m,'total_ram_bytes',return_value=32<<30),patch.object(m,'dedicated_vram_bytes',return_value=32<<30):
+            fits={x['id']:x['fits'] for x in m.dl_catalog()['models']}
+        self.assertTrue(fits['qwen3.6-35b-a3b-mtp-ud-q4_k_xl'])
+        self.assertFalse(any(v for k,v in fits.items() if k.startswith('qwen3.8')))
 
 if __name__=='__main__':unittest.main()
