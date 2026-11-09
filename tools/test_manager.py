@@ -1194,4 +1194,26 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(fits['qwen3.6-35b-a3b-mtp-ud-q4_k_xl'])
         self.assertFalse(any(v for k,v in fits.items() if k.startswith('qwen3.8')))
 
+    def test_stalled_direct_load_switches_the_model_to_mmap(self):
+        # issue #29: a direct-read load whose log stops growing after "loading weights" is judged stalled; the model
+        # then loads through mmap on this PC, and older runtimes (no such line) are never judged
+        cfg=m.validate_profile({'mtp':False},self.model)
+        args=m.argv(self.model,cfg)
+        self.assertEqual(args[args.index('--load-mode')+1],'none');self.assertEqual(args[args.index('--lazy-mode')+1],'on-direct')
+        self.assertEqual(m.loader_of(self.model),'direct')
+        log=self.root/'run.log'
+        log.write_bytes(b'load_model: loading model\nload_all_data: loading weights: 0.0 of 100.4 GiB\n')
+        old=m.time.time()-m.LOAD_STALL_S-5
+        os.utime(log,(old,old))
+        self.assertTrue(m.load_stalled({'log':str(log)}))
+        os.utime(log,None)
+        self.assertFalse(m.load_stalled({'log':str(log)}))
+        quiet=self.root/'old.log';quiet.write_bytes(b'load_model: loading model\n');os.utime(quiet,(old,old))
+        self.assertFalse(m.load_stalled({'log':str(quiet)}))
+        self.assertFalse(m.load_stalled({'log':str(self.root/'missing.log')}))
+        m.remember_loader(self.model,'mmap')
+        self.assertEqual(m.loader_of(self.model),'mmap')
+        args=m.argv(self.model,cfg)
+        self.assertEqual(args[args.index('--load-mode')+1],'mmap');self.assertEqual(args[args.index('--lazy-mode')+1],'on')
+
 if __name__=='__main__':unittest.main()

@@ -1651,8 +1651,12 @@ def argv(model, cfg, net=None):
     if host:
         args += ['-ot', r'blk\.(%s)\.ffn_(gate|up|down)_exps\.weight=ROCm_Host' % '|'.join(map(str, host))]
     # this runtime reads the per-layer embedding table itself with offset I/O, so it must not be
-    # pinned to CPU memory
-    args += ['--load-mode', 'none', '--lazy-mode', 'on-direct']
+    # pinned to CPU memory. A model whose direct-read load stopped making progress on this PC loads through mmap
+    # instead (issue #29: load_stalled / loader.json)
+    if loader_of(model) == 'mmap':
+        args += ['--load-mode', 'mmap', '--lazy-mode', 'on']
+    else:
+        args += ['--load-mode', 'none', '--lazy-mode', 'on-direct']
     spec_types = []
     if cfg.get('ngram_spec', False):
         spec_types.append('ngram-mod')
@@ -1928,6 +1932,17 @@ def status():
         events = memory_events(s.get('log'))
         if events:
             result['memory_events'] = events
+        if result['status'] == 'loading' and load_stalled(s):
+            # issue #29: the direct-read load stopped making progress - started again through mmap, kept for this model
+            m = next((x for x in catalog()['models'] if x.get('id') == s.get('model_id')), None)
+            if m and isinstance(s.get('profile'), dict) and loader_of(m) != 'mmap':
+                remember_loader(m, 'mmap')
+                process_identity(s['identity']['pid'], True, s['identity'])
+                atomic_json(DATA/'process.json', {'last_log': s.get('log', '')})
+                launch(m, s['profile'])
+                n = state(); n['replaced'] = True; atomic_json(DATA/'process.json', n)
+                result['status'] = 'loading'
+                result['replaced'] = 'loader'
         if result['status'] == 'ready' and note_gpu_use(s):
             # the carve is full as the load becomes ready: its first long prompt would overfill it and the driver
             # would move buffers to system memory every few seconds. Reloaded once, placed by what was just measured
@@ -2027,6 +2042,46 @@ def note_gpu_use(s):
     return bool(carve) and adapter >= carve - OVERFULL_SLACK and not s.get('replaced') and age < 300
 
 
+# issue #29: a direct-read load that stops making progress (no log line for this long; the runtime writes one every
+# 10 s while it reads weights) is started again through mmap, and that model keeps the mmap loader on this PC
+LOAD_STALL_S = 240
+LOAD_BEAT = b'loading weights: '
+
+
+def loader_of(model):
+    """'mmap' for a model whose direct-read load stopped on this PC (DATA/loader.json), else 'direct'"""
+    try:
+        data = json.loads((DATA/'loader.json').read_text(encoding='utf-8'))
+    except Exception:
+        return 'direct'
+    key = str(model.get('id') or model.get('path') or '') if isinstance(model, dict) else str(model)
+    return 'mmap' if data.get(key) == 'mmap' else 'direct'
+
+
+def remember_loader(model, loader):
+    try:
+        data = json.loads((DATA/'loader.json').read_text(encoding='utf-8'))
+    except Exception:
+        data = {}
+    data[str(model.get('id') or model.get('path') or '')] = loader
+    atomic_json(DATA/'loader.json', data)
+
+
+def load_stalled(s):
+    """the running load reads weights (its log says so) and its log has not grown for LOAD_STALL_S"""
+    try:
+        log = Path(s.get('log') or '')
+        st = log.stat()
+        if time.time() - st.st_mtime < LOAD_STALL_S:
+            return False
+        with log.open('rb') as f:
+            f.seek(max(0, st.st_size - 65536))
+            tail = f.read()
+        return LOAD_BEAT in tail
+    except Exception:
+        return False
+
+
 def launch(m, cfg):
     """Start the runtime for model m with the already validated profile cfg: check the port, write
     the log banner, record the process identity."""
@@ -2067,7 +2122,7 @@ def launch(m, cfg):
               f'{f" (draft ubatch capped to {env['STRIX_SPEC_DRAFT_UBATCH']})" if cfg["mtp"] else ""}; '
               f'n-gram draft={"on (match=24, min=4, max=8)" if cfg["ngram_spec"] else "off"}; '
               f'vision={"on" if cfg["vision"] else "off"}; '
-              f'PLE reader=on-direct; rocm={"bundled beside the server" if bundled_rocm() else ROCM_BIN}; '
+              f'PLE reader={"mmap (a direct-read load stopped here before)" if loader_of(m) == "mmap" else "on-direct"}; rocm={"bundled beside the server" if bundled_rocm() else ROCM_BIN}; '
               f'listen={net["host"]}:{net["port"]}{" (API key required)" if net["api_key"] else ""}\n')
     with log.open('wb') as f:
         f.write(banner.encode('utf-8'))

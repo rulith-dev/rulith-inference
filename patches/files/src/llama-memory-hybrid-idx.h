@@ -91,6 +91,12 @@ public:
     bool   kv_rows_copy(llama_seq_id seq_src, llama_seq_id seq_dst, llama_pos p0, uint32_t n);
     // seq_id loses everything it held and gets attention and indexer cells for positions [0, n) of `tokens`
     bool   kv_alloc(llama_seq_id seq_id, const llama_token * tokens, uint32_t n);
+    // strixllama: the same by cell, for a sequence with an image in it (llama_strix_kv_*_cells): the cells in position
+    // order, the attention cache's rows then the indexer's, and the cells placed as given. An allocation with cells that
+    // share a position or skip some marks the block keys as an image ubatch does (kb_pos_dup)
+    bool   kv_cells_get(llama_seq_id seq_id, uint32_t i0, uint32_t n, uint8_t * dst, llama_strix_kv_cell * cells) const;
+    bool   kv_cells_set(llama_seq_id seq_id, uint32_t i0, uint32_t n, const uint8_t * src, uint32_t src_rows);
+    bool   kv_alloc_cells(llama_seq_id seq_id, const llama_strix_kv_cell * cells, uint32_t n);
 
     // block-compressed sparse attention (qwen4exp QSA) over the cells of the indexer cache.
     // Blocks cut the position line, not the cell array, so no caller assumes a contiguous layout:

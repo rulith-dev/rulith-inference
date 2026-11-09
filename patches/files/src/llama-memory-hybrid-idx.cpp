@@ -964,6 +964,57 @@ bool llama_memory_hybrid_idx::kv_alloc(llama_seq_id seq_id, const llama_token * 
     return true;
 }
 
+bool llama_memory_hybrid_idx::kv_cells_get(llama_seq_id seq_id, uint32_t i0, uint32_t n, uint8_t * dst, llama_strix_kv_cell * cells) const {
+    if (kv_row_size() == 0) {
+        return false;
+    }
+    // where the cells are: the attention cache's, which the indexer mirrors cell for cell
+    return get_mem_attn()->seq_cells_get(seq_id, i0, n, dst, cells) &&
+           (!mem_idx || mem_idx->seq_cells_get(seq_id, i0, n, dst ? dst + (size_t) n*get_mem_attn()->row_size() : nullptr, nullptr));
+}
+
+bool llama_memory_hybrid_idx::kv_cells_set(llama_seq_id seq_id, uint32_t i0, uint32_t n, const uint8_t * src, uint32_t src_rows) {
+    if (kv_row_size() == 0) {
+        return false;
+    }
+    share_forget(seq_id);
+    return get_mem_attn()->seq_cells_set(seq_id, i0, n, src, src_rows) &&
+           (!mem_idx || mem_idx->seq_cells_set(seq_id, i0, n, src + (size_t) src_rows*get_mem_attn()->row_size(), src_rows));
+}
+
+bool llama_memory_hybrid_idx::kv_alloc_cells(llama_seq_id seq_id, const llama_strix_kv_cell * cells, uint32_t n) {
+    if (kv_row_size() == 0) {
+        return false;
+    }
+
+    // as kv_alloc: the recurrent state goes too, and the block keys of these cells were never computed here
+    seq_rm(seq_id, -1, -1);
+    kb_mark_stale(seq_id);
+
+    const uint32_t n_pos = get_mem_attn()->n_pos_per_embd();
+    llama_kv_cache::slot_info sinfo;
+    if (!get_mem_attn()->seq_alloc_cells(seq_id, cells, n, n_pos, nullptr, &sinfo)) {
+        return false;
+    }
+    if (mem_idx && !mem_idx->seq_alloc_cells(seq_id, cells, n, n_pos, n > 0 ? &sinfo : nullptr, nullptr)) {
+        get_mem_attn()->seq_rm(seq_id, -1, -1);
+        return false;
+    }
+
+    // what init_batch() decides for the ubatches that made these cells: an image's per-axis positions (a cell whose 2D
+    // position is not its position, as hybrid_idx_ubatch_pos_dup tests the sections), or a gap in the positions - the
+    // block-key cache cannot track such cells, and the flag is sticky as there
+    for (uint32_t i = 0; i < n && !kb_dup; ++i) {
+        const bool dup = n_pos >= 3 && (cells[i].y != cells[i].pos || cells[i].x != cells[i].pos);
+        const bool gap = cells[i].pos > (i == 0 ? 0 : cells[i - 1].pos + 1);
+        if (dup || gap) {
+            kb_dup = true;
+        }
+    }
+
+    return true;
+}
+
 void llama_memory_hybrid_idx::set_input_qsa(
         ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
         ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio, bool blk_bias, const qsa_kb_inputs * kb,

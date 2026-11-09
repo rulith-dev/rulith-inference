@@ -477,6 +477,42 @@ static __device__ void top_k_gather_equal(
     }
 }
 
+// strixllama (11-08): the elements above the threshold in column order (a block-wide scan, as top_k_gather_equal does
+// for the ties) instead of an atomicAdd slot each - the radix select's output order was unspecified, and the
+// long-term memory's candidates take that order (two runs of one config differed). Returns how many were written.
+template<int BLOCK_SIZE>
+static __device__ int top_k_gather_greater(const float * src, int * dst, int ncols, uint32_t threshold) {
+    const int tid = threadIdx.x;
+    const int lane = tid % warpSize;
+    const int warp = tid / warpSize;
+    const int nwarps = BLOCK_SIZE / warpSize;
+    __shared__ int warp_counts_gt[32];
+    int count = 0;
+
+    for (int base = 0; base < ncols; base += BLOCK_SIZE) {
+        const int col = base + tid;
+        const bool gt = col < ncols && top_k_float_to_ordered(src[col]) > threshold;
+        const unsigned long long mask = __ballot(gt);
+        if (lane == 0) {
+            warp_counts_gt[warp] = __popcll(mask);
+        }
+        __syncthreads();
+        int before = count;
+        for (int w = 0; w < nwarps; ++w) {
+            if (w < warp) {
+                before += warp_counts_gt[w];
+            }
+            count += warp_counts_gt[w];
+        }
+        const unsigned long long lane_mask = (1ULL << lane) - 1;
+        if (gt) {
+            dst[before + __popcll(mask & lane_mask)] = col;
+        }
+        __syncthreads();
+    }
+    return count;
+}
+
 template<int BLOCK_SIZE>
 static __global__ void top_k_radix_select_cuda(
         const float * __restrict__ src,
@@ -491,7 +527,6 @@ static __global__ void top_k_radix_select_cuda(
     __shared__ uint32_t histogram[RADIX_SIZE];
     __shared__ uint32_t selected_bucket;
     __shared__ uint32_t count_above;
-    __shared__ uint32_t output_count;
 
     for (int row = blockIdx.x; row < nrows; row += gridDim.x) {
         const float * row_src = src + (size_t) row * ncols;
@@ -537,19 +572,9 @@ static __global__ void top_k_radix_select_cuda(
             __syncthreads();
         }
 
-        if (tid == 0) {
-            output_count = 0;
-        }
-        __syncthreads();
+        const int n_gt = top_k_gather_greater<BLOCK_SIZE>(row_src, row_dst, ncols, prefix);
 
-        for (int col = tid; col < ncols; col += BLOCK_SIZE) {
-            if (top_k_float_to_ordered(row_src[col]) > prefix) {
-                row_dst[atomicAdd(&output_count, 1U)] = col;
-            }
-        }
-        __syncthreads();
-
-        top_k_gather_equal<BLOCK_SIZE>(row_src, row_dst, ncols, prefix, desired, output_count);
+        top_k_gather_equal<BLOCK_SIZE>(row_src, row_dst, ncols, prefix, desired, n_gt);
     }
 }
 

@@ -1940,7 +1940,18 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     if (spec_out) {
         spec_out->clear();
     }
-    const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
+    // strixllama (issue #30): what a prompt keeps of a cached conversation counts the model's own tokens of its answers,
+    // which the slot keeps (splice_own_tokens) although the prompt's text tokenizes differently: the slot's conversation
+    // and the RAM tier's are measured as the disk tier's are (load_runs)
+    const bool splice = server_splice_own_on();
+    auto kept = [&](const server_tokens & t) -> int {
+        const size_t lcp = t.get_common_prefix(tokens_new);
+        if (!splice || lcp == 0 || lcp >= t.size() || lcp >= tokens_new.size()) {
+            return (int) lcp;
+        }
+        return (int) std::max(lcp, server_tokens_own_walk(ctx_tgt, t, tokens_new, /* with_cuts = */ false).keep);
+    };
+    const int lcp_best = kept(prompt.tokens);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float f_sim_best  = float(lcp_best) / tokens_new.size();
@@ -1951,7 +1962,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
-        const int lcp_cur = it->prompt.tokens.get_common_prefix(tokens_new);
+        const int lcp_cur = kept(it->prompt.tokens);
 
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
         const float f_sim_cur  = float(lcp_cur) / tokens_new.size();
@@ -1982,10 +1993,11 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     // strixllama: the disk tier, with the same criteria, only when it would beat what is in RAM. Its checkpoints
     // stay on disk when the caller can page them in (disk_paged holds their pins until the slot takes them); such
-    // a state must never stay in the RAM tier, whose entries are complete, so every way out below drops it
+    // a state must never stay in the RAM tier, whose entries are complete, so every way out below drops it. A store
+    // of version 3 holds no entry of version 2, and load_runs() has named what it found (issue #30)
     ckpt_paged_map disk_paged;
     bool from_disk = false;
-    if (disk_limit > 0) {
+    if (disk_limit > 0 && disk_version < 4) {                       // 4: SPC_V3, below
         if (server_prompt_cache_state * s = load_from_disk(tokens_new, f_keep_best, f_sim_best, paged_out ? &disk_paged : nullptr)) {
             it_best = std::prev(states.end());
             GGML_ASSERT(&*it_best == s);
@@ -2177,6 +2189,12 @@ void server_prompt_cache::update() {
 // manifest, version 3: version 2's up to the checkpoints, then
 //   u64 row_tgt u32 n_runs, per run: u64 xxh_high u64 xxh_low i32 pos0 i32 n i32 n_use
 //   u64 row_dft u32 n_runs, the same
+// A conversation with media in it (issue #31) keeps its rows by cell (llama_strix_kv_*_cells): an image's cells share
+// a position under M-RoPE, so a row is a cell, in position order, and a token of the entry - the same rows as by
+// position for text. Its manifest is numbered SPC_V3M and adds where each row's cell is, and the projector its images
+// went through (an image is named by its id in the tokens, and its rows are only good for that projector):
+//   u64 media_tag, then for the target and the draft: u32 n_spans, per span: i32 r0 i32 n i32 pos0 i32 xy u32 n_cells,
+//   then n_cells x (i32 pos i32 x i32 y i32 tok) - none for a text span (see disk_cell_span)
 // (version 1, 0.1.4 - 0.1.6, was one self-contained file per conversation)
 namespace {
 
@@ -2194,6 +2212,8 @@ const uint32_t SPC_V2 = 2;
 // prompt chunk's attention densely over several conversations' cells (qwen4exp_qsa_maskless_ok), and its runs and
 // checkpoints of such a conversation carry that on
 const uint32_t SPC_V3 = 4;
+// version 3 with media in the conversation (issue #31): the same, and where its cells are; read as version 3
+const uint32_t SPC_V3M = 5;
 const uint32_t CKP_V2 = 2;             // version 1 never shipped
 const uint32_t RUN_V1 = 1;
 
@@ -2302,6 +2322,52 @@ uint64_t ckpt_key(const llama_tokens & text, int64_t n_tokens, int32_t pos_min, 
     const uint64_t meta[6] = { (uint64_t) n_tokens, (uint64_t) (uint32_t) pos_min, (uint64_t) (uint32_t) pos_max,
                                size_tgt, size_dft, size_spec };
     return XXH3_64bits_withSeed(meta, sizeof(meta), seed);
+}
+
+// an image's identity as the disk tier keeps it: the 64-bit hash of its id, seeded with its token count (get_common_prefix
+// compares the two)
+uint64_t media_hash(const mtmd_input_chunk * c) {
+    const char * id = mtmd_input_chunk_get_id(c);
+    return XXH3_64bits_withSeed(id, id ? strlen(id) : 0, (uint64_t) mtmd_input_chunk_get_n_tokens(c));
+}
+
+// a checkpoint of a prompt: as above over its text when no image comes before n_tokens - what it always was - and else
+// over its tokens with each image named (disk_key), seeded with every such image's full 64-bit hash and where it starts,
+// and with the projector they went through (media_tag), so two conversations with the same text around different
+// images - or the same image through another projector - never share one (issue #31)
+uint64_t ckpt_key(const server_tokens & tokens, int64_t n_tokens, int32_t pos_min, int32_t pos_max,
+                  uint64_t size_tgt, uint64_t size_dft, uint64_t size_spec, uint64_t media_tag) {
+    const size_t n = (size_t) std::clamp<int64_t>(n_tokens, 0, (int64_t) tokens.size());
+    const auto media = tokens.find_next_media_chunk(0);
+    const bool media_below = (n > 0 && tokens[0] == LLAMA_TOKEN_NULL) || (media.first != nullptr && media.second < n);
+    if (!media_below) {
+        return ckpt_key(tokens.get_text_tokens(), n_tokens, pos_min, pos_max, size_tgt, size_dft, size_spec);
+    }
+    uint64_t fold = XXH3_64bits_withSeed(&media_tag, sizeof(media_tag), 0x5354524958494d47ull);
+    for (size_t i = 0; i < n; ) {
+        if (tokens[i] != LLAMA_TOKEN_NULL) {
+            ++i;
+            continue;
+        }
+        const mtmd_input_chunk * c = tokens.find_chunk(i).get();
+        const uint64_t rec[2] = { (uint64_t) i, media_hash(c) };
+        fold = XXH3_64bits_withSeed(rec, sizeof(rec), fold);
+        i += std::max<size_t>(1, mtmd_input_chunk_get_n_tokens(c));
+    }
+    const llama_tokens key = server_prompt_cache::disk_key(tokens, n);
+    const uint64_t seed = XXH3_64bits_withSeed(key.data(), key.size() * sizeof(llama_token), fold);
+    const uint64_t meta[6] = { (uint64_t) n_tokens, (uint64_t) (uint32_t) pos_min, (uint64_t) (uint32_t) pos_max,
+                               size_tgt, size_dft, size_spec };
+    return XXH3_64bits_withSeed(meta, sizeof(meta), seed);
+}
+
+// the index of the first media token of `tokens`, its size when there is none
+size_t first_media(const server_tokens & tokens) {
+    if (tokens.size() > 0 && tokens[0] == LLAMA_TOKEN_NULL) {
+        return 0;
+    }
+    const auto media = tokens.find_next_media_chunk(0);
+    return media.first != nullptr ? media.second : tokens.size();
 }
 
 // --- files ------------------------------------------------------------------------------------------
@@ -2622,7 +2688,9 @@ std::string manifest_path(const std::string & dir, const server_tokens & tokens)
 }
 
 bool write_manifest_part(spc_stage & st, const std::string & part, const disk_entry & e, bool has_mtmd, uint64_t & bytes) {
-    const uint32_t version = e.version == (int32_t) SPC_V3 ? SPC_V3 : SPC_V2;
+    // a conversation with media in it says where its cells are (SPC_V3M); one of text only is written as it always was
+    const bool cells = e.version == (int32_t) SPC_V3 && !e.cells_tgt.empty();
+    const uint32_t version = e.version == (int32_t) SPC_V3 ? (cells ? SPC_V3M : SPC_V3) : SPC_V2;
     return write_part(st, part, [&](spc_out & o) {
         bool ok = o.write(SPC_MAGIC, 8) && put(o, version) && put(o, (uint32_t) (has_mtmd ? 1 : 0))
                && put_tokens(o, e.tokens) && put(o, (uint32_t) e.ckpts.size());
@@ -2630,12 +2698,25 @@ bool write_manifest_part(spc_stage & st, const std::string & part, const disk_en
             ok = ok && put(o, k.key) && put(o, k.n_tokens) && put(o, k.pos_min) && put(o, k.pos_max)
                     && put(o, k.size_tgt) && put(o, k.size_dft) && put(o, k.size_spec);
         }
-        if (version == SPC_V3) {
+        if (version == SPC_V3 || version == SPC_V3M) {
             for (int b = 0; b < 2; ++b) {
                 const auto & runs = b == 0 ? e.runs_tgt : e.runs_dft;
                 ok = ok && put(o, b == 0 ? e.row_tgt : e.row_dft) && put(o, (uint32_t) runs.size());
                 for (const auto & r : runs) {
                     ok = ok && put(o, r.hi) && put(o, r.lo) && put(o, r.pos0) && put(o, r.n) && put(o, r.n_use);
+                }
+            }
+            if (version == SPC_V3M) {
+                ok = ok && put(o, e.media_tag);
+                for (int b = 0; b < 2; ++b) {
+                    const auto & spans = b == 0 ? e.cells_tgt : e.cells_dft;
+                    ok = ok && put(o, (uint32_t) spans.size());
+                    for (const auto & s : spans) {
+                        ok = ok && put(o, s.r0) && put(o, s.n) && put(o, s.pos0) && put(o, s.xy) && put(o, (uint32_t) s.cells.size());
+                        for (const auto & c : s.cells) {
+                            ok = ok && put(o, (int32_t) c.pos) && put(o, (int32_t) c.x) && put(o, (int32_t) c.y) && put(o, (int32_t) c.tok);
+                        }
+                    }
                 }
             }
             return ok;
@@ -2705,7 +2786,7 @@ bool scan_entry(spc_stage & st, disk_entry & e, bool has_mtmd, int32_t version_c
         why = "not a cache file";
         return false;
     }
-    if (version > SPC_V3) {
+    if (version > SPC_V3M) {
         why = "format version " + std::to_string(version);
         foreign = true;
         return false;
@@ -2715,9 +2796,11 @@ bool scan_entry(spc_stage & st, disk_entry & e, bool has_mtmd, int32_t version_c
         old = true;
         return false;
     }
-    e.version = (int32_t) version;
+    // version 3 with media is version 3 here; its tokens hold images, which a server without a projector parses too (it
+    // takes such an entry only up to its first image, as one of another projector - see load_runs)
+    e.version = (int32_t) (version == SPC_V3M ? SPC_V3 : version);
     try {
-        if (!get_tokens(f, e.tokens, has_mtmd)) {
+        if (!get_tokens(f, e.tokens, has_mtmd || version == SPC_V3M)) {
             why = "truncated or malformed token state";
             return false;
         }
@@ -2749,7 +2832,7 @@ bool scan_entry(spc_stage & st, disk_entry & e, bool has_mtmd, int32_t version_c
         }
         e.ckpts.push_back(r);
     }
-    if (version == SPC_V3) {
+    if (version == SPC_V3 || version == SPC_V3M) {
         // runs from position 0, one after another: a gap or an overlap is a damaged manifest
         for (int b = 0; b < 2; ++b) {
             auto & runs = b == 0 ? e.runs_tgt : e.runs_dft;
@@ -2772,6 +2855,53 @@ bool scan_entry(spc_stage & st, disk_entry & e, bool has_mtmd, int32_t version_c
                 }
                 next += r.n_use;
                 runs.push_back(r);
+            }
+        }
+        // with media: where the cells are, in spans from row 0 that cover each context's runs exactly
+        if (version == SPC_V3M) {
+            if (!get(f, e.media_tag)) {
+                why = "truncated cell list";
+                return false;
+            }
+            for (int b = 0; b < 2; ++b) {
+                auto & spans = b == 0 ? e.cells_tgt : e.cells_dft;
+                uint32_t n = 0;
+                if (!get(f, n) || n > (1u << 20)) {
+                    why = "bad cell list";
+                    return false;
+                }
+                int64_t next = 0;
+                for (uint32_t i = 0; i < n; ++i) {
+                    server_prompt_cache::disk_cell_span s;
+                    uint32_t n_cells = 0;
+                    if (!get(f, s.r0) || !get(f, s.n) || !get(f, s.pos0) || !get(f, s.xy) || !get(f, n_cells)) {
+                        why = "truncated cell list";
+                        return false;
+                    }
+                    if (s.r0 != next || s.n <= 0 || (n_cells != 0 && n_cells != (uint32_t) s.n) || n_cells > (1u << 24)) {
+                        why = "cell spans out of order";
+                        return false;
+                    }
+                    s.cells.resize(n_cells);
+                    for (auto & c : s.cells) {
+                        int32_t v[4];
+                        if (!get(f, v[0]) || !get(f, v[1]) || !get(f, v[2]) || !get(f, v[3])) {
+                            why = "truncated cell list";
+                            return false;
+                        }
+                        c = { v[0], v[1], v[2], v[3] };
+                    }
+                    next += s.n;
+                    spans.push_back(std::move(s));
+                }
+                if (next != runs_cover(b == 0 ? e.runs_tgt : e.runs_dft)) {
+                    why = "cell spans do not cover the runs";
+                    return false;
+                }
+            }
+            if (e.cells_tgt.empty()) {
+                why = "no cells";
+                return false;
             }
         }
         e.n_exact = runs_exact(e.tokens, e.runs_tgt, e.runs_dft, e.row_dft > 0, e.ckpts);
@@ -3013,7 +3143,7 @@ server_prompt_cache::~server_prompt_cache() {
 }
 
 void server_prompt_cache::set_disk(const std::string & root, size_t limit_mib, bool has_mtmd, const std::string & model_tag,
-                                   int32_t version, uint64_t row_tgt, uint64_t row_dft) {
+                                   int32_t version, uint64_t row_tgt, uint64_t row_dft, uint64_t media_tag) {
     std::error_code ec;
     // one directory per model: a state is only meaningful to the model that computed it, and two quants of
     // one model have identical state shapes, so the restore would take the other's without a word
@@ -3049,6 +3179,7 @@ void server_prompt_cache::set_disk(const std::string & root, size_t limit_mib, b
     disk_dir      = dir.string();
     disk_limit    = (uint64_t) limit_mib * 1024ull * 1024ull;
     disk_has_mtmd = has_mtmd;
+    disk_media_tag = has_mtmd ? media_tag : 0;
     disk_version  = version;
     if (const char * b = getenv("STRIX_PROMPT_CACHE_BLOCK"); b && *b) {
         disk_block = std::max(0, atoi(b));
@@ -3378,6 +3509,139 @@ size_t server_prompt_cache::disk_exact(const server_tokens & tokens) {
     return disk_covered(tokens, /* with_jobs = */ true);
 }
 
+llama_tokens server_prompt_cache::disk_key(const server_tokens & tokens, size_t n) {
+    n = std::min(n, tokens.size());
+    llama_tokens res;
+    res.reserve(n);
+    for (size_t i = 0; i < n; ) {
+        const llama_token t = tokens[i];
+        if (t != LLAMA_TOKEN_NULL) {
+            res.push_back(t);
+            ++i;
+            continue;
+        }
+        // an image: its id and size, as get_common_prefix compares them. Each of its tokens gets its own 30 bits of the
+        // image's 64-bit hash mixed with the token's place in it (splitmix64), below LLAMA_TOKEN_NULL, so two images
+        // compare equal only if every one of their tokens does
+        const mtmd_input_chunk * c  = tokens.find_chunk(i).get();
+        const size_t             nt = std::max<size_t>(1, mtmd_input_chunk_get_n_tokens(c));
+        const uint64_t           h  = media_hash(c);
+        for (size_t j = 0; j < nt && i + j < n; ++j) {
+            uint64_t z = h + 0x9E3779B97F4A7C15ull * (uint64_t) (j + 1);
+            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+            z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+            z =  z ^ (z >> 31);
+            res.push_back((llama_token) (-2 - (int64_t) (z & 0x3fffffffull)));
+        }
+        i += nt;
+    }
+    return res;
+}
+
+size_t server_prompt_cache::chunk_floor(const server_tokens & tokens, size_t n) {
+    n = std::min(n, tokens.size());
+    if (n == 0 || n == tokens.size() || tokens[n] != LLAMA_TOKEN_NULL || tokens[n - 1] != LLAMA_TOKEN_NULL) {
+        return n;                                  // text on one side of the cut
+    }
+    std::pair<const mtmd::input_chunk_ptr *, size_t> m = tokens[0] == LLAMA_TOKEN_NULL ?
+        std::pair<const mtmd::input_chunk_ptr *, size_t> { &tokens.find_chunk(0), 0 } : tokens.find_next_media_chunk(0);
+    while (m.first != nullptr && m.second < n) {
+        const size_t e = m.second + mtmd_input_chunk_get_n_tokens(m.first->get());
+        if (e > n) {
+            return m.second;                       // the cut is inside this image
+        }
+        m = tokens.find_next_media_chunk(m.second);
+    }
+    return n;
+}
+
+size_t server_prompt_cache::tokens_below_pos(const server_tokens & tokens, llama_pos max_pos) {
+    if (!tokens.has_mtmd) {
+        return tokens.size_up_to_pos(max_pos);
+    }
+    size_t    idx = 0;
+    llama_pos pos = 0;
+    std::pair<const mtmd::input_chunk_ptr *, size_t> m = tokens.size() > 0 && tokens[0] == LLAMA_TOKEN_NULL ?
+        std::pair<const mtmd::input_chunk_ptr *, size_t> { &tokens.find_chunk(0), 0 } : tokens.find_next_media_chunk(0);
+    while (true) {
+        // text up to the next image (or the end): one position a token, counted up to the one that reaches max_pos
+        const size_t e = m.first != nullptr ? m.second : tokens.size();
+        if (e > idx) {
+            if (pos + (llama_pos) (e - idx) >= max_pos) {
+                return idx + (size_t) std::max<llama_pos>(max_pos - pos, 1);
+            }
+            pos += (llama_pos) (e - idx);
+            idx  = e;
+        }
+        if (m.first == nullptr) {
+            return idx;
+        }
+        // the image: all of it, however far into its positions max_pos falls
+        pos += mtmd_input_chunk_get_n_pos(m.first->get());
+        idx += mtmd_input_chunk_get_n_tokens(m.first->get());
+        if (pos >= max_pos) {
+            return idx;
+        }
+        m = tokens.find_next_media_chunk(m.second);
+    }
+}
+
+std::vector<server_prompt_cache::disk_cell_span> server_prompt_cache::cell_spans(const std::vector<llama_strix_kv_cell> & cells,
+                                                                                 const server_tokens & tokens) {
+    std::vector<disk_cell_span> res;
+    for (size_t r = 0; r < cells.size(); ++r) {
+        const llama_strix_kv_cell & c = cells[r];
+        const bool text = r < tokens.size() && tokens[r] != LLAMA_TOKEN_NULL && c.tok == tokens[r] && c.x == c.y &&
+                          (c.x == c.pos || c.x == 0);
+        if (text) {
+            disk_cell_span * s = res.empty() ? nullptr : &res.back();
+            if (s && s->cells.empty() && s->pos0 + s->n == c.pos && (s->xy ? c.pos : 0) == c.x) {
+                s->n++;
+                continue;
+            }
+            disk_cell_span t;
+            t.r0   = (int32_t) r;
+            t.n    = 1;
+            t.pos0 = c.pos;
+            t.xy   = c.x == c.pos ? 1 : 0;
+            res.push_back(std::move(t));
+            continue;
+        }
+        if (res.empty() || res.back().cells.empty()) {
+            disk_cell_span t;
+            t.r0 = (int32_t) r;
+            res.push_back(std::move(t));
+        }
+        res.back().cells.push_back(c);
+        res.back().n++;
+    }
+    return res;
+}
+
+bool server_prompt_cache::cell_list(const std::vector<disk_cell_span> & spans, const server_tokens & tokens, int64_t n,
+                                    std::vector<llama_strix_kv_cell> & out) {
+    out.clear();
+    out.reserve((size_t) std::max<int64_t>(n, 0));
+    for (const auto & s : spans) {
+        for (int32_t j = 0; j < s.n && (int64_t) out.size() < n; ++j) {
+            if (!s.cells.empty()) {
+                out.push_back(s.cells[j]);
+                continue;
+            }
+            const size_t r = (size_t) s.r0 + j;
+            if (r >= tokens.size() || tokens[r] == LLAMA_TOKEN_NULL) {
+                return false;                      // a text span over no text token: not this entry's
+            }
+            const llama_pos p = s.pos0 + j;
+            out.push_back({ p, s.xy ? p : 0, s.xy ? p : 0, tokens[r] });
+        }
+        if ((int64_t) out.size() >= n) {
+            break;
+        }
+    }
+    return (int64_t) out.size() == n;
+}
+
 server_prompt_cache::disk_run_ref server_prompt_cache::make_run_ref(const std::vector<uint8_t> & rows, int32_t pos0, int32_t n) {
     const XXH128_hash_t h = XXH3_128bits(rows.data(), rows.size());
     return { h.high64, h.low64, pos0, n, n };
@@ -3399,12 +3663,18 @@ size_t server_prompt_cache::disk_covered(const server_tokens & tokens, bool with
 // caller holds disk_mu: a job that is queued or being written and would be a better start for this prompt
 // than what the slot or the RAM tier already offers (f_sim_base). Anything less is not worth waiting for -
 // notably the slot's own previous conversation, queued a moment ago on its way out.
-bool server_prompt_cache::disk_in_flight(const server_tokens & tokens, float f_sim_base) {
+bool server_prompt_cache::disk_in_flight(const server_tokens & tokens, float f_sim_base, const llama_context * ctx) {
     if (!disk_thread.joinable() || disk_stop || tokens.size() == 0) {
         return false;
     }
+    // a conversation that comes back right after it left finds its own write here: measured as load_runs measures it,
+    // with the model's own tokens of its answers (issue #30), or it would not wait and load_runs would miss it
+    const bool splice = ctx != nullptr && server_splice_own_on();
     auto relevant = [&](const disk_job & j) {
-        const size_t lcp = j.tokens.get_common_prefix(tokens);
+        size_t lcp = j.tokens.get_common_prefix(tokens);
+        if (splice && lcp > 0 && lcp < j.tokens.size() && lcp < tokens.size()) {
+            lcp = std::max(lcp, server_tokens_own_walk(ctx, j.tokens, tokens, /* with_cuts = */ false).keep);
+        }
         return lcp > 0 && lcp * 4 >= j.tokens.size() && float(lcp) / tokens.size() > f_sim_base;
     };
     for (const auto & j : disk_queue) {
@@ -3530,13 +3800,15 @@ bool server_prompt_cache::persist_runs(int32_t id_slot, const server_tokens & to
                                        const std::set<const common_prompt_checkpoint *> & writable,
                                        const ckpt_paged_map * paged, const common_prompt_checkpoint * end, uint64_t row_tgt, uint64_t row_dft,
                                        const std::vector<disk_run_ref> & runs_tgt, const std::vector<disk_run_ref> & runs_dft,
-                                       std::vector<std::pair<std::pair<uint64_t, uint64_t>, std::vector<uint8_t>>> && run_data, bool wait) {
+                                       std::vector<std::pair<std::pair<uint64_t, uint64_t>, std::vector<uint8_t>>> && run_data, bool wait,
+                                       std::vector<disk_cell_span> && cells_tgt, std::vector<disk_cell_span> && cells_dft) {
     if (disk_limit == 0 || tokens.size() == 0 || !disk_thread.joinable() || row_tgt == 0) {
         return false;
     }
-    const llama_tokens text = tokens.get_text_tokens();
-    if (text.size() != tokens.size()) {
-        return false;                              // media: never stored
+    // issue #31: with media in it, its rows are by cell and the caller says where the cells are
+    const bool media = tokens.get_text_tokens().size() != tokens.size();
+    if (media && (cells_tgt.empty() || (row_dft > 0 && !runs_dft.empty() && cells_dft.empty()))) {
+        return false;
     }
     if (!wait && disk_busy()) {
         return false;                              // the next round tries again
@@ -3551,6 +3823,10 @@ bool server_prompt_cache::persist_runs(int32_t id_slot, const server_tokens & to
     job->runs_tgt = runs_tgt;
     job->runs_dft = runs_dft;
     job->run_data = std::move(run_data);
+    if (media) {
+        job->cells_tgt = std::move(cells_tgt);
+        job->cells_dft = std::move(cells_dft);
+    }
 
     // the checkpoints up to its end, as persist() takes them, and the one at its end when the caller made one; a
     // checkpoint with bytes that is not the caller's to write counts as one handed back (named when stored)
@@ -3565,13 +3841,14 @@ bool server_prompt_cache::persist_runs(int32_t id_slot, const server_tokens & to
         if (c.data_tgt.empty()) {
             const auto p = paged ? paged->find({ c.n_tokens, c.pos_min, c.pos_max }) : ckpt_paged_map::const_iterator();
             if (!paged || p == paged->end() ||
-                ckpt_key(text, p->second.n_tokens, p->second.pos_min, p->second.pos_max,
-                         p->second.size_tgt, p->second.size_dft, p->second.size_spec) != p->second.key) {
+                ckpt_key(tokens, p->second.n_tokens, p->second.pos_min, p->second.pos_max,
+                         p->second.size_tgt, p->second.size_dft, p->second.size_spec, disk_media_tag) != p->second.key) {
                 return;
             }
             r = p->second;
         } else {
-            r = { ckpt_key(text, c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size()),
+            r = { ckpt_key(tokens, c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size(),
+                           disk_media_tag),
                   c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size() };
             data = may_write ? &c : nullptr;
         }
@@ -3684,17 +3961,15 @@ uint64_t server_prompt_cache::ckpt_page_out(const server_tokens & tokens, std::l
     if (disk_limit == 0) {
         return 0;
     }
-    const llama_tokens text = tokens.get_text_tokens();
-    if (text.size() != tokens.size()) {
-        return 0;                                  // media: never stored
-    }
+    // a checkpoint is in the store under the key of the tokens it covers, images named by their id (issue #31)
     uint64_t freed = 0;
     std::lock_guard<std::mutex> lk(disk_mu);
     for (auto & c : ckpts) {
         if (c.data_tgt.empty()) {
             continue;                              // handed back already
         }
-        const disk_ckpt_ref r { ckpt_key(text, c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size()),
+        const disk_ckpt_ref r { ckpt_key(tokens, c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size(),
+                                         disk_media_tag),
                                 c.n_tokens, c.pos_min, c.pos_max, c.data_tgt.size(), c.data_dft.size(), c.data_spec.size() };
         auto stored = disk_ckpts.find(r.key);
         if (stored == disk_ckpts.end()) {
@@ -3725,8 +4000,7 @@ bool server_prompt_cache::ckpt_page_in(const server_tokens & tokens, const ckpt_
     }
     const disk_ckpt_ref & r = it->second;
     // the table outlives a change of conversation in the slot: the key says whether this is still the same one
-    const llama_tokens text = tokens.get_text_tokens();
-    if (ckpt_key(text, r.n_tokens, r.pos_min, r.pos_max, r.size_tgt, r.size_dft, r.size_spec) != r.key) {
+    if (ckpt_key(tokens, r.n_tokens, r.pos_min, r.pos_max, r.size_tgt, r.size_dft, r.size_spec, disk_media_tag) != r.key) {
         return false;
     }
     std::lock_guard<std::mutex> lk(disk_mu);       // the writer cannot delete it while it is read
@@ -4118,6 +4392,9 @@ void server_prompt_cache::disk_write_runs(disk_job & job) {
     e.row_dft  = job.row_dft;
     e.runs_tgt = job.runs_tgt;
     e.runs_dft = job.runs_dft;
+    e.cells_tgt = job.cells_tgt;
+    e.cells_dft = job.cells_dft;
+    e.media_tag = e.cells_tgt.empty() ? 0 : disk_media_tag;
 
     std::map<std::pair<uint64_t, uint64_t>, uint64_t> fresh_run;   // runs this job writes -> file bytes
     std::map<uint64_t, uint64_t>                      fresh_ckpt;
@@ -4415,6 +4692,16 @@ server_prompt_cache_state * server_prompt_cache::load_from_disk(const server_tok
 // version 3: pick the entry, pin what it names up to the restore point, let the lock go (making room may save a
 // conversation, which takes it), then cells, rows a run at a time - the next run read while this one goes in - and
 // the recurrent state from the checkpoint at the restore point. Two runs in memory at most, never the state.
+//
+// issue #30: how far a prompt keeps an entry is not its raw common prefix. A stored conversation holds the model's own
+// sampled tokens of its earlier answers, and the next request sends those answers back as text that tokenizes
+// differently: the raw prefix stops inside the first such answer (40980 of a 125529-token entry, which then came back
+// from a checkpoint at 8192). The slot that restores the entry keeps those tokens (splice_own_tokens), so the reach is
+// what that splice keeps (server_tokens_own_walk), and a checkpoint up to it qualifies where the splice can stop.
+//
+// issue #31: a prompt with media in it is looked up too. An entry names its images by id in its tokens (the common prefix
+// takes an image only when the prompt has the same one in the same place), keeps the rows of a conversation with media
+// by cell, and says where those cells are; the restored conversation takes the prompt's own image chunks.
 bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft,
                                     int32_t id_slot, float & f_keep_best, float & f_sim_best, const std::function<void(size_t)> & before_restore,
                                     ckpt_paged_map * paged_out, disk_runs_state * runs_out, bool & restored, std::vector<uint8_t> * spec_out) {
@@ -4424,61 +4711,176 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
     if (disk_limit == 0 || row_tgt == 0 || (ctx_dft && row_dft == 0) || tokens_new.size() == 0 || paged_out == nullptr) {
         return false;
     }
-    if (tokens_new.get_text_tokens().size() != tokens_new.size()) {
-        return false;                              // media: never stored
-    }
 
     server_tokens               tokens;            // the entry's, copied: the store can change once the lock goes
     std::string                 path;
     std::vector<disk_run_ref>   runs_tgt, runs_dft;
+    std::vector<disk_cell_span> cells_tgt, cells_dft;   // with media: where its rows' cells are (rows by cell)
+    std::vector<llama_strix_kv_cell> cl_tgt, cl_dft;    // and the cells of the restore point's rows, checked
     std::vector<disk_ckpt_ref>  ckpts;             // the ones up to the restore point, pinned
     std::vector<std::pair<uint64_t, uint64_t>> run_pins;
     disk_ckpt_ref at {};
     int64_t n = 0;
+    int64_t lcp_at = 0;                            // the entry's raw common prefix with the prompt
+    std::vector<std::pair<size_t, size_t>> media_at;   // its images past that which the prompt has too (entry -> prompt)
     float keep = 0.0f;
     {
         std::unique_lock<std::mutex> lk(disk_mu);
         const float f_sim_base = f_sim_best;
-        disk_cv.wait(lk, [&] { return !disk_in_flight(tokens_new, f_sim_base); });
+        disk_cv.wait(lk, [&] { return !disk_in_flight(tokens_new, f_sim_base, ctx_tgt); });
 
-        auto best = disk_index.end();
-        for (auto it = disk_index.begin(); it != disk_index.end(); ++it) {
-            if (it->version != (int32_t) SPC_V3 || it->row_tgt != row_tgt || (ctx_dft && it->row_dft != row_dft)) {
-                continue;                          // another model's rows, or no draft rows for a server that drafts
+        // every entry this server can take, how far the prompt keeps it, and why it lost - a miss costs minutes of prefill
+        // on a long conversation, and the log has to say which condition it was (issue #30)
+        struct cand {
+            size_t          i      = 0;        // in disk_index
+            int64_t         lcp    = 0;        // the raw common prefix
+            int64_t         reach  = 0;        // as far as the prompt keeps it: the splice's, before an image it cannot take
+            int64_t         cover  = 0;        // positions (rows) its runs hold, target and draft
+            int64_t         ckpt   = 0;        // the checkpoint it comes back from
+            size_t          i_ckpt = 0;
+            float           f_keep = 0.0f;
+            const char *    why    = nullptr;  // null: taken
+            bool            proj   = false;    // its images went through another projector
+            server_own_walk walk;
+        };
+        std::vector<cand> cands;
+        int n_other = 0;                           // another K/V cache's rows, or none of the draft's
+        size_t i_best = SIZE_MAX;
+        const bool splice = server_splice_own_on();
+        for (size_t i = 0; i < disk_index.size(); ++i) {
+            const disk_entry & e = disk_index[i];
+            if (e.version != (int32_t) SPC_V3 || e.row_tgt != row_tgt || (ctx_dft && e.row_dft != row_dft)) {
+                ++n_other;
+                continue;
             }
-            const int64_t lcp = it->tokens.get_common_prefix(tokens_new);
-            int64_t reach = std::min<int64_t>(lcp, runs_cover(it->runs_tgt));
+            cand c;
+            c.i   = i;
+            c.lcp = (int64_t) e.tokens.get_common_prefix(tokens_new);
+            // images that went through another projector (or a server without one) come back only up to the first of them
+            const int64_t usable = !e.cells_tgt.empty() && e.media_tag != disk_media_tag ? (int64_t) first_media(e.tokens)
+                                                                                           : (int64_t) e.tokens.size();
+            c.proj   = usable < (int64_t) e.tokens.size();
+            c.walk.k = (size_t) c.lcp;
+            if (splice && c.lcp > 0 && c.lcp < usable && c.lcp < (int64_t) tokens_new.size()) {
+                c.walk = server_tokens_own_walk(ctx_tgt, e.tokens, tokens_new, /* with_cuts = */ true);
+            }
+            c.reach = std::min<int64_t>(std::max<int64_t>(c.lcp, (int64_t) c.walk.keep), usable);
+            c.cover = runs_cover(e.runs_tgt);
             if (ctx_dft) {
-                reach = std::min(reach, runs_cover(it->runs_dft));
+                c.cover = std::min(c.cover, runs_cover(e.runs_dft));
             }
-            const disk_ckpt_ref * k_best = nullptr;
-            for (const auto & k : it->ckpts) {
-                if (k.n_tokens > 0 && k.n_tokens <= reach && (!k_best || k.n_tokens > k_best->n_tokens) && disk_ckpts.count(k.key)) {
-                    k_best = &k;
+            const int64_t lim = std::min(c.reach, c.cover);
+            for (size_t j = 0; j < e.ckpts.size(); ++j) {
+                const disk_ckpt_ref & k = e.ckpts[j];
+                if (k.n_tokens > 0 && k.n_tokens <= lim && k.n_tokens > c.ckpt && c.walk.keeps((size_t) k.n_tokens) &&
+                        disk_ckpts.count(k.key)) {
+                    c.ckpt   = k.n_tokens;
+                    c.i_ckpt = j;
                 }
             }
-            if (!k_best) {
-                continue;
+            // as for version 2: not a long entry dragged in for a short prefix, and it must beat what the slot or the
+            // RAM tier already offers; among the rest, the one that skips the most tokens
+            c.f_keep = e.tokens.size() > 0 ? float(c.reach) / e.tokens.size() : 0.0f;
+            const float f_sim_cur = float(c.ckpt) / tokens_new.size();
+            if (c.ckpt == 0) {
+                c.why = "no checkpoint up to its reach";
+            } else if (c.f_keep < 0.25f) {
+                c.why = "the prompt keeps under a quarter of it";
+            } else if (f_sim_cur <= f_sim_best) {
+                c.why = "the slot or the RAM tier keeps as much";
+            } else if (c.ckpt <= n) {
+                c.why = "another entry comes back as far";
+            } else {
+                if (i_best != SIZE_MAX) {
+                    cands[i_best].why = "another entry comes back further";
+                }
+                i_best = cands.size();
+                n      = c.ckpt;
+                keep   = c.f_keep;
             }
-            // as for version 2: not a long entry dragged in for a short prefix, and it must beat what the slot or
-            // the RAM tier already offers; among the rest, the one that skips the most tokens
-            const float f_keep_cur = float(lcp) / it->tokens.size();
-            const float f_sim_cur  = float(k_best->n_tokens) / tokens_new.size();
-            if (f_keep_cur < 0.25f || f_sim_cur <= f_sim_best || k_best->n_tokens <= n) {
-                continue;
-            }
-            n    = k_best->n_tokens;
-            at   = *k_best;
-            keep = f_keep_cur;
-            best = it;
+            cands.push_back(std::move(c));
         }
-        if (best == disk_index.end()) {
+
+        // the candidates, those that reach furthest first: the raw common prefix, the reach with the model's own tokens,
+        // the runs, the checkpoints on disk and the one it would come back from, and the verdict
+        {
+            std::vector<size_t> order(cands.size());
+            for (size_t j = 0; j < order.size(); ++j) {
+                order[j] = j;
+            }
+            std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return cands[a].reach > cands[b].reach; });
+            const size_t n_show = std::min<size_t>(order.size(), 6);
+            for (size_t j = 0; j < n_show; ++j) {
+                const cand & c = cands[order[j]];
+                const disk_entry & e = disk_index[c.i];
+                std::vector<int64_t> at_list;
+                for (const auto & k : e.ckpts) {
+                    if (disk_ckpts.count(k.key)) {
+                        at_list.push_back(k.n_tokens);
+                    }
+                }
+                std::sort(at_list.begin(), at_list.end());
+                std::string ck;
+                for (size_t m = 0; m < at_list.size(); ++m) {
+                    if (at_list.size() > 10 && m == 5) {
+                        ck += " ...";
+                        m = at_list.size() - 5;
+                    }
+                    ck += " " + std::to_string(at_list[m]);
+                }
+                SRV_INF(" - disk cache: %s, %zu tokens%s: common prefix %lld, own tokens to %lld, runs %lld, checkpoints%s -> %s%s%s\n",
+                        fs::path(e.path).filename().string().c_str(), e.tokens.size(),
+                        e.cells_tgt.empty() ? "" : c.proj ? " (media, another projector: up to its first image)" : " (media)",
+                        (long long) c.lcp, (long long) c.reach, (long long) c.cover, ck.empty() ? " none" : ck.c_str(),
+                        c.ckpt > 0 ? ("from " + std::to_string(c.ckpt)).c_str() : "nothing",
+                        c.why ? ": " : ": taken", c.why ? c.why : "");
+            }
+            if (order.size() > n_show) {
+                SRV_INF(" - disk cache: %zu more entries, reaching at most %lld tokens\n", order.size() - n_show,
+                        (long long) cands[order[n_show]].reach);
+            }
+            if (n_other > 0) {
+                SRV_INF(" - disk cache: %d entries of another K/V cache, or without the draft's rows, passed over\n", n_other);
+            }
+        }
+        if (i_best == SIZE_MAX) {
+            SRV_INF(" - disk cache: nothing taken for %zu tokens (%zu entries on disk; the slot or the RAM tier keeps %.3f of the prompt)\n",
+                    tokens_new.size(), disk_index.size(), f_sim_best);
             return false;
         }
-        tokens   = best->tokens.clone();
-        path     = best->path;
-        runs_tgt = best->runs_tgt;
-        runs_dft = best->runs_dft;
+        disk_entry & best = disk_index[cands[i_best].i];
+        // with media: the cells the restore will allocate, expanded and checked now - before the slot's conversation goes
+        // (before_restore). An entry whose cell list does not expand, or goes back in position, is damaged: it goes, as an
+        // unreadable entry does, rather than being picked again by every request that matches it
+        if (!best.cells_tgt.empty()) {
+            auto sane = [](const std::vector<llama_strix_kv_cell> & cl) {
+                for (size_t j = 1; j < cl.size(); ++j) {
+                    if (cl[j].pos < cl[j - 1].pos) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            const bool good = cell_list(best.cells_tgt, best.tokens, n, cl_tgt) && sane(cl_tgt) &&
+                              (!ctx_dft || (cell_list(best.cells_dft, best.tokens, n, cl_dft) && sane(cl_dft)));
+            if (!good) {
+                SRV_WRN(" - disk cache: %s says its cells are where they cannot be, dropping it\n",
+                        fs::path(best.path).filename().string().c_str());
+                disk_doomed.push_back(std::move(best));
+                disk_index.erase(disk_index.begin() + (std::ptrdiff_t) cands[i_best].i);
+                disk_cv.notify_all();
+                return false;
+            }
+        }
+        at       = best.ckpts[cands[i_best].i_ckpt];
+        lcp_at   = cands[i_best].lcp;
+        media_at = cands[i_best].walk.media;
+        tokens   = best.tokens.clone();
+        path     = best.path;
+        runs_tgt = best.runs_tgt;
+        runs_dft = best.runs_dft;
+        cells_tgt = best.cells_tgt;
+        cells_dft = best.cells_dft;
         for (const auto & r : runs_tgt) {
             if (r.pos0 < n) {
                 disk_runs[{ r.hi, r.lo }].refs++;
@@ -4493,15 +4895,15 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
                 }
             }
         }
-        for (const auto & k : best->ckpts) {
+        for (const auto & k : best.ckpts) {
             if (k.n_tokens <= n && disk_ckpts.count(k.key)) {
                 disk_ckpts[k.key].refs++;
                 ckpts.push_back(k);
             }
         }
-        best->order = ++disk_seq;
+        best.order = ++disk_seq;
         std::error_code ec;
-        fs::last_write_time(best->path, fs::file_time_type::clock::now(), ec);   // the LRU order survives a restart
+        fs::last_write_time(best.path, fs::file_time_type::clock::now(), ec);   // the LRU order survives a restart
     }
     auto unpin = [&](bool ckpts_too) {
         std::lock_guard<std::mutex> lk(disk_mu);
@@ -4515,6 +4917,52 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
         }
         disk_cv.notify_all();
     };
+
+    // the conversation up to the restore point, as the slot will hold it: its raw common prefix with the prompt is the
+    // prompt's own tokens and image chunks (with their data); past it the entry's own tokens, which the splice keeps, with
+    // the prompt's copy of each image the walk matched. Made before anything is touched: a restore it cannot make is none
+    server_tokens rt;
+    rt.has_mtmd = tokens_new.has_mtmd;
+    {
+        bool ok = true;
+        const size_t k0 = (size_t) std::min<int64_t>(lcp_at, n);
+        try {
+            for (size_t j = 0; ok && j < k0; ) {
+                if (tokens_new[j] == LLAMA_TOKEN_NULL) {
+                    const mtmd_input_chunk * c = tokens_new.find_chunk(j).get();
+                    rt.push_back(c);
+                    j += mtmd_input_chunk_get_n_tokens(c);
+                } else {
+                    rt.push_back(tokens_new[j++]);
+                }
+            }
+            for (size_t j = k0; ok && j < (size_t) n; ) {
+                if (tokens[j] != LLAMA_TOKEN_NULL) {
+                    rt.push_back(tokens[j++]);
+                    continue;
+                }
+                const mtmd_input_chunk * c = tokens.find_chunk(j).get();
+                for (const auto & m : media_at) {
+                    if (m.first == j) {
+                        c = tokens_new.find_chunk(m.second).get();
+                    }
+                }
+                ok = rt.has_mtmd;
+                if (ok) {
+                    rt.push_back(c);
+                    j += mtmd_input_chunk_get_n_tokens(c);
+                }
+            }
+        } catch (const std::exception &) {
+            ok = false;
+        }
+        if (!ok || rt.size() != (size_t) n) {
+            unpin(true);
+            SRV_WRN(" - disk cache: the tokens of %s do not line up with the prompt at %lld; processing the prompt instead\n",
+                    fs::path(path).filename().string().c_str(), (long long) n);
+            return false;
+        }
+    }
 
     const int64_t t0 = ggml_time_us();
     g_spc_cost = {};
@@ -4542,14 +4990,26 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
         }
     }
 
+    // text: cells for positions [0, n), rows by position. With media (issue #31): the cells as the entry says they were -
+    // an image's sharing a position - and rows by cell
+    const bool by_cell = !cells_tgt.empty();
     llama_tokens text = tokens.get_text_tokens();
     text.resize((size_t) n);
     std::string why;
     read_fault fault;
-    bool ok = llama_strix_kv_alloc(ctx_tgt, id_slot, text.data(), (int32_t) n) &&
-              (!ctx_dft || llama_strix_kv_alloc(ctx_dft, id_slot, text.data(), (int32_t) n));
-    if (!ok) {
-        why = "no cells for it";
+    bool ok = true;
+    if (by_cell) {
+        ok = llama_strix_kv_alloc_cells(ctx_tgt, id_slot, cl_tgt.data(), (int32_t) n) &&
+             (!ctx_dft || llama_strix_kv_alloc_cells(ctx_dft, id_slot, cl_dft.data(), (int32_t) n));
+        if (!ok) {
+            why = "no cells for it";
+        }
+    } else {
+        ok = llama_strix_kv_alloc(ctx_tgt, id_slot, text.data(), (int32_t) n) &&
+             (!ctx_dft || llama_strix_kv_alloc(ctx_dft, id_slot, text.data(), (int32_t) n));
+        if (!ok) {
+            why = "no cells for it";
+        }
     }
     size_t n_read = 0;
     try {
@@ -4583,14 +5043,17 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
             if (i + 1 < items.size()) {
                 next = std::async(std::launch::async, read_one, i + 1);
             }
-            ok = llama_strix_kv_set_rows(items[i].ctx, id_slot, items[i].r.pos0, items[i].take, buf[i % 2].data(), items[i].r.n);
+            ok = by_cell ? llama_strix_kv_set_cells(items[i].ctx, id_slot, items[i].r.pos0, items[i].take, buf[i % 2].data(), items[i].r.n)
+                         : llama_strix_kv_set_rows (items[i].ctx, id_slot, items[i].r.pos0, items[i].take, buf[i % 2].data(), items[i].r.n);
             if (!ok) {
                 why = "the cache took no rows";
             }
             // STRIX_V3_VERIFY: read a whole run back out of the cache and check it against the hash it is named by
             if (ok && items[i].take == items[i].r.n && getenv("STRIX_V3_VERIFY")) {
                 std::vector<uint8_t> back((size_t) items[i].row * (size_t) items[i].r.n);
-                const bool got = llama_strix_kv_get_rows(items[i].ctx, id_slot, items[i].r.pos0, items[i].r.n, back.data(), back.size());
+                const bool got = by_cell
+                    ? llama_strix_kv_get_cells(items[i].ctx, id_slot, items[i].r.pos0, items[i].r.n, back.data(), back.size(), nullptr)
+                    : llama_strix_kv_get_rows (items[i].ctx, id_slot, items[i].r.pos0, items[i].r.n, back.data(), back.size());
                 const XXH128_hash_t h = XXH3_128bits(back.data(), back.size());
                 if (!got || h.high64 != items[i].r.hi || h.low64 != items[i].r.lo) {
                     SRV_WRN(" - disk cache: VERIFY run at %d (%d rows, %s) reads back different%s\n", items[i].r.pos0, items[i].r.n,
@@ -4656,8 +5119,7 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
     }
 
     // the conversation up to the restore point, with its checkpoints left on disk and pinned for the slot
-    prompt.tokens = tokens.clone();
-    prompt.tokens.keep_first((size_t) n);
+    prompt.tokens = std::move(rt);
     prompt.checkpoints.clear();
     paged_out->clear();
     for (const auto & k : ckpts) {
@@ -4684,16 +5146,17 @@ bool server_prompt_cache::load_runs(server_prompt & prompt, const server_tokens 
         };
         runs_out->tgt    = cut(runs_tgt);
         runs_out->dft    = ctx_dft ? cut(runs_dft) : std::vector<disk_run_ref> {};
-        runs_out->tokens = text;                   // the first n, which these runs were written for
+        runs_out->tokens = disk_key(tokens, (size_t) n);   // the first n, which these runs were written for
     }
     unpin(false);
 
     f_keep_best = keep;
     f_sim_best  = float(n) / tokens_new.size();
     restored    = true;
-    SRV_INF(" - disk cache: read %lld tokens (v3) into the cache, %.3f GiB in %.0f ms (file %.0f ms at %.0f MB/s; %zu runs, "
+    SRV_INF(" - disk cache: read %lld tokens (v3%s) into the cache, %.3f GiB in %.0f ms (file %.0f ms at %.0f MB/s; %zu runs, "
             "%zu checkpoints left on disk; f_keep = %.3f, f_sim = %.3f)\n",
-            (long long) n, g_spc_cost.bytes / (1024.0 * 1024.0 * 1024.0), (ggml_time_us() - t0) / 1000.0, g_spc_cost.read_us / 1000.0,
-            g_spc_cost.read_us ? g_spc_cost.bytes / 1048576.0 / (g_spc_cost.read_us / 1e6) : 0.0, n_read, n_ckpts, f_keep_best, f_sim_best);
+            (long long) n, by_cell ? ", by cell" : "", g_spc_cost.bytes / (1024.0 * 1024.0 * 1024.0), (ggml_time_us() - t0) / 1000.0,
+            g_spc_cost.read_us / 1000.0, g_spc_cost.read_us ? g_spc_cost.bytes / 1048576.0 / (g_spc_cost.read_us / 1e6) : 0.0,
+            n_read, n_ckpts, f_keep_best, f_sim_best);
     return true;
 }

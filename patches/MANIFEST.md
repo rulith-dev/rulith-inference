@@ -24,6 +24,34 @@ to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
 
+### 0.7.0: the disk tier by own tokens and with images, cancelled waits, load progress, q8_0 K unrotated (fork `6ae1f73ee`)
+
+- `tools/server/server-common.cpp/.h`, `server-task.cpp/.h`, `server-context.cpp`: issue #30. The splice walk of the
+  resident path (`splice_own_keep`) is one function, `server_tokens_own_walk`, and the RAM and disk tiers measure a
+  stored entry with it instead of the raw common prefix: the model's sampled tokens count as the text they spell, so a
+  conversation whose earlier answer retokenizes differently is no longer cut at that answer (the report: 8,192 of
+  125,529 tokens restored, 117,452 recomputed). A checkpoint qualifies only where the walk keeps everything up to it;
+  the wait for an in-flight write measures the same way; each lookup logs its candidates (raw prefix, reach, run cover,
+  checkpoints, the chosen one, why it lost).
+- `include/llama.h`, `src/llama-context.cpp`, `src/llama-kv-cache.*`, `src/llama-memory-hybrid-idx.*`: issue #31.
+  `llama_strix_kv_get_cells` / `_alloc_cells` / `_set_cells` store and restore a sequence's KV rows by cell in position
+  order - an image's cells share one position, which rows by position cannot describe. The disk tier writes media
+  entries as manifest v5 (cell list, projector fingerprint); text-only entries stay v4 byte for byte. Matching and
+  checkpoint keys include each image's 64-bit hash and place, and the projector fingerprint after an image; an entry
+  from another projector restores up to its first image; cell lists are checked before a slot's conversation is
+  dropped.
+- `tools/server/server-queue.*`, `server-context.cpp`: issue #28. A cancel that finds its task in no slot also drops
+  it from the queues (`cancel_pending`): the main loop could hold the task, about to defer it, after the cancel's
+  cleanup ran, and later run it for nobody. A warning when a slot stays busy for 10 s with nothing of it in the step.
+- `src/llama-model-loader.cpp`: issue #29. `load_all_data` writes `loading weights: X of Y GiB` every 10 s; the
+  manager restarts a direct-read load whose log stops for four minutes with the mmap loader.
+- `src/llama-kv-cache.cpp`: no Hadamard rotation of qwen4exp's q8_0 K (it made long-range copying worse: a ~200K
+  copy, teacher-forced decode NLL 0.788 rotated, 0.150 not), and divided cells shift the right way. Through the server, a
+  178-word paragraph 203K tokens back is copied exactly by 0.6.11 and 0.7.0 alike (q8_0 KV, 1,330 t/s prompt).
+- `ggml/src/ggml-cuda/top-k.cu`: the radix select writes its results in column order, so a request's selection order
+  no longer depends on the atomics' order.
+- One-conversation probes bit for bit as 0.6.11 (UD f16, UD MTP, EXL3 4.05).
+
 ### 0.6.11: equal-length prompts, the media marker, UD decode products (fork `0364508f0`)
 
 - `src/llama-batch.cpp`, `src/models/qwen4exp.cpp`: issue #25. When every set of a ragged ubatch had the same count,
