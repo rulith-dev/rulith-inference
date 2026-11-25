@@ -113,6 +113,9 @@ def main():
         sys.exit(f'no runtime at {RUNTIME_DIR}; run bootstrap/bootstrap.py first')
     if not (ROCM_BIN / 'amdhip64_7.dll').is_file():
         sys.exit(f'no ROCm SDK at {ROCM_BIN}')
+    trust = ROOT / 'tools' / 'brain_runtime_trust.bin'
+    if not trust.is_file() or trust.stat().st_size != 32:
+        sys.exit('A 32-byte Brain release verification key is required to build the installer.')
     shutil.rmtree(out, ignore_errors=True)
     bin_out = out / 'bin' / 'hip'
     bin_out.mkdir(parents=True)
@@ -181,7 +184,8 @@ def main():
     (out / 'tools').mkdir()
     take(ROOT / 'tools' / 'manager.py', out / 'tools' / 'manager.py', 'tools')
     # Downloads (0.6.0): the worker the manager starts, and the recommended models it lists
-    for name in ('downloader.py', 'model_catalog.json'):
+    for name in ('downloader.py', 'model_catalog.json', 'brain_runtime_host.py', 'brain_host_abi.py',
+                 'mode_coordinator.py', 'brain_runtime_trust.bin'):
         take(ROOT / 'tools' / name, out / 'tools' / name, 'tools')
     for d in ('config', 'logs', 'models'):
         (out / d).mkdir()
@@ -212,8 +216,11 @@ def main():
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         z.extractall(out / 'python')
     record['python'] = dict(version=version, source=url, bytes=len(data))
-    probe = subprocess.run([str(out / 'python' / 'python.exe'), '-c',
-                            'import ctypes, winreg, json, msvcrt, urllib.request, hashlib, uuid, ipaddress, socket; print("ok")'],
+    probe = subprocess.run([str(out / 'python' / 'python.exe'), '-I', '-B', '-S', '-c',
+                            'import ctypes, ssl, _ssl, pathlib, sys; sys.path.insert(0,sys.argv[1]);'
+                            'import manager, brain_host_abi, mode_coordinator, brain_runtime_host;'
+                            'ctypes.CDLL(str(pathlib.Path(_ssl.__file__).with_name("libcrypto-3.dll"))).EVP_DigestVerify;'
+                            'print("ok")',str(out / 'tools')],
                            capture_output=True, text=True)
     if probe.stdout.strip() != 'ok':
         sys.exit(f'embedded Python cannot import what the manager needs: {probe.stderr}')

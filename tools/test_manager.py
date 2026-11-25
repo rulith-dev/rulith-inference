@@ -1,4 +1,6 @@
-import importlib.util
+from collections import Counter
+import http.server
+import threading
 import json
 import os
 import subprocess
@@ -9,8 +11,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec=importlib.util.spec_from_file_location('manager',Path(__file__).with_name('manager.py'))
-m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import manager as m
+from mode_coordinator import Engines
+from brain_runtime_host import HostError
 
 def gguf(path):
     def s(text):
@@ -60,9 +64,51 @@ def first_model(refresh=True):
     return next(x for x in m.catalog(refresh)['models'] if x['role']=='model')
 
 class ManagerTests(unittest.TestCase):
+    def test_status_and_slots_subprocess_poll_cycles(self):
+        # Exercise the same short-lived processes and stdin requests as the desktop timer.
+        counts = Counter()
+        live = os.urandom(18).hex()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self,*args): pass
+            def do_GET(self):
+                code=200 if self.headers.get('Authorization')=='Bearer '+live or self.path=='/health' else 401
+                counts[self.path,code]+=1
+                self.send_response(code);self.end_headers()
+                self.wfile.write({'/health':b'{"status":"ok"}','/slots':b'[]','/v1/models':b'{"data":[]}'}.get(self.path,b'{}'))
+        with http.server.HTTPServer(('127.0.0.1',0),Handler) as server:
+            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+            try:
+                record=dict(identity=m.process_identity(os.getpid()),host='127.0.0.1',port=server.server_port,
+                            model_path='fixture.gguf',api_key=live,adopted=False)
+                script=("import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);import manager as m;"
+                        "m.DATA=Path(sys.argv[2]);m.RUNTIME=Path(sys.executable);m.main()")
+                cmd=[sys.executable,'-I','-B','-S','-c',script,str(Path(__file__).parent),str(m.DATA)]
+                for variant in ('managed','changed_saved','legacy','adopted'):
+                    rec=dict(record)
+                    if variant=='changed_saved':self.save_network(port=server.server_port,api_key=os.urandom(18).hex())
+                    if variant=='legacy':del rec['api_key']
+                    if variant=='adopted':rec.update(adopted=True,api_key='')
+                    m.atomic_json(m.DATA/'process.json',rec)
+                    for _ in range(4):
+                        for op in ('status','slots'):
+                            proc=subprocess.run(cmd,input=json.dumps(dict(op=op)).encode(),capture_output=True,timeout=20)
+                            reply=json.loads(proc.stdout)
+                            self.assertTrue(reply['ok'])
+                            if op=='status':
+                                self.assertEqual(reply['data'].get('failure_code'),
+                                                 'status_unavailable' if variant in ('legacy','adopted') else None)
+                self.assertEqual(counts,Counter({('/health',200):8,('/v1/models',200):8,('/slots',200):8}))
+            finally:
+                server.shutdown();thread.join()
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
+        self.context=dict(permit=True,owner=dict(host='inference',install_id=str(m.uuid.uuid4()),instance_id=str(m.uuid.uuid4())))
+        for p in (patch.object(m,'brain_home',return_value=self.root/'brain'),
+                  patch.object(m,'listener_matches',return_value=True),
+                  patch.object(Engines,'admission',side_effect=lambda mode,r,tid,admit:dict(admit=admit,in_flight=0))):
+            p.start();self.addCleanup(p.stop)
         self.patcher=patch.object(m,'DATA',self.root/'state');self.patcher.start();self.addCleanup(self.patcher.stop)
         # RULITH_PORT, RULITH_HOST and RULITH_API_KEY override the network setting: none unless a test sets one
         env=patch.dict(os.environ,{k:v for k,v in os.environ.items() if not k.startswith('RULITH_')},clear=True)
@@ -83,6 +129,14 @@ class ManagerTests(unittest.TestCase):
         rocm=self.root/'toolchain'/'rocm';rocm.mkdir(parents=True);(rocm/'amdhip64_7.dll').write_bytes(b'')
         for attr,value in (('RUNTIME',rt/'llama-server.exe'),('ROCM_BIN',rocm)):
             pat=patch.object(m,attr,value);pat.start();self.addCleanup(pat.stop)
+    def native(self,op,data):
+        # These configuration tests simulate the live engine's save acknowledgement.
+        with patch.object(Engines,'save'), patch.object(Engines,'ready'):
+            result=m.host_request(op,data,self.context)
+            if op=='start':
+                m.host_request('host_finish_start',{},self.context)
+            return result
+
     def test_metadata_skips_tokenizer_and_reads_later_fields(self):
         self.assertEqual(m.metadata(self.file)['qwen4exp.context_length'],32768)
     def test_catalog_groups_shards_and_marks_missing(self):
@@ -153,7 +207,7 @@ class ManagerTests(unittest.TestCase):
                             'draft_max':3,'draft_min':0.3}})
                         popen.assert_not_called()
                         self.assertIs(m.profile(model)['ngram_spec'],ngram)
-                        result=m.handle('start',{'id':model['id']})
+                        result=self.native('start',{'id':model['id']})
                         args=popen.call_args.args[0]
                         expected=','.join((['ngram-mod'] if ngram else [])+(['draft-mtp'] if mtp else []))
                         self.assertEqual(args.count('--spec-type'),int(bool(expected)))
@@ -173,7 +227,7 @@ class ManagerTests(unittest.TestCase):
                         self.assertEqual(args[args.index('-ctv')+1],'f16')
                         self.assertIs(result['profile']['ngram_spec'],ngram)
                         self.assertIn('n-gram draft=on' if ngram else 'n-gram draft=off',Path(result['log']).read_text())
-                        m.handle('stop',{})
+                        self.native('stop',{})
     def kwargs_for(self,thinking):
         # issue #15: --reasoning / --reasoning-effort, never the deprecated enable_thinking template kwarg
         cfg=m.validate_profile({'mtp':False,'thinking':thinking},self.model)
@@ -235,7 +289,7 @@ class ManagerTests(unittest.TestCase):
         ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
         stack,popen=self.running([ident])
         with stack:
-            m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+            self.native('start',{'id':model['id'],'profile':{'mtp':False}})
             answers=lambda path,server:{'status':'ok'} if path=='/health' else {'data':[]}
             with patch.object(m,'http_json',side_effect=answers):
                 for available,low in ((20<<30,False),(3<<30,True)):
@@ -251,7 +305,7 @@ class ManagerTests(unittest.TestCase):
         alive=[ident]
         stack,popen=self.running(alive)
         with stack:
-            first=m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+            first=self.native('start',{'id':model['id'],'profile':{'mtp':False}})
             self.assertNotIn('unified',first);self.assertNotIn('shared memory=',Path(first['log']).read_text())
             with open(first['log'],'a') as f:f.write('ggml_backend_cuda_buffer_type_alloc_buffer: allocating 3488.00 MiB on device 0: cudaMalloc failed: out of memory\n')
             alive[0]=None
@@ -261,11 +315,11 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(status['status'],'stopped');self.assertIn('out of memory',status['failure'])
             self.assertNotIn('notice',status)
             # a plain exit - the app closing takes the server with it - is not a failure to report
-            m.handle('stop',{});alive[0]=ident
-            m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+            self.native('stop',{});alive[0]=ident
+            self.native('start',{'id':model['id'],'profile':{'mtp':False}})
             alive[0]=None
             self.assertNotIn('failure',m.status())
-            m.handle('stop',{})
+            self.native('stop',{})
             self.assertNotIn('exited',m.read_json(m.DATA/'process.json',{}))
     def test_installed_layout_needs_no_sdk_directory_and_no_path_entry(self):
         # tools/make_runtime_bundle.py puts the ROCm DLLs beside llama-server
@@ -405,59 +459,23 @@ class ManagerTests(unittest.TestCase):
             def __enter__(s): return s
             def __exit__(s,*a): return False
             def read(s,*a): return json.dumps(answer).encode()
-        with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',return_value=Res()):
+        with patch.object(m,'state',return_value={'identity':{'pid':1},'adopted':False,'api_key':''}),patch.object(m.HTTP,'open',return_value=Res()):
             r=m.slots()
         got=r['slots']
         self.assertEqual(r['waiting'],2)
         self.assertEqual(got[0],{'id':0,'active':True,'task':12,'context':51008,'prompt_processed':15,'prompt_cached':50993,'generated':1892})
         self.assertEqual(got[1],{'id':1,'active':False,'task':None,'context':0,'prompt_processed':0,'prompt_cached':0,'generated':0})
-        with patch.object(m,'state',return_value={'identity':{'pid':1}}),patch.object(m.HTTP,'open',side_effect=OSError('busy')):
+        with patch.object(m,'state',return_value={'identity':{'pid':1},'adopted':False,'api_key':''}),patch.object(m.HTTP,'open',side_effect=OSError('busy')):
             self.assertEqual(m.slots(),{'slots':None})
-    def test_a_server_from_another_copy_of_the_manager_is_adopted_and_can_be_unloaded(self):
-        # an earlier install's runtime, on our port, started with our flags - not the pinned binary
-        other=str((self.root/'elsewhere'/'hip'/'llama-server.exe').resolve())
-        ident={'pid':321,'exe':other,'birth':7}
-        entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':'llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080 --load-mode none --lazy-mode on-direct'}
-        with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident) as identity:
-            self.assertEqual(m.state()['identity'],ident)
-            m.handle('stop',{});identity.assert_called_with(321,True,ident)
-        # but not an unrelated llama-server that merely sits on the port
-        entry['CommandLine']='llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080'
-        m.atomic_json(m.DATA/'process.json',{})
-        with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
-            self.assertNotIn('identity',m.state())
-    def test_candidate_can_be_adopted_and_stopped_by_exact_identity(self):
-        ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
-        entry={'ProcessId':123,'ExecutablePath':ident['exe'],'CommandLine':'llama-server.exe --host 127.0.0.1 --port 8080'}
-        with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident) as identity:
-            adopted=m.state()
-            self.assertTrue(adopted['adopted'])
-            self.assertEqual(adopted['identity'],ident)
-            self.assertNotIn('runtime_env',adopted)
-            m.handle('stop',{})
-            identity.assert_called_with(123,True,ident)
-        self.assertNotIn('identity',m.read_json(m.DATA/'process.json',{}))
-    def test_a_stop_with_the_disk_tier_on_first_has_the_server_write_its_conversations(self):
-        # the tier writes a conversation's recurrent state only when it leaves memory, and a stop is that
-        ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
-        calls=[]
-        class Res:
-            def __enter__(self):return self
-            def __exit__(self,*a):return False
-            def read(self):return b'{"success":true}'
-        def opener(req,timeout=None):
-            calls.append((req.full_url,req.get_method()));return Res()
-        for disk,asked in ((True,1),(False,0)):
-            calls.clear()
-            m.atomic_json(m.DATA/'process.json',{'identity':ident,'adopted':False,'profile':{'prompt_cache_disk':disk}})
-            with patch.object(m,'process_identity',return_value=ident) as identity,patch.object(m.HTTP,'open',side_effect=opener):
-                m.handle('stop',{});identity.assert_called_with(123,True,ident)
-            self.assertEqual(len(calls),asked)
-            if asked:self.assertEqual(calls[0],('http://127.0.0.1:8080/strix/persist','POST'))
-        # a runtime without the endpoint, or one that does not answer, is stopped all the same
-        m.atomic_json(m.DATA/'process.json',{'identity':ident,'adopted':False,'profile':{'prompt_cache_disk':True}})
-        with patch.object(m,'process_identity',return_value=ident) as identity,patch.object(m.HTTP,'open',side_effect=m.urllib.error.URLError('404')):
-            m.handle('stop',{});identity.assert_called_with(123,True,ident)
+    def test_foreign_runtime_and_candidate_remain_untouched(self):
+        for exe in (m.RUNTIME,self.root/'another'/'llama-server.exe'):
+            entry=dict(ProcessId=321,ExecutablePath=str(exe))
+            with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity') as inspect:
+                self.assertNotIn('identity',m.state())
+                with self.assertRaises(HostError) as caught:
+                    self.native('stop',{})
+                self.assertEqual(caught.exception.code,'owner_busy')
+                inspect.assert_not_called()
 
     def test_defaults_are_the_measured_configuration_per_architecture(self):
         model=first_model()
@@ -502,7 +520,7 @@ class ManagerTests(unittest.TestCase):
             popen.assert_not_called()
             cfg=m.profile(model)
             self.assertEqual({**cfg,'qsa':baseline['qsa']},baseline)
-            result=m.handle('start',{'id':model['id']})
+            result=self.native('start',{'id':model['id']})
             args=popen.call_args.args[0];env=popen.call_args.kwargs['env']
             self.assertEqual(args[0],str(m.RUNTIME))
             for option,value in (('-fa','on'),('-ctk','f16'),('-ctv','f16'),
@@ -514,7 +532,7 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual(result['runtime_env']['LLAMA_QSA_SPARSE'],'1')
             self.assertIn('QSA=on',Path(result['log']).read_text())
             self.assertEqual(m.status()['runtime_env'],result['runtime_env'])
-            m.handle('stop',{});identity.assert_called_with(123,True,ident)
+            self.native('stop',{});identity.assert_called_with(123,True,ident)
             m.handle('save',{'id':model['id'],'profile':{'qsa':False}})
             self.assertEqual(m.selected_runtime(m.profile(model)),m.RUNTIME)
 
@@ -598,7 +616,7 @@ class ManagerTests(unittest.TestCase):
         self.assertEqual(env['STRIX_SPEC_DRAFT_CAP'],'2')                       # the cap under a limit of 3
         args=m.argv(self.model,run)
         self.assertEqual(args[args.index('--spec-draft-n-max')+1],'3')
-        s={'identity':{'pid':1},'model_id':self.model['id'],'profile':run,'host':'127.0.0.1','port':8080}
+        s={'identity':{'pid':1},'adopted':False,'api_key':'','model_id':self.model['id'],'profile':run,'host':'127.0.0.1','port':8080}
         sent=[]
         class R:
             def __enter__(self):return self
@@ -914,7 +932,7 @@ class ManagerTests(unittest.TestCase):
         stack,popen=self.running([ident])
         with stack:
             self.assertNotIn('s3cret',json.dumps(m.handle('save',{'id':model['id'],'profile':{'mtp':False}})))
-            result=m.handle('start',{'id':model['id']})
+            result=self.native('start',{'id':model['id']})
             args=popen.call_args.args[0]
             self.assertEqual(args[args.index('--api-key')+1],'s3cret')
             kept=m.read_json(m.DATA/'process.json',{})
@@ -924,7 +942,7 @@ class ManagerTests(unittest.TestCase):
                 self.assertNotIn('s3cret',shown)
             self.assertIn('listen=127.0.0.1:13305 (API key required)',Path(result['log']).read_text())
             self.assertTrue(m.status()['api_key_set'])
-            m.handle('stop',{})
+            self.native('stop',{})
         self.assertNotIn('s3cret',json.dumps(m.read_json(m.DATA/'process.json',{})))
     def test_the_manager_talks_to_the_running_server_where_it_listens_with_its_key(self):
         ident={'pid':123,'exe':str(m.RUNTIME.resolve()),'birth':456}
@@ -950,9 +968,8 @@ class ManagerTests(unittest.TestCase):
             self.assertEqual((r['network']['port'],r['network']['server']),(14000,{'endpoint':'http://127.0.0.1:13305/v1','api_key':'k3y'}))
             s=m.status()
             self.assertEqual((s['endpoint'],s['api_key_set'],s['network_pending']),('http://127.0.0.1:13305/v1',True,True))
-            m.handle('stop',{})
         self.assertEqual({url.split('/')[2] for url,_ in calls},{'127.0.0.1:13305'});self.assertEqual({key for _,key in calls},{'Bearer k3y'})
-        self.assertEqual([url.split('13305')[1] for url,_ in calls],['/health','/v1/models','/slots','/health','/v1/models','/strix/persist'])
+        self.assertEqual([url.split('13305')[1] for url,_ in calls],['/health','/v1/models','/slots','/health','/v1/models'])
         # unloaded, the next load's address is the one shown
         with patch.object(m,'state',return_value={}):self.assertEqual(m.status()['endpoint'],'http://127.0.0.1:14000/v1')
     def test_a_server_an_earlier_version_started_is_still_reached_on_8080(self):
@@ -965,41 +982,12 @@ class ManagerTests(unittest.TestCase):
             s=m.status()
         self.assertEqual(m.listening(m.read_json(m.DATA/'process.json',{})),{'host':'127.0.0.1','port':8080,'api_key':''})
         self.assertEqual((s['endpoint'],s['network_pending']),('http://127.0.0.1:8080/v1',True))
-        self.assertEqual(get.call_args.args[1]['port'],8080)
-    def test_a_server_on_the_configured_port_is_adopted_on_either_host_with_its_key(self):
-        other=str((self.root/'elsewhere'/'hip'/'llama-server.exe').resolve())
-        ident={'pid':321,'exe':other,'birth':7}
-        flags='--load-mode none --lazy-mode on-direct'
-        self.save_network(port=13305,lan=True,api_key='')
-        for host in ('127.0.0.1','0.0.0.0'):
-            entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':f'llama-server.exe -m x.gguf --host {host} --port 13305 --api-key k3y {flags}'}
-            m.atomic_json(m.DATA/'process.json',{})
-            with self.subTest(host=host),patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
-                s=m.state()
-                self.assertEqual((s['identity'],s['host'],s['port']),(ident,host,13305))
-                self.assertIn('--api-key ***',s['command']);self.assertNotIn('k3y',s['command'])
-                # its own key, for the manager's requests to it
-                self.assertEqual(m.listening(s),{'host':host,'port':13305,'api_key':'k3y'})
-        # not on another port or another address: an earlier version's 127.0.0.1:8080 is ours while 8080 is the port
-        for cmd in ('--host 127.0.0.1 --port 8080','--host 192.168.1.9 --port 13305'):
-            entry={'ProcessId':321,'ExecutablePath':other,'CommandLine':f'llama-server.exe -m x.gguf {cmd} {flags}'}
-            m.atomic_json(m.DATA/'process.json',{})
-            with self.subTest(cmd=cmd),patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
-                self.assertNotIn('identity',m.state())
-        self.save_network(port=8080,lan=False,api_key='')
-        with patch.object(m,'discover',return_value=[entry]),patch.object(m,'process_identity',return_value=ident):
-            entry['CommandLine']=f'llama-server.exe -m x.gguf --host 127.0.0.1 --port 8080 {flags}'
-            s=m.state();self.assertEqual((s['identity'],s['api_key']),(ident,''))
+        self.assertEqual(s['failure_code'],'status_unavailable');get.assert_not_called()
     def test_a_busy_port_is_named_and_a_lan_load_needs_loopback_free_too(self):
         model=first_model()
         self.save_network(port=13305,lan=True,api_key='')
         with patch.object(m,'ROOT',self.root),patch.object(m,'discover',return_value=[]),patch.object(m.subprocess,'Popen') as popen:
-            # something already answers there
-            with patch.object(m,'http_json',return_value={'status':'ok'}) as probe,self.assertRaises(m.ManagerError) as caught:
-                m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
-            self.assertEqual((caught.exception.code,caught.exception.params),('port_busy',{'port':13305}))
-            self.assertIn('Port 13305 ',str(caught.exception));self.assertEqual(probe.call_args.args[1]['port'],13305)
-            # nothing answers, but the port is taken on loopback: a server on all addresses would not get its requests
+            # Check the socket directly; an unknown listener must never receive a probe.
             bound=[]
             class Sock:
                 def __init__(s,*a):pass
@@ -1010,12 +998,14 @@ class ManagerTests(unittest.TestCase):
                     if addr[0]=='127.0.0.1':raise OSError(10048,'in use')
                     if addr[0]=='192.168.1.9':raise OSError(10049,'not an address of this PC')
             with patch.object(m,'http_json',side_effect=m.urllib.error.URLError('no listener')),patch('socket.socket',Sock):
-                with self.assertRaises(m.ManagerError) as caught:m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+                with self.assertRaises(m.ManagerError) as caught:self.native('start',{'id':model['id'],'profile':{'mtp':False}})
                 self.assertEqual((caught.exception.code,bound),('port_busy',[('0.0.0.0',13305),('127.0.0.1',13305)]))
+                # Clear failed launch intent before simulating an independent start.
+                (self.root/'brain/config/brain/mode.json').unlink()
                 # an address RULITH_HOST names that this PC does not have is not a busy port
                 bound.clear()
                 with patch.dict(m.os.environ,{'RULITH_HOST':'192.168.1.9'}),self.assertRaises(m.ManagerError) as caught:
-                    m.handle('start',{'id':model['id'],'profile':{'mtp':False}})
+                    self.native('start',{'id':model['id'],'profile':{'mtp':False}})
                 self.assertEqual((caught.exception.code,caught.exception.params,bound),('host_unavailable',{'host':'192.168.1.9'},[('192.168.1.9',13305)]))
             popen.assert_not_called()
     def test_lan_addresses_leave_out_loopback_and_link_local(self):
