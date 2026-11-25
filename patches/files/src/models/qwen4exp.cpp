@@ -1543,6 +1543,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
                 hparams.indexer_top_k/r,qsa->compact,qsa->active_only);
         qsa->bias = qsa->compact ? ggml_new_tensor_1d(ctx0,GGML_TYPE_I32,n_blocks+n_tps) :
             ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, blk_bias ? n_blocks : n_kv, n_tps, n_stream);
+        static const int debug = getenv("LLAMA_KV_REGION_DEBUG") ? atoi(getenv("LLAMA_KV_REGION_DEBUG")) : 0;
+        if (debug >= 2) {
+            fprintf(stderr, "qsa inputs: reserve=%d cells=%lld queries=%lld blocks=%lld compact=%d maskless=%d bias_bytes=%zu\n",
+                    (int) mctx_hyb->is_full_cache(), (long long) n_kv, (long long) n_tps, (long long) n_blocks,
+                    (int) qsa->compact, (int) qsa->maskless, ggml_nbytes(qsa->bias));
+        }
 
         ggml_set_input(qsa->cell_blk);
         ggml_set_input(qsa->blk_cells);

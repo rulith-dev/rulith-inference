@@ -3206,6 +3206,13 @@ bool llama_kv_cache::seq_alloc_cells(llama_seq_id seq_id, const llama_strix_kv_c
             LLAMA_LOG_ERROR("%s: failed to find %u available cells\\n", __func__, n);
             return false;
         }
+        if (!sinfo.is_contiguous()) {
+            // A run keeps the next attention window narrow when the free-cell search wraps around the pool.
+            auto run = find_slot(ubatch, true);
+            if (!run.empty()) {
+                sinfo = std::move(run);
+            }
+        }
         // the cells of one position are read back in the order of their index (seq_cell_list), so they must keep the
         // order they were given in. Every cell found is free, so any of them can take any of the given ones: in
         // ascending order they do, also when the search wrapped from the end of the cache to its start inside an image

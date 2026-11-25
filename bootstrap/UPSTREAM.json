@@ -298,12 +298,12 @@
   "src/llama-impl.h": "654e4daa265807d8995b3c4c7605a5a3d2d77197d2785fc2420a23aa21a9257c",
   "src/llama-kv-cache-dsv4.cpp": "69a1b2e5cb2385cf643724f4929e1f5e0d6b03853a2ea0391f77e542b4ce4e39",
   "src/llama-kv-cache-msa.cpp": "da8c063344d646c5e4f17b3c767198a66277ab4a90d741f8b71d1f5f47c6bfad",
-  "src/llama-kv-cache.cpp": "05d36ef3e5acb8ad25acf38f44025e1e009f42eeb4f3e981ee1bbb8599f3272f",
+  "src/llama-kv-cache.cpp": "e8491f906000630465af14fbf0d1b04e39d966316701491aaa2d0eedd252e587",
   "src/llama-kv-cache.h": "dd7871882ec7aa971bfb31731523c41f284ca7192031d139f0b752e14262dff9",
   "src/llama-kv-cells.h": "80d4207e05fa1f27ec68cbb53efa0757e2b3706750377d4f7f8c1db83071a03c",
   "src/llama-lazy-reader.h": "b0d5c4364ac0f189d2f7b8601eaad2388c73983422c0116c3bbe9255efaf705c",
-  "src/llama-memory-hybrid-idx.cpp": "270c667cb7910c606711d582b200c6762ae63e65ed4a00325b39c0c99a6300ee",
-  "src/llama-memory-hybrid-idx.h": "0079e6b57e24745bb65e2a2e6f744a59b43fc9f516bb4da9a8544e92de5457eb",
+  "src/llama-memory-hybrid-idx.cpp": "857370b7b8885c8566744a8c7d0d3a98640c9b0c78277e4e12d13068191ef4da",
+  "src/llama-memory-hybrid-idx.h": "d66e20e5ec5b8d1d2889e89a354d65d1370962647b9807379ab3f45ca077cf9d",
   "src/llama-memory-recurrent.cpp": "3642f783f2421d62d703447ddc5fa5bfed5c1f3c5144a1e6e0df61a2b3c6b959",
   "src/llama-memory-recurrent.h": "a08706001b23c7728eb5063b3677e59a3389c7ecb1d74d4187ec359aa8976524",
   "src/llama-mmap.cpp": "ac897f5bc25f2787db58c14cc22a9b8138f699b7045e5b62f88b8520f7064073",
@@ -318,7 +318,7 @@
   "src/models/delta-net-base.cpp": "630f077f21975bdfa875024634095d4635c04262d0a3cc0e154617276918bd75",
   "src/models/models.h": "f253106ddcc25a1efab8c2c66cb755694797bd450cf8a19664e2ff905dc51c64",
   "src/models/pack.inc": "7429d4c983e3e8b727b6f8d46756e33c02a0309c2152f26843a2d6678085d365",
-  "src/models/qwen4exp.cpp": "77c7d8aee5346d71c30287ffb26018cc47d9709e99eaa7728d5c85abbcc1aae0",
+  "src/models/qwen4exp.cpp": "2d381688e4058906d0820f4fd6d7b9da8c487c03cf40e8481a90908935376328",
   "src/prefix.h": "8ff0afa90c0f8a93411faf13de1d989ee8b8877518be15fcb40d31c464dc4afa",
   "tests/CMakeLists.txt": "7e0c1ee7ad763f890307df1a6ecdf70f9a53411000612c64bda61c8d12d909a0",
   "tests/test-alloc.cpp": "7e6e3001ac7eafcf02070965a52122d9fb2bc809a6448b870e35cc2863d36018",
@@ -331,6 +331,7 @@
   "tools/server/server-common.h": "bf1b63fd0ca1f00ac4c64de82c7ed557cfad04461748655f0fd8951ff9db43c6",
   "tools/server/server-context.cpp": "e21147058009624f03edffa0f18b86a4605fa3bb7ab5e680df05a354d54fa02f",
   "tools/server/server-context.h": "0b1a5673e9247ccf22758bcdd989184e621068ce8cb516b97972554fe27140e7",
+  "tools/server/server-http.cpp": "bed043831fa986846c1b082df208b8e62b4d61994c292342a2b5206d4973b290",
   "tools/server/server-queue.cpp": "ca26029bf11acf739a405bb569a9070e2fe3b5fade4710e1104e440b3f49978d",
   "tools/server/server-queue.h": "62e955fb1c207dff4acd25bb9150f2d28d2c50e7792d34a00b06fa1332cb749a",
   "tools/server/server-task.cpp": "afa5ed8546e35c8e07853f0149eda20860a415ed20e7fa25db7258bab100671b",
@@ -795,6 +796,10 @@
   "tools/server/server-context.h": {
    "git_blob": "4a8e327fcdee80ea4ea0d65f0401d01af3529005",
    "sha256": "9a3e18fccb360d00028745c49350adbe4f8b69f4ab3eb21dde87c9a41c5b6c3d"
+  },
+  "tools/server/server-http.cpp": {
+   "git_blob": "cf147c7e70f434c3b8b93d978fd285cc888e079c",
+   "sha256": "aad15b757323f36b81235182c4a0a35d448399012ae3ef4fed9902b716fa17ea"
   },
   "tools/server/server-queue.cpp": {
    "git_blob": "c4ce90721b9498506a7b0b13841fb5cf2ede7016",

@@ -8,7 +8,7 @@ directory turns clean upstream at the pinned revision into the fork's tree, byte
 
 - `files/` - whole files, laid down first: the 62 the fork adds, and the 14 upstream files it rewrites more than it
   keeps (a script of hunks would be no easier to read than the file);
-- `apply_<area>.py` - the fork's edits to the other 105 upstream files, one generated script per area (`docs`,
+- `apply_<area>.py` - the fork's edits to the other 106 upstream files, one generated script per area (`docs`,
   `common`, `python`, `ggml`, `ggml_cuda`, `llama`, `models`, `tests`, `tools`, `server`); each file belongs to exactly
   one script, so their order does not matter;
 - `../bootstrap/UPSTREAM.json` - the pinned upstream revision, each modified file's upstream git blob and SHA-256,
@@ -23,6 +23,12 @@ The reasons for each change are not in the generated scripts. They are in `histo
 to 0.6.4 (`pwilkin/llama.cpp` @ `f5daaa3`), one per change with its measurements, in the order of
 `history/PATCH_ORDER.py`, and below. Those scripts no longer apply to the current base. Changes since then are
 recorded here.
+
+### 0.8.0 engine changes on top of fork `6ae1f73ee`
+
+- The indexed cache reserves its synthetic text graph independently of images in live slots. A compact text batch after an image counts the cells of its own sequences. A by-cell restore prefers a free run when the ordinary search would scatter its rows. `LLAMA_KV_REGION_DEBUG=2` reports the reserve and live graph input shapes.
+- On Windows a TCP listener uses an exclusive bind by default. Two servers could previously listen on the same address and port, so a status poll could reach the other process.
+- The recorded fork revision is the committed 0.7.0 base. The output hashes include these uncommitted engine changes.
 
 ### 0.7.0: the disk tier by own tokens and with images, cancelled waits, load progress, q8_0 K unrotated (fork `6ae1f73ee`)
 

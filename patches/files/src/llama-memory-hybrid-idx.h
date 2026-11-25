@@ -359,6 +359,7 @@ public:
 
     // streams in the current slot info, the `ns` of get_k/get_v; 1 if unified
     uint32_t get_n_stream() const;
+    bool is_full_cache() const { return full_cache; }
     bool qsa_scalar_visibility(const llama_ubatch & ubatch) const;
     bool qsa_position_prefix(const llama_ubatch & ubatch, bool active_only = false) const;
     // strixllama: the length of a block list that covers only the ubatch's own sequences, at least min_blocks
@@ -398,6 +399,7 @@ public:
 
 private:
     llama_memory_hybrid_idx * mem = nullptr;
+    bool full_cache = false;
 
     // streams per ubatch, read from the slot infos before ctx_idx takes them
     // declared first, so it is initialised while sinfos_idx is still intact

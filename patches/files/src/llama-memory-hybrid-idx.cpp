@@ -2191,6 +2191,7 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_st
 llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hybrid_idx * mem) :
     llama_memory_hybrid_context(mem),
     mem(mem),
+    full_cache(true),
     // graph reservation walks a full context, and qwen4exp builds the sparse attention only when this is set
     // without it the reserved worst case is the dense graph, so ggml-alloc must grow the buffer on the first decode
     ns_ubatch(mem->get_mem_idx() == nullptr ?
@@ -2312,11 +2313,11 @@ uint32_t llama_memory_hybrid_idx_context::kb_scratch_row() const {
 }
 
 bool llama_memory_hybrid_idx_context::kb_needs_full(const llama_ubatch & ubatch) const {
-    return mem ? mem->kb_needs_full(ubatch) : false;
+    return full_cache || (mem && mem->kb_needs_full(ubatch));
 }
 
 bool llama_memory_hybrid_idx_context::kb_pos_dup() const {
-    return mem ? mem->kb_pos_dup() : false;
+    return !full_cache && mem && mem->kb_pos_dup();
 }
 
 void llama_memory_hybrid_idx_context::kb_mark_full(const llama_ubatch & ubatch) const {
@@ -2362,15 +2363,12 @@ bool llama_memory_hybrid_idx_context::qsa_position_prefix(const llama_ubatch & u
 // budget of visible blocks gets bitwise the same result; a shorter one fills the budget with invisible
 // entries, which now sit after its own blocks rather than among them, and that can move the last bits of its
 // attention (towards what a single-slot server computes, which has no other conversation to fill it with).
-// The length is an upper bound: at most one cell per position per sequence while no image has been written
-// (kb_pos_dup), so a sequence holds at most pos_max - pos_min + 1 cells; rounded up to a multiple of 64
-// blocks (256 cells at ratio 4, the step of n_kv) so a graph is rebuilt as rarely as before, and never below
-// the budget. The reserve graph (positions all equal) keeps the whole pool: it sizes the buffers for the widest
-// graph. LLAMA_QSA_ACTIVE_BLOCKS=0 turns this off.
+// After an image or a position gap, count physical cells because several can have the same position.
+// Round up to 64 blocks for graph reuse and keep at least the selection budget.
 int64_t llama_memory_hybrid_idx_context::qsa_active_blocks(const llama_ubatch & ubatch, uint32_t ratio, int64_t min_blocks) const {
     static const bool on = !getenv("LLAMA_QSA_ACTIVE_BLOCKS") || atoi(getenv("LLAMA_QSA_ACTIVE_BLOCKS")) != 0;
-    if (!on || mem == nullptr || get_idx() == nullptr || ratio == 0 || get_n_stream() != 1 ||
-            mem->kb_pos_dup() || !qsa_scalar_visibility(ubatch)) {
+    if (!on || full_cache || mem == nullptr || get_idx() == nullptr || ratio == 0 || get_n_stream() != 1 ||
+            !qsa_scalar_visibility(ubatch)) {
         return 0;
     }
     bool same_pos = ubatch.n_tokens > 1;
@@ -2388,6 +2386,10 @@ int64_t llama_memory_hybrid_idx_context::qsa_active_blocks(const llama_ubatch & 
     int64_t n_cells = 0;
     for (int32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
         if (!seqs.test(s)) {
+            continue;
+        }
+        if (mem->kb_pos_dup()) {
+            n_cells += cells.seq_cell_count(s);
             continue;
         }
         const llama_pos p0 = cells.seq_pos_min(s);
@@ -2424,12 +2426,13 @@ bool llama_memory_hybrid_idx_context::qsa_scalar_visibility(const llama_ubatch &
         }
     }
     if (seqs.count()>1) {
-        if (mem->kb_pos_dup() || !ubatch.seq_idx || !ubatch.seq_id_unq || ubatch.n_seqs_unq!=seqs.count()) { return false; }
+        if (kb_pos_dup() || !ubatch.seq_idx || !ubatch.seq_id_unq || ubatch.n_seqs_unq!=seqs.count()) { return false; }
         for (uint32_t i=0;i<ubatch.n_tokens;++i) {
             if (ubatch.n_seq_id[i]!=1 || ubatch.seq_idx[ubatch.seq_id[i][0]]<0) { return false; }
         }
     }
-    if (ubatch.is_pos_2d()) {
+    // A full-cache reservation has synthetic text queries. Its positions do not refer to any restored image.
+    if (!full_cache && ubatch.is_pos_2d()) {
         const auto & cells=mem->get_mem_idx()->get_cells(seq);
         // strixllama: a sequence that is one run of cells (llama_kv_cells::seq_run) holds no image cell - an image repeats a
         // position - so the window is scanned only for one that is not: 0.2 ms at 110K cells, two or three times a step
