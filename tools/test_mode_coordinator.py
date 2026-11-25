@@ -10,7 +10,7 @@ from unittest.mock import patch
 import uuid
 
 from brain_runtime_host import HostError, lease
-from mode_coordinator import Coordinator, Engines, identity
+from mode_coordinator import BUSY, Coordinator, Engines, identity, same_dir
 
 
 def request_id():
@@ -245,6 +245,40 @@ with lease(folder/'engine-owner.lock',wait=False) as held:
                     self.assertEqual(e.exception.code,'persist_failed')
                 self.assertEqual(outcomes,[True,True])
             finally:srv.shutdown();thread.join()
+
+    def test_status_poll_during_own_switch_keeps_the_journal_state(self):
+        # 11-26 GPU run: a poll in the middle of the host's own switch saw its stopping source and the engine's own
+        # short-lived checks as foreign engines and reported owner_busy / owner_unknown while the switch went on.
+        j=self.c.read()
+        for state in sorted(BUSY):
+            self.c.update(state=state,target='brain',error=None)
+            with patch.object(self.e,'current',side_effect=HostError('owner_busy',owner=dict(host='foreign',pid=7))):
+                s=self.c.status()
+            self.assertEqual((s['state'],s['error']),(state,None),state)
+        self.c.update(state='inference_ready',target=None,error=None)
+        with patch.object(self.e,'current',side_effect=HostError('owner_busy',owner=dict(host='foreign',pid=7))):
+            s=self.c.status()
+        self.assertEqual((s['state'],s['error']['code']),('blocked','owner_busy'))
+        self.assertEqual(s['owner'],dict(host='foreign',pid=7))
+        self.assertIsNotNone(j)
+
+    def test_brain_ready_reads_the_engines_memory_dir(self):
+        # The Brain engine reports the folder as `memory_dir`, written as it was given (forward slashes); before
+        # 11-26 the host read a `dir` field the engine does not have and every switch to Brain timed out.
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        folder=self.dir/'memory'/'observatory-1f21a456a9'
+        record=dict(model_path='D:/models/m.gguf',model_id='m',served_id='Served',brain=dict(dir=str(folder)))
+        answers={'/health':dict(status='ok'),'/v1/models':dict(data=[dict(id='Served')]),
+                 '/v1/memory/status':dict(memory_mode=True,memory_dir=folder.as_posix(),mode='update')}
+        adapter=Engines(Mock(DATA=self.dir,listener_matches=Mock(return_value=True)),SimpleNamespace(config_dir=self.dir),{})
+        with patch.object(adapter,'check'),patch.object(adapter,'request',side_effect=lambda m,r,path:answers[path]):
+            adapter.ready('brain',record,'t')
+        self.assertTrue(same_dir(folder.as_posix(),folder))
+        self.assertTrue(same_dir(str(folder).upper(),folder) == (os.name=='nt'))
+        self.assertFalse(same_dir((folder.parent/'other').as_posix(),folder))
+        self.assertFalse(same_dir(None,folder))
+        self.assertFalse(same_dir('',folder))
 
     def test_reused_pid_and_foreign_candidate(self):
         from types import SimpleNamespace

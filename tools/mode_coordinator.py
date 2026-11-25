@@ -14,6 +14,14 @@ OPS = frozenset(('mode_status', 'mode_switch_brain', 'mode_switch_inference', 'm
 BUSY = frozenset('checking draining persisting_inference saving_brain stopping starting waiting_ready recovering'.split())
 
 
+def same_dir(served, expected):
+    """The memory folder the Brain engine reports (`memory_dir` of /v1/memory/status, as given on its command line, with
+    forward slashes) against the one the host launched it with."""
+    if not isinstance(served, str) or not served or not expected:
+        return False
+    return os.path.normcase(os.path.normpath(served)) == os.path.normcase(os.path.normpath(str(expected)))
+
+
 def initial():
     return dict(schema_version=1, selected='inference', source=None, target=None, state='idle', transition_id=None,
                 owner=None, source_identity=None, dest_identity=None, restore=None, inference_return=None, error=None,
@@ -68,7 +76,11 @@ class Coordinator:
             active, record = self.engines.current()
         except HostError as e:
             active, record = None, None
-            state, err = 'blocked', dict(code=e.code,params=e.params)
+            # While a switch runs, its own short-lived engine processes (a stopping source, a starting destination, the
+            # engine's own checks) are briefly not matched by a record. The switch itself checks ownership at every
+            # step and records a real failure in the journal; a status poll must not report one in between.
+            if state not in BUSY:
+                state, err = 'blocked', dict(code=e.code,params=e.params)
         if state in ('idle','brain_ready','inference_ready'):
             state = active+'_ready' if active else 'idle'
         owner = (record or {}).get('owner') or j['owner'] or {}
@@ -400,8 +412,8 @@ class Engines:
                             expected={record['served_id']}
                         if mode=='inference':
                             expected.add(self.manager.api_model_name(self.manager.model_by_id(record['model_id'])))
-                        if any(m.get('id') in expected for m in models) and (mode!='brain' or
-                                self.request(mode,record,'/v1/memory/status').get('dir')==record['brain']['dir']):
+                        if any(m.get('id') in expected for m in models) and (mode!='brain' or same_dir(
+                                self.request(mode,record,'/v1/memory/status').get('memory_dir'),record['brain']['dir'])):
                             return
                 except (OSError,ValueError,KeyError):
                     pass
