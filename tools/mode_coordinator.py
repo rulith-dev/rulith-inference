@@ -1,9 +1,11 @@
 """Durable engine handoff. The desktop instance holds the owner lease across worker calls."""
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import time
 import uuid
+import urllib.error
 import urllib.request
 
 from brain_runtime_host import HostError, lease, require, write_json
@@ -138,9 +140,23 @@ class Coordinator:
             write_json(self.path,j)
         return j, True
 
+    @contextmanager
+    def frame_drained(self, deadline):
+        while True:
+            with lease(self.directory/'frame-requests.lock', wait=False) as held:
+                if held:
+                    yield
+                    return
+            require(time.monotonic() < deadline, 'engine_busy')
+            time.sleep(.15)
+
     def barrier(self, mode, record, tid):
         self.update(state='draining')
         end = time.monotonic() + 120
+        with self.frame_drained(end):
+            self.save_and_stop(mode, record, tid, end)
+
+    def save_and_stop(self, mode, record, tid, end):
         try:
             while True:
                 self.engines.check(mode,record)
@@ -320,8 +336,27 @@ class Engines:
 
     def admission(self,mode,record,tid,admit):
         try:
-            return self.request(mode,record,'/rulith/control/admission',dict(transition_id=tid,admit=admit))
-        except OSError:
+            if mode == 'inference':
+                try:
+                    return self.request(mode,record,'/rulith/control/admission',dict(transition_id=tid,admit=admit))
+                except urllib.error.HTTPError as exc:
+                    if exc.code not in (404, 405):
+                        raise
+                    exc.close()
+            # Older engines expose slot activity. The desktop holds the frame gate through save and exit.
+            in_flight = 0
+            if not admit:
+                base, headers = self.endpoint(mode, record)
+                with self.manager.HTTP.open(urllib.request.Request(base + '/slots', headers=headers), timeout=5) as r:
+                    slots = json.loads(r.read(1 << 20))
+                    waiting = int(r.headers.get('X-Strix-Waiting', 0))
+                require(isinstance(slots, list) and slots and waiting >= 0 and all(
+                    isinstance(slot, dict) and type(slot.get('is_processing')) is bool for slot in slots), 'engine_busy')
+                in_flight = waiting + sum(slot['is_processing'] for slot in slots)
+            return dict(admit=admit, in_flight=in_flight)
+        except HostError:
+            raise
+        except (OSError, ValueError):
             raise HostError('engine_busy') from None
 
     def save(self,mode,record):

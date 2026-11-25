@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
+import { emitTo, listen } from '@tauri-apps/api/event'
 import BrainHost from './BrainHost'
 import { BrainBridge, brainEntry, requiredCaps, useMode, type Mode } from './brainBridge'
 
@@ -66,6 +67,20 @@ describe('Brain route', () => {
     expect(navigate).not.toHaveBeenCalled()
     act(() => useMode.setState({ mode: { ...mode, active: 'none', state: 'idle' } }))
     await waitFor(() => expect(navigate).toHaveBeenCalledWith({ to: '/strixllama/models' }))
+  })
+  it.each([true, false])('acknowledges native close on the App target (flushed=%s)', async ok => {
+    verified = true
+    vi.spyOn(BrainBridge.prototype, 'lifecycle').mockResolvedValue(ok)
+    render(<BrainHost />)
+    await screen.findByTitle('Rulith Brain')
+    const callback = vi.mocked(listen).mock.calls.find(([event]) => event === 'brain-host-lifecycle')![1]
+    const event = { v: 1, type: 'event', id: 'close-request', op: 'closing', body: { reason: 'quit' } }
+    await callback({ event: 'brain-host-lifecycle', id: 1, payload: { generation: 'old', event } })
+    expect(emitTo).not.toHaveBeenCalled()
+    await callback({ event: 'brain-host-lifecycle', id: 2, payload: { generation, event } })
+    expect(emitTo).toHaveBeenCalledWith({ kind: 'App' }, 'brain-host-flushed', {
+      generation, v: 1, type: 'flushed', id: event.id, ok, ...(!ok && { code: 'store_flush_failed' }),
+    })
   })
   it('keeps the frame and engine in place when the UI cannot flush', async () => {
     verified = true

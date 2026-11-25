@@ -94,6 +94,35 @@ fn lock(name: &str, shared: bool) -> Result<File, String> {
     Ok(file)
 }
 
+// Hold a read lease for the entire forwarded call, including a silent response stream.
+fn admit_frame() -> Result<File, String> {
+    let lease = lock("frame-requests.lock", true).map_err(|_| error("switch_busy"))?;
+    let journal = home()?.join("config/brain/mode.json");
+    match fs::read(journal) {
+        Ok(raw) => {
+            let state: Value = serde_json::from_slice(&raw).map_err(|_| error("owner_unknown"))?;
+            if matches!(
+                state["state"].as_str(),
+                Some(
+                    "checking"
+                        | "draining"
+                        | "persisting_inference"
+                        | "saving_brain"
+                        | "stopping"
+                        | "starting"
+                        | "waiting_ready"
+                        | "recovering"
+                )
+            ) {
+                return Err(error("switch_busy"));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(error("owner_unknown")),
+    }
+    Ok(lease)
+}
+
 fn bounded(path: &Path, max: u64) -> Result<Vec<u8>, String> {
     let mut raw = Vec::new();
     File::open(path)
@@ -750,6 +779,7 @@ async fn memory(
     if let Some(b) = &payload {
         memory_size(0, b.len(), "request_too_large")?;
     }
+    let _admission = admit_frame()?;
     let ep = blocking(|| child("host_endpoint", json!({}), &context(false)?)).await?;
     let base = url::Url::parse(
         ep["url"]
@@ -924,6 +954,11 @@ fn mounted_child(op: &str, data: Value, generation: &str) -> Reply {
         return child("host_launch_view", json!({}), &ctx);
     }
     let _lease = lock("runtime.lock", true)?;
+    let _admission = if op.starts_with("ui_store_") {
+        None
+    } else {
+        Some(admit_frame()?)
+    };
     let v = child(op, data, &ctx)?;
     if op == "brain_app" {
         if let Some(m) = desktop()

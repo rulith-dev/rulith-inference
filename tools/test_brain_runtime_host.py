@@ -82,6 +82,57 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.stage(self.zip,raw,self.signer.sign(raw))
         return raw
 
+    def test_prose_and_module_specifiers(self):
+        self.files['ui/app.mjs'] = b"""const words = ["Download from", "import './prose.js'", 'export from'];
+// import './example.js'
+import { setup } from './local.mjs';
+export * from "./local.mjs";
+import(/* delayed */ './local.mjs');"""
+        self.files['ui/local.mjs'] = b'export const setup = 1;'
+        self.stage()
+        del self.files['ui/local.mjs']
+        with self.assertRaises(rt.HostError):
+            self.stage('0.2.3')
+
+    def test_launch_record_uses_the_brain_engines_admin_credential(self):
+        from unittest.mock import Mock
+        from brain_host_abi import BrainHostV1
+        host = BrainHostV1.__new__(BrainHostV1)
+        host.brain_home = self.dir
+        host.runtime_dir = self.dir/'runtime'
+        host.config_dir = self.dir/'config'
+        host.licence_file = self.dir/'licence.txt'
+        host._context = dict(permit=True, digest='verified', owner={})
+        host.process_state = Mock(return_value={})
+        host._manager = Mock()
+        host._manager.saved_network.return_value = dict(lan=False, port=8080, api_key='')
+        host._manager.masked.side_effect = lambda args: args
+        host._manager.process_identity.return_value = dict(pid=42, exe=str(host.runtime_dir/'llama-server.exe'))
+        with patch('brain_host_abi.subprocess.Popen') as spawn:
+            for _ in range(2):
+                result = host.spawn_engine([], {}, {'brain': {}})
+                self.assertTrue(result['admin_token'])
+                self.assertTrue(result['admin_token'] == spawn.call_args.kwargs['env']['RULITH_BRAIN_ADMIN_TOKEN'])
+            self.assertTrue(spawn.call_args_list[0].kwargs['env']['RULITH_BRAIN_ADMIN_TOKEN'] != result['admin_token'])
+
+    def test_download_uses_refreshed_local_files(self):
+        from unittest.mock import Mock
+        from brain_host_abi import BrainHostV1, PRESET
+        host = BrainHostV1.__new__(BrainHostV1)
+        host.config_dir = self.dir
+        host._manager = Mock()
+        model = {'ready': False, 'files': [{'name': 'a', 'present': 'local/a'}, {'name': 'b', 'present': None}]}
+        host.invoke = Mock(return_value={'model': model})
+        data = {'model': PRESET, 'include': ['draft']}
+        host.download('dl_start', data)
+        host.invoke.assert_called_once_with('brain_app', {'refresh': True})
+        host._manager.dl_start.assert_called_once_with(data, present={'a'})
+        model['ready'] = True
+        with self.assertRaises(rt.HostError) as done:
+            host.download('dl_start', data)
+        self.assertEqual(done.exception.code, 'dl_nothing')
+        self.assertEqual(host._manager.dl_start.call_count, 1)
+
     def test_install_and_offline_module_load_with_tamper(self):
         r=self.runtime
         self.assertEqual(r.status()['installed']['reason'],'runtime_missing')

@@ -416,6 +416,7 @@ def settings():
     if lms:
         roots.append(lms)
     cfg = read_json(DATA / 'settings.json', {'roots': roots, 'profiles': {}})
+    cfg.setdefault('roots', roots)
     if isinstance(cfg.get('roots'), list):
         cfg['roots'] = list(dict.fromkeys(moved_root(r) for r in cfg['roots']))
     return cfg
@@ -2383,7 +2384,7 @@ def dl_check_folder(folder):
     return f
 
 
-def dl_start(data):
+def dl_start(data, *, present=None):
     D = _dl()
     if dl_status()['active']: fail('dl_running')
     cat = D.load_catalog()
@@ -2405,10 +2406,13 @@ def dl_start(data):
             if m is None: fail('dl_model')
             include = set(data.get('include', ['draft', 'projection', 'head']))
             owner, repo = m['owner'], m['repo']
-            found = dl_find({f['name'] for f in m['files']})
+            if present is None:
+                found = dl_find({f['name'] for f in m['files']})
+                present = {f['name'] for f in m['files']
+                           if any(size == f['size'] for _, size in found.get(f['name'], ()))}
             files = [{'name': f['name'], 'size': f['size'], 'sha256': f['sha256'], 'urls': D.entry_urls(cat, f, source)}
                      for f in m['files'] if (f['required'] or f['role'] in include)
-                     and not any(n == f['size'] for _, n in found.get(f['name'], []))]
+                     and f['name'] not in present]
             title, model, meta = f"{m['name']} ({m['variant']})", m['id'], {}
     except D.DownloadError as e: dl_fail(e)
     names = [f['name'] for f in files]

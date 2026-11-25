@@ -170,6 +170,52 @@ with lease(folder/'engine-owner.lock',wait=False) as held:
             finally:
                 for child in (a,b):child.stdin.close()
 
+    def test_save_waits_for_forwarded_request_and_excludes_new_calls(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Event
+        path = self.dir/'frame-requests.lock'
+        draining = Event()
+        update = self.c.update
+        def observe(**fields):
+            result = update(**fields)
+            if fields.get('state') == 'draining':
+                draining.set()
+            return result
+        def save(mode, record):
+            with lease(path, shared=True, wait=False) as admitted:
+                self.assertFalse(admitted)
+        with patch.object(self.c, 'update', side_effect=observe), patch.object(self.e, 'save', side_effect=save) as saved:
+            with ThreadPoolExecutor(1) as pool:
+                with lease(path, shared=True):
+                    result = pool.submit(self.switch)
+                    self.assertTrue(draining.wait(5))
+                    saved.assert_not_called()
+                self.assertEqual(result.result(timeout=5)['state'], 'brain_ready')
+            saved.assert_called_once()
+        with lease(path, shared=True, wait=False) as admitted:
+            self.assertTrue(admitted)
+
+    def test_brain_drain_counts_slots_and_queued_work_without_control_route(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        manager = Mock(DATA=self.dir)
+        adapter = Engines(manager, SimpleNamespace(config_dir=self.dir), {})
+        with patch.object(adapter, 'endpoint', return_value=('http://127.0.0.1', {})):
+            for raw, waiting, count in [([{'is_processing': True}], 2, 3), ([{'is_processing': False}], 0, 0),
+                                        ([], 0, None), ([{}], 0, None)]:
+                body = io.BytesIO(json.dumps(raw).encode())
+                body.headers = {'X-Strix-Waiting': str(waiting)}
+                manager.HTTP.open.return_value = body
+                if count is None:
+                    with self.assertRaises(HostError):
+                        adapter.admission('brain', {}, 'switch', False)
+                else:
+                    self.assertEqual(adapter.admission('brain', {}, 'switch', False), dict(admit=False, in_flight=count))
+                self.assertEqual(manager.HTTP.open.call_args.args[0].full_url, 'http://127.0.0.1/slots')
+            manager.HTTP.open.reset_mock()
+            self.assertEqual(adapter.admission('brain', {}, 'switch', True), dict(admit=True, in_flight=0))
+            manager.HTTP.open.assert_not_called()
+
     def test_live_persist_acknowledgement(self):
         import http.server
         import threading

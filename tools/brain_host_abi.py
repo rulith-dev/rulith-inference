@@ -282,7 +282,7 @@ class BrainHostV1:
         child_env = dict(os.environ)
         child_env.update(env)
         child_env.update(RULITH_APP='brain',RULITH_HOME=str(self.brain_home),RULITH_LICENCE_FILE=str(self.licence_file),
-                         RULITH_LAUNCH_ADMIN=admin)
+                         RULITH_BRAIN_ADMIN_TOKEN=admin)
         log = self.brain_home/'logs'/('brain-'+launch_id+'.log')
         log.parent.mkdir(parents=True, exist_ok=True)
         with log.open('xb') as out:
@@ -311,9 +311,16 @@ class BrainHostV1:
 
     def download(self, op, data):
         require(op in DOWNLOAD, 'op_denied')
+        if op == 'dl_start':
+            require(data.get('model') == PRESET and data.get('include') == ['draft'] and not data.get('kind'), 'op_denied')
+            # Refresh outside the download lock. The module assembles local shards and reads the job list.
+            model = self.invoke('brain_app', {'refresh': True})['model']
+            if model['ready']:
+                raise HostError('dl_nothing')
+            present = {f['name'] for f in model['files'] if f['present']}
+            with lease(self.config_dir/'manager.lock'):
+                return self._manager.dl_start(data, present=present)
         with lease(self.config_dir/'manager.lock'):
-            if op == 'dl_start':
-                require(data.get('model') == PRESET and data.get('include') == ['draft'] and not data.get('kind'), 'op_denied')
             if op in ('dl_pause', 'dl_resume', 'dl_cancel'):
                 p = self._manager.dl_job(data.get('id'))
                 require(self.read_json(p/'job.json', {}).get('model') == PRESET, 'op_denied')

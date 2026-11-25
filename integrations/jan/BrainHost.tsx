@@ -83,7 +83,7 @@ export default function BrainHost() {
         unlisten = await listen<{ generation: string; event: Wire }>('brain-host-lifecycle', async ({ payload }) => {
           if (disposed || payload.generation !== generation) return
           const ok = await connection.lifecycle(payload.event)
-          if (typeof ok === 'boolean') await emitTo('main', 'brain-host-flushed', {
+          if (typeof ok === 'boolean') await emitTo({ kind: 'App' }, 'brain-host-flushed', {
             generation, v: 1, type: 'flushed', id: payload.event.id, ok, ...(!ok && { code: 'store_flush_failed' }),
           })
         })

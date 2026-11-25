@@ -215,6 +215,63 @@ def replace_once(path, old, new):
         raise RuntimeError(f'Upstream source changed: {path}')
     path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
 
+def desktop_lock_files(native):
+    """Keep desktop lock checks working when Windows denies process listing."""
+    source = native / 'src/core/mcp/lockfile.rs'
+    cargo = native / 'Cargo.toml'
+    replace_once(cargo, 'features = ["Win32_Storage_FileSystem"]',
+                 'features = ["Win32_Storage_FileSystem", "Win32_System_Threading"]')
+    old = source.read_text(encoding='utf-8')
+    marker = '        let mut cmd = Command::new("tasklist");'
+    if marker in old:
+        start = old.rindex('        use std::process::Command;', 0, old.index(marker))
+        end = old.index('\n    }', old.index(marker))
+        replace_once(source, old[start:end], """        use windows_sys::Win32::{
+            Foundation::{CloseHandle, GetLastError, ERROR_ACCESS_DENIED, WAIT_OBJECT_0},
+            System::Threading::{OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE},
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if handle.is_null() {
+                return GetLastError() == ERROR_ACCESS_DENIED;
+            }
+            let exited = WaitForSingleObject(handle, 0) == WAIT_OBJECT_0;
+            CloseHandle(handle);
+            !exited
+        }""")
+    # Each test app owns a temporary lock directory for its lifetime.
+    folder = """app
+        .path()
+        .app_data_dir()
+        .expect("Failed to get app data dir")"""
+    text = source.read_text(encoding='utf-8')
+    if 'fn lock_directory' not in text:
+        if text.count(folder) != 3:
+            raise RuntimeError(f'Upstream lock directories changed: {source}')
+        text = text.replace(folder, 'lock_directory(app)')
+        helper = """pub(super) fn lock_directory<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    #[cfg(test)]
+    {
+        if app.try_state::<tempfile::TempDir>().is_none() {
+            app.manage(tempfile::tempdir().expect("temporary lock directory"));
+        }
+        app.state::<tempfile::TempDir>().path().to_owned()
+    }
+    #[cfg(not(test))]
+    app.path().app_data_dir().expect("Failed to get app data dir")
+}
+
+"""
+        source.write_text(text.replace('fn get_lock_file_path', helper + 'fn get_lock_file_path'),
+                          encoding='utf-8', newline='\n')
+    tests = native / 'src/core/mcp/tests.rs'
+    text = tests.read_text(encoding='utf-8')
+    direct = 'app.handle().path().app_data_dir().expect("app data dir")'
+    if direct in text:
+        tests.write_text(text.replace(direct, 'super::lockfile::lock_directory(app.handle())'),
+                         encoding='utf-8', newline='\n')
+
+
 def brain_desktop():
     native = JAN / 'src-tauri'
     lib = native / 'src/lib.rs'
@@ -275,6 +332,7 @@ def brain_desktop():
     replace_once(native / 'Cargo.toml', "[target.'cfg(windows)'.dependencies]\n",
                  "[target.'cfg(windows)'.dependencies]\n"
                  'webview2-com = "0.38"\nwindows = { version = "0.61", features = ["Win32_System_Com"] }\n')
+    desktop_lock_files(native)
     # Keep the actual main window and its port alive until the coordinator permits exit.
     helpers = '''#[cfg(windows)]
 async fn prepare_desktop_exit(app: &tauri::AppHandle, reason: &'static str) -> Result<(), String> {
@@ -732,6 +790,7 @@ def brand(keep_data_dir=False):
         cargo = JAN / 'src-tauri/Cargo.toml'
         replace_once(cargo, '[package]\nname = "Jan"\n', '[package]\nname = "strixllama"\n')
         replace_once(cargo, 'default-run = "Jan"\n', 'default-run = "strixllama"\n')
+        replace_once(cargo, 'version = "0.8.4"\n', f'version = "{VERSION}"\n')
         # No jan-cli: it serves Jan's engine, brand() already stops installing it, and Tauri
         # bundles every [[bin]] of the package - so an unbuilt one fails the bundle outright.
         cli_bin = '[[bin]]\nname = "jan-cli"\npath = "src/bin/jan-cli.rs"\nrequired-features = ["cli"]\n'

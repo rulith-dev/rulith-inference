@@ -284,6 +284,18 @@ def regular(path, directory=False):
             (stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode) and st.st_nlink == 1))
 
 
+# Consume comments and whole string literals before looking for a module declaration.
+_JS_STRING = r"""(?:"(?:\\[\s\S]|[^"\\\r\n])*"|'(?:\\[\s\S]|[^'\\\r\n])*')"""
+_JS_SPACE = r'(?:\s|/\*[\s\S]*?\*/|//[^\n]*(?:\n|$))*'
+_JS_NAME = r'[\w$]+'
+_JS_BINDINGS = rf'(?:\{{[^}}]*\}}|\*{_JS_SPACE}(?:as\s+{_JS_NAME})?)'
+_JS_FROM = rf'(?:(?:{_JS_NAME}{_JS_SPACE},{_JS_SPACE})?{_JS_BINDINGS}|{_JS_NAME}){_JS_SPACE}\bfrom\b{_JS_SPACE}'
+_JS_REFERENCES = re.compile(
+    rf'//[^\n]*|/\*[\s\S]*?\*/|{_JS_STRING}|`(?:\\[\s\S]|[^`\\])*`'
+    rf'|\b(?:import\b{_JS_SPACE}(?:\({_JS_SPACE}|{_JS_FROM})?|export\b{_JS_SPACE}{_JS_FROM})'
+    rf'(?P<source>{_JS_STRING})')
+
+
 class References(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -324,7 +336,8 @@ def verify_tree(root, m, installed):
             parser.feed((root / name).read_text('utf-8'))
             refs = parser.refs
         elif name.endswith(('.js', '.mjs')):
-            refs = re.findall(r'''(?:\bfrom\s*|\bimport\s*\(?\s*)["']([^"']+)["']''', (root/name).read_text('utf-8'))
+            refs = [m['source'][1:-1] for m in _JS_REFERENCES.finditer((root/name).read_text('utf-8'))
+                    if m['source']]
         elif name.endswith('.css'):
             refs = re.findall(r'''url\(\s*["']?([^)'"]+)''', (root/name).read_text('utf-8'))
         for ref in refs:

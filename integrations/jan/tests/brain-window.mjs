@@ -143,7 +143,8 @@ try {
     serve(childDocument)(req, res)
   }))
   const browser = process.env.BRAIN_TEST_BROWSER || path.join(process.env['ProgramFiles(x86)'], 'Microsoft/Edge/Application/msedge.exe')
-  const proc = spawn(browser, ['--headless','--disable-gpu','--in-process-gpu','--use-angle=swiftshader',
+  const proc = spawn(browser, [...(process.argv.includes('--no-browser-process-sandbox') ? ['--no-sandbox'] : []),
+    '--headless=new','--disable-gpu','--in-process-gpu','--use-angle=swiftshader',
     '--disable-background-networking','--disable-component-update','--disable-extensions',
     '--no-first-run','--no-proxy-server','--ignore-certificate-errors',
     '--user-data-dir=' + profile,
