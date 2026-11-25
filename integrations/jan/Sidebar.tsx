@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { ArrowDownToLine, Check, ChevronsUpDown, Database, ScrollText, SlidersHorizontal, Settings, Play, Square, RotateCw, Download } from 'lucide-react'
+import { ArrowDownToLine, Brain, Check, ChevronsUpDown, Database, ScrollText, SlidersHorizontal, Settings, Play, Square, RotateCw, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { useAppUpdater } from '@/hooks/useAppUpdater'
 import { gb, modelLabel, serverState, useStrixLlamaStatus, type Model } from './status'
 import { useModelStore, useNextModel } from './store'
 import { StateDot, StatePill, openExternal, useTr } from './parts'
+import { inferenceAllowed, useMode } from './brainBridge'
 
 // Jan's sidebar in the shape of Rulith's: the product's mark at the top, the model pages as their own group
 // under the chat entries, and at the foot the loaded model with the one action that matters for it
@@ -38,6 +39,13 @@ export function ModelNav() {
   ] as const
   return (
     <SidebarGroup className="px-0 pb-0">
+      <SidebarMenu className="mb-2">
+        <SidebarMenuItem>
+          <SidebarMenuButton asChild isActive={pathname === '/brain'}>
+            <Link to="/brain"><Brain /><span>{tr('brain.nav')}</span></Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
       <div className="px-2 pb-1 text-xs font-semibold text-muted-foreground">{tr('title')}</div>
       <SidebarMenu>
         {items.map(item => (
@@ -60,7 +68,8 @@ export function ModelPanel() {
   const status = useStrixLlamaStatus(s => s.status)
   const catalog = useModelStore(s => s.catalog)
   const loadCatalog = useModelStore(s => s.loadCatalog)
-  const busy = useModelStore(s => s.busy)
+  const modelBusy = useModelStore(s => s.busy)
+  const busy = !useMode(s => inferenceAllowed(s.mode)) || modelBusy
   const select = useModelStore(s => s.select)
   const load = useModelStore(s => s.load)
   const unload = useModelStore(s => s.unload)

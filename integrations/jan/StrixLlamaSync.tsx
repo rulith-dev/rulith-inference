@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import cloneDeep from 'lodash/cloneDeep'
 import { toast } from 'sonner'
+import { listen } from '@tauri-apps/api/event'
 import { useModelProvider } from '@/hooks/useModelProvider'
 import { getServiceHub } from '@/hooks/useServiceHub'
 import { openAIProviderSettings } from '@/constants/providers'
@@ -11,6 +12,7 @@ import { LAST_MODEL_KEY, PROVIDER, autoloadEnabled, endpointOf, request, serverS
 import './rulith-theme.css'
 // downloads from the page (a code block's button, a table's CSV) go through the app: see downloads.ts
 import './downloads'
+import { inferenceAllowed, readMode, useMode } from './brainBridge'
 
 // Mounted once at the root. Polls the manager, and keeps the chat side of Jan pointed at it.
 //
@@ -41,27 +43,41 @@ export function StrixLlamaSync() {
   const refreshNetwork = useStrixLlamaNetwork((s) => s.refresh)
   const previous = useRef<ServerState | undefined>(undefined)
   const stopped = useRef<number | undefined>(undefined)
+  const mode = useMode(s => s.mode)
+  useEffect(() => {
+    if (!IS_WINDOWS) return
+    const handler = listen('brain-host-exit-failed', () => toast.error(t('strixllama:brain.exitFailed')))
+    return () => { void handler.then(remove => remove()).catch(() => {}) }
+  }, [t])
 
   useEffect(() => {
-    let pending = false
-    const tick = async () => {
-      if (pending) return
-      pending = true
-      try { await refresh() } finally { pending = false }
+    let stopped = false
+    function poll(read: () => Promise<unknown>) {
+      let timer: ReturnType<typeof setTimeout>
+      async function tick() {
+        try { await read() } catch { /* The status store publishes the read failure. */ }
+        if (!stopped) timer = setTimeout(tick, 3000)
+      }
+      void tick()
+      return () => clearTimeout(timer)
     }
-    void tick()
-    const timer = setInterval(tick, 3000)
-    return () => clearInterval(timer)
+    // Saving an engine can hold up its status read. Mode progress has its own poll.
+    const stopMode = poll(readMode)
+    const stopStatus = poll(refresh)
+    return () => { stopped = true; stopMode(); stopStatus() }
   }, [refresh])
 
   useEffect(() => {
-    if (!status || autoloadTried) return
+    if (!status || !mode || autoloadTried) return
     autoloadTried = true
+    // Recovery or a Brain session at startup consumes this launch opportunity.
+    // Returning to Inference later belongs to the coordinator.
+    if (!inferenceAllowed(mode) || mode.state !== 'idle' || mode.active !== 'none' || mode.transition_id) return
     const last = localStorage.getItem(LAST_MODEL_KEY)
     // only a clean start: not over a running server, not straight into a load that just failed
     if (!autoloadEnabled() || !last || status.identity || status.failure || !status.runtime_available) return
     request('start', { id: last }).then(() => refresh(), () => { /* a model that is gone: the welcome screen shows the choice */ })
-  }, [status, refresh])
+  }, [status, mode, refresh])
 
   useEffect(() => {
     const state = serverState(status)

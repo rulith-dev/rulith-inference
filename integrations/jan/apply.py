@@ -7,6 +7,7 @@ has moved, so a Jan version this was not written for is a clear error and not a 
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,7 @@ REPO = 'rulith-dev/rulith-inference'
 # made Jan, not this build); the uninstall entry and the install-location key go under it.
 PUBLISHER = 'Rulith'
 # Ours, not Jan's: the installer's file name, the uninstall entry and Settings › General show it.
-VERSION = '0.7.0'
+VERSION = '0.8.0'
 ARGS = [a for a in sys.argv[1:] if not a.startswith('-')]
 KEEP_DATA_DIR = '--keep-data-dir' in sys.argv
 JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
@@ -40,7 +41,7 @@ JAN = Path(ARGS[0]).resolve() if ARGS else ROOT / 'src/jan'
 # setup screen, the chat header's model state, the app-wide status poll, and the canned answers the
 # browser preview uses (fixtures.ts, imported only by development builds).
 UI_FILES = ('StrixLlamaPage.tsx', 'ModelsView.tsx', 'DownloadsView.tsx', 'ConfigurationView.tsx', 'LogsView.tsx', 'Welcome.tsx',
-            'ModelState.tsx', 'Sidebar.tsx', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
+            'ModelState.tsx', 'Sidebar.tsx', 'BrainHost.tsx', 'brainBridge.ts', 'StrixLlamaSync.tsx', 'parts.tsx', 'store.ts', 'status.ts',
             'attachments.ts', 'compact.ts', 'dates.ts', 'downloads.ts', 'fixtures.ts', 'strixllama.css', 'rulith-theme.css')
 # NSIS setup hooks (Tauri's bundle.windows.nsis.installerHooks), run before the files are laid down
 NSIS_HOOKS = r"""Var LegacyDir
@@ -128,6 +129,32 @@ Var MovedFrom
   ${EndIf}
 !macroend
 
+; The installed host verifies process ownership and completes its save barrier.
+; An older installation must finish running before its files can be replaced.
+!macro RULITH_PREPARE_REMOVAL
+  ${If} ${FileExists} "$INSTDIR\runtime\tools\mode_coordinator.py"
+    nsExec::Exec '"$INSTDIR\rulith-inference.exe" --prepare-uninstall'
+    Pop $0
+    ${If} $0 != 0
+      Abort "Rulith Inference could not finish saving. Retry from the application."
+    ${EndIf}
+  ${ElseIf} ${FileExists} "$INSTDIR\runtime\tools\manager.py"
+    System::Call 'kernel32::SetEnvironmentVariable(t "RULITH_SETUP_ROOT", t "$INSTDIR") i.r0'
+    ${If} $0 = 0
+      Abort "Rulith Inference could not check the existing installation."
+    ${EndIf}
+    nsExec::Exec `powershell -NoProfile -Command "exit [int][bool](Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith([IO.Path]::Combine($$env:RULITH_SETUP_ROOT,'runtime') + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) })"`
+    Pop $0
+    ${If} $0 != 0
+      Abort "Stop the running processes in this Rulith Inference installation, then retry."
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro RULITH_PREPARE_REMOVAL
+!macroend
+
 !macro NSIS_HOOK_PREINSTALL
   !insertmacro STRIX_FIND_LEGACY
   ; only in place of the default folder: a folder chosen on the directory page is kept
@@ -139,36 +166,7 @@ Var MovedFrom
     StrCpy $INSTDIR $LegacyDir
     SetOutPath $INSTDIR
   ${EndIf}
-  ; a model server still running from this install holds runtime\bin\hip open. Stop it as the app does -
-  ; through the manager, which writes its conversations to the disk tier first - then stop whatever of this
-  ; install is still running: only processes whose file lies under $INSTDIR (read from Win32_Process: the setup is
-  ; 32-bit, and so is the PowerShell it starts, where Get-Process cannot read a 64-bit process's path).
-  IfFileExists "$INSTDIR\runtime\tools\manager.py" 0 +2
-    nsExec::Exec 'cmd /c echo {"op":"stop"}| "$INSTDIR\runtime\python\python.exe" "$INSTDIR\runtime\tools\manager.py"'
-  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'llama-server.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
-  ; the app under its old exe name, running from this install (the setup's own check looks for the new name),
-  ; asked to close as that check does; then a download worker of this install (it continues where it stopped
-  ; when the download is resumed). Only processes whose file lies under $INSTDIR: another copy is left alone.
-  ; The count comes back as the exit code: nsExec guesses the encoding of what a program prints, and read a
-  ; bare "1" as one UTF-16 character.
-  nsExec::Exec `powershell -NoProfile -Command "exit @(Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq '@SLUG@.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' }).Count"`
-  Pop $R1
-  ${If} $R1 > 0
-    ${IfNot} ${Silent}
-    ${AndIf} $PassiveMode <> 1
-      nsis_tauri_utils::StrReplace "$(appRunningOkKill)" "{{product_name}}" "${PRODUCTNAME}"
-      Pop $R2
-      MessageBox MB_OKCANCEL $R2 IDOK strix_kill_old
-      Abort
-    ${EndIf}
-    strix_kill_old:
-    nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq '@SLUG@.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
-    Sleep 1000
-  ${EndIf}
-  nsExec::Exec `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $$_.Name -eq 'python.exe' -and $$_.ExecutablePath -like '$INSTDIR\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force }"`
-  ; up to 0.2.4 the runtime lived in runtime\bin\hip-rocm101, named after the ROCm 10.1 it was first built
-  ; with; it is runtime\bin\hip now, and the old copy would otherwise stay behind after an upgrade
-  RMDir /r "$INSTDIR\runtime\bin\hip-rocm101"
+  !insertmacro RULITH_PREPARE_REMOVAL
   !insertmacro STRIX_MOVE_TO_PRODUCT_DIR
 !macroend
 
@@ -196,16 +194,12 @@ Var MovedFrom
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; The uninstaller deletes the files the installer laid down, one by one, and leaves what the runtime wrote
-  ; beside them: its logs and bytecode, and runtime\config - the manager's settings, the model catalog and
-  ; the prompt cache, which grows to tens of GB. Those go with "Delete the application data", like the app's
-  ; other data; an update (the updater runs the old uninstaller) keeps everything.
+  ; A model or memory root may be nested anywhere under the install folder.
+  ; Remove only empty directories after setup has removed its own inventoried files.
   ${If} $UpdateMode <> 1
-    RMDir /r "$INSTDIR\runtime\logs"
-    RMDir /r "$INSTDIR\runtime\tools\__pycache__"
-    ${If} $DeleteAppDataCheckboxState = 1
-      RMDir /r "$INSTDIR\runtime\config"
-    ${EndIf}
+    RMDir "$INSTDIR\runtime\logs"
+    RMDir "$INSTDIR\runtime\tools\__pycache__"
+    RMDir "$INSTDIR\runtime\config"
     RMDir "$INSTDIR\runtime\tools"
     RMDir "$INSTDIR\runtime"
     RMDir "$INSTDIR"
@@ -221,7 +215,187 @@ def replace_once(path, old, new):
         raise RuntimeError(f'Upstream source changed: {path}')
     path.write_text(text.replace(old, new, 1), encoding='utf-8', newline='\n')
 
+def brain_desktop():
+    native = JAN / 'src-tauri'
+    lib = native / 'src/lib.rs'
+    module = HERE / 'brain_host.rs'
+    if module.is_file():
+        shutil.copyfile(module, native / 'src/brain_host.rs')
+
+    route = JAN / 'web-app/src/routes/brain.tsx'
+    route.write_text("import { createFileRoute } from '@tanstack/react-router'\n"
+                     "import BrainHost from '@/components/strixllama/BrainHost'\n"
+                     "export const Route = createFileRoute('/brain')({ component: BrainHost })\n",
+                     encoding='utf-8', newline='\n')
+    replace_once(lib, 'mod strixllama;', 'mod strixllama;\n#[cfg(windows)]\nmod brain_host;')
+    commands = ['brain_host_' + op for op in ('mode', 'setup', 'mount', 'unmount', 'call')]
+    update_command = 'brain_host_prepare_update'
+    marker = '    // Desktop: include updater commands\n'
+    replace_once(lib, marker + '    #[cfg(not(any(target_os = "android", target_os = "ios")))]',
+                 '    #[cfg(windows)]\n'
+                 '    let app_builder = app_builder.invoke_handler(invoke_commands_with_extras![\n'
+                 + ''.join('        brain_host::' + cmd + ',\n' for cmd in commands)
+                 + '        brain_host_prepare_update,\n'
+                 '        core::updater::commands::check_for_app_updates,\n'
+                 '        core::updater::commands::is_update_available,\n'
+                 '    ]);\n' + marker + '    #[cfg(not(any(windows, target_os = "android", target_os = "ios")))]')
+
+    # Defining an app permission opts all existing app commands in to Tauri's ACL.
+    # Preserve the existing local desktop commands separately from the main-window grant.
+    text = lib.read_text(encoding='utf-8')
+    handlers = re.findall(r'(?:generate_handler!|invoke_commands_with_extras!)\[(.*?)\]', text, re.S)
+    existing = set()
+    for handler in handlers:
+        existing.update(re.findall(r'^\s*(?:[\w]+::)*(\w+),\s*$', handler, re.M))
+    legacy = sorted(existing.difference(commands + [update_command]))
+    if (any(cmd.startswith('brain_host_') for cmd in legacy)
+            or not {'confirm_exit', 'settings_get', 'strixllama_request', 'read_logs'}.issubset(legacy)):
+        raise RuntimeError('Desktop command registration changed')
+    def write_config(path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8', newline='\n')
+    # The app command grants are local-only, separately from upstream plugin grants.
+    for name, allowed, windows in [('desktop-commands', legacy, ['*']),
+                                   ('brain-host', commands + [update_command], ['main'])]:
+        write_config(native / 'permissions' / (name + '.json'), {
+            'permission': [{'identifier': 'allow-' + name, 'description': 'Local desktop commands.',
+                            'commands': {'allow': allowed}}]})
+        write_config(native / 'capabilities' / (name + '.json'), {
+            'identifier': name, 'description': 'Trusted local desktop documents.',
+            'local': True, 'windows': windows, 'permissions': ['allow-' + name]})
+    path = native / 'tauri.conf.json'
+    config = json.loads(path.read_text(encoding='utf-8'))
+    security = config['app']['security']
+    security['csp']['frame-src'] = 'https://brain-ui.rulith.invalid'
+    for name in ('desktop-commands', 'brain-host'):
+        if name not in security['capabilities']:
+            security['capabilities'].append(name)
+    write_config(path, config)
+
+    replace_once(native / 'Cargo.toml', "[target.'cfg(windows)'.dependencies]\n",
+                 "[target.'cfg(windows)'.dependencies]\n"
+                 'webview2-com = "0.38"\nwindows = { version = "0.61", features = ["Win32_System_Com"] }\n')
+    # Keep the actual main window and its port alive until the coordinator permits exit.
+    helpers = '''#[cfg(windows)]
+async fn prepare_desktop_exit(app: &tauri::AppHandle, reason: &'static str) -> Result<(), String> {
+    let result = brain_host::prepare_exit(app, reason).await;
+    if result.is_err() { let _ = app.emit_to("main", "brain-host-exit-failed", ()); }
+    result
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn brain_host_prepare_update(app: tauri::AppHandle) -> Result<(), String> {
+    prepare_desktop_exit(&app, "update").await
+}
+
+#[cfg(windows)]
+fn request_saved_exit(app: &tauri::AppHandle, code: i32) {
+    use std::sync::atomic::Ordering;
+    if GRACEFUL_IN_PROGRESS.swap(true, Ordering::SeqCst) { return; }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if prepare_desktop_exit(&app, "quit").await.is_ok() {
+            SHUTTING_DOWN.store(true, Ordering::SeqCst);
+            app.exit(code);
+        } else {
+            if let Some(window) = app.get_webview_window("main") { let _ = window.show(); }
+        }
+        GRACEFUL_IN_PROGRESS.store(false, Ordering::SeqCst);
+    });
+}
+
+'''
+    anchor = '#[cfg(not(feature = "cli"))]\n#[tauri::command]\nasync fn confirm_exit'
+    replace_once(lib, anchor, helpers + anchor)
+    replace_once(lib, '    SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::SeqCst);\n    tokio::spawn',
+                 '    #[cfg(windows)]\n    { _app_handle.exit(0); return; }\n'
+                 '    #[cfg(not(windows))]\n    SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::SeqCst);\n'
+                 '    #[cfg(not(windows))]\n    tokio::spawn')
+    anchor = '            }\n        }\n        #[cfg(target_os = "macos")]\n        if let RunEvent::Reopen'
+    replace_once(lib, anchor, '                #[cfg(windows)]\n                {\n'
+                 '                    api.prevent_close();\n                    request_saved_exit(app, 0);\n'
+                 '                    return;\n                }\n' + anchor)
+    anchor = '        if let RunEvent::ExitRequested { api, code, .. } = &event {'
+    replace_once(lib, anchor, '        #[cfg(windows)]\n' + anchor + '\n'
+                 '            if !SHUTTING_DOWN.load(Ordering::SeqCst) {\n'
+                 '                api.prevent_exit();\n                request_saved_exit(app, code.unwrap_or(0));\n'
+                 '            }\n            return;\n        }\n        #[cfg(not(windows))]\n' + anchor)
+    replace_once(lib, 'pub fn run() {\n    let mut builder', 'pub fn run() {\n'
+                 '    #[cfg(windows)]\n    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--prepare-uninstall")) {\n'
+                 '        std::process::exit(if brain_host::prepare_uninstall().is_ok() { 0 } else { 1 });\n'
+                 '    }\n    let mut builder')
+    # The framework cannot veto restart() in ExitRequested. Guard its two
+    # normal entry points before either one closes the window.
+    system = native / 'src/core/system/commands.rs'
+    old = '''#[tauri::command]
+pub fn factory_reset<R: Runtime>(
+    app_handle: tauri::AppHandle<R>,
+    state: State<'_, AppState>,
+    keep_app_data: Option<bool>,
+    keep_models_and_configs: Option<bool>,
+    clear_web_data: Option<bool>,
+) {'''
+    replace_once(system, old, '''#[cfg(windows)]
+#[tauri::command]
+pub async fn factory_reset(
+    app_handle: tauri::AppHandle,
+    keep_app_data: Option<bool>,
+    keep_models_and_configs: Option<bool>,
+    clear_web_data: Option<bool>,
+) -> Result<(), String> {
+    crate::prepare_desktop_exit(&app_handle, "quit").await?;
+    crate::SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        reset_desktop(app_handle.clone(), state, keep_app_data, keep_models_and_configs, clear_web_data)
+    }).await.map_err(|e| e.to_string())
+}
+
+#[cfg(not(windows))]
+''' + old + '''
+    reset_desktop(app_handle, state, keep_app_data, keep_models_and_configs, clear_web_data)
+}
+
+''' + old.replace('#[tauri::command]\npub fn factory_reset', 'fn reset_desktop'))
+    old = '#[tauri::command]\npub fn relaunch<R: Runtime>(app: AppHandle<R>) {'
+    replace_once(system, old, '''#[cfg(windows)]
+#[tauri::command]
+pub async fn relaunch(app: AppHandle) -> Result<(), String> {
+    crate::prepare_desktop_exit(&app, "quit").await?;
+    crate::SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::SeqCst);
+    app.restart()
+}
+
+#[cfg(not(windows))]
+''' + old)
+    updater = JAN / 'web-app/src/services/updater/tauri.ts'
+    anchor = '// Store key for nonce seed'
+    replace_once(updater, anchor, '''async function installUpdate(update: Update, onProgress?: Parameters<Update['download']>[0]) {
+  if (!IS_WINDOWS) return update.downloadAndInstall(onProgress)
+  await update.download(onProgress)
+  await invoke('brain_host_prepare_update')
+  try {
+    await update.install()
+  } catch (error) {
+    window.dispatchEvent(new Event('brain-host-update-failed'))
+    throw error
+  }
+}
+
+''' + anchor)
+    replace_once(updater, '        await update.downloadAndInstall()', '        await installUpdate(update)')
+    replace_once(updater, '      await update.downloadAndInstall((event) => {', '      await installUpdate(update, (event) => {')
+    hook = JAN / 'web-app/src/hooks/useAppUpdater.ts'
+    old = ('      await getServiceHub().models().stopAllModels()\n'
+           '      getServiceHub().events().emit(SystemEvent.KILL_SIDECAR)\n'
+           '      await new Promise((resolve) => setTimeout(resolve, 1000))')
+    replace_once(hook, old, '      if (!IS_WINDOWS) {\n' + '\n'.join('  ' + line for line in old.splitlines()) + '\n      }')
+
+
 def main():
+    if not (HERE / 'brain_host.rs').is_file() and '--web-only' not in sys.argv:
+        raise RuntimeError('Missing integrations/jan/brain_host.rs; --web-only applies the desktop test overlay')
     shutil.copyfile(HERE / 'strixllama.rs', JAN / 'src-tauri/src/strixllama.rs')
     ui = JAN / 'web-app/src/components/strixllama'
     ui.mkdir(parents=True, exist_ok=True)
@@ -428,6 +602,7 @@ def main():
     concurrent_tools()
     brand(KEEP_DATA_DIR)
     brand_text()
+    brain_desktop()
     # Jan's own llama.cpp engine is not loaded at all. Left in, its extension downloads a Vulkan
     # backend on first start (llamacpp-b9967-win-vulkan..., seen in the download tray), starts an
     # embedding server, and registers the provider the picker then has to filter out. Everything
