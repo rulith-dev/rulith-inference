@@ -111,47 +111,56 @@ pub async fn strixllama_request(request: Value) -> Result<Value, String> {
          "dl_cancel"].contains(&op) {
         return Err("Unsupported strixllama operation".into());
     }
-    let input = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    if input.len() > 65536 { return Err("Request exceeds 64 KiB".into()); }
-    tauri::async_runtime::spawn_blocking(move || {
-        // Where the manager, runtime and models live. STRIX_ROOT if set; otherwise the runtime
-        // bundle an installed copy carries beside its executable (tools/make_runtime_bundle.py,
-        // shipped as Tauri resources under runtime/); otherwise, for a development build, the
-        // repository this was compiled in.
-        let root = std::env::var_os("STRIX_ROOT").map(PathBuf::from)
-            .or_else(|| std::env::current_exe().ok()
-                .and_then(|exe| exe.parent().map(|d| d.join("runtime")))
-                .filter(|r| r.join("tools").join("manager.py").is_file()))
-            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf());
-        // STRIX_PYTHON if set; else the interpreter the bundle carries; else `python` on PATH. It
-        // used to default to one machine's embedded interpreter, which no other machine has.
-        let bundled_python = root.join("python").join("python.exe");
-        let python = std::env::var_os("STRIX_PYTHON").map(PathBuf::from)
-            .unwrap_or_else(|| if bundled_python.is_file() { bundled_python } else { PathBuf::from("python") });
-        let helper = root.join("tools/manager.py");
-        if !helper.is_file() {
-            return Err(format!("The strixllama manager was not found at {}; STRIX_ROOT can point at the repository root", helper.display()));
+    #[cfg(windows)]
+    if matches!(op, "start" | "stop" | "status" | "save") {
+        return crate::brain_host::inference_request(request).await;
+    }
+    tauri::async_runtime::spawn_blocking(move || helper(&request, None)).await
+        .map_err(|_| "The manager stopped unexpectedly".to_owned())?
+}
+
+pub(crate) fn root() -> PathBuf {
+    std::env::var_os("STRIX_ROOT").map(PathBuf::from)
+        .or_else(|| std::env::current_exe().ok()?.parent().map(|dir| dir.join("runtime"))
+            .filter(|r| r.join("tools/manager.py").is_file()))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf())
+}
+
+pub(crate) fn helper(request: &Value, context: Option<&Value>) -> Result<Value, String> {
+    use std::io::Read;
+    let input = serde_json::to_vec(request).map_err(|_| "Malformed request")?;
+    let limit = if context.is_some_and(|v| v["store"] == true) { (16 << 20) + 8192 } else { 65536 };
+    if input.len() > limit { return Err(r#"{"code":"request_too_large","error":"The request is too large.","params":{}}"#.into()); }
+    let root = root();
+    let bundled = root.join("python/python.exe");
+    let python = std::env::var_os("STRIX_PYTHON").map(PathBuf::from)
+        .unwrap_or_else(|| if bundled.is_file() { bundled } else { "python".into() });
+    let mut cmd = Command::new(python);
+    cmd.args(["-I","-B","-S"]).arg(root.join("tools/manager.py"));
+    if context.is_some() { cmd.arg("--native"); }
+    cmd.current_dir(&root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(windows)] {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let mut child = cmd.spawn().map_err(|_| "The bundled manager could not start")?;
+    let outcome = (|| {
+        let mut pipe = child.stdin.take().ok_or("Manager pipe unavailable")?;
+        if let Some(ctx) = context {
+            serde_json::to_writer(&mut pipe,ctx).map_err(|_| "Manager pipe closed")?;
+            pipe.write_all(b"\n").map_err(|_| "Manager pipe closed")?;
         }
-        let mut command = Command::new(&python);
-        command.arg(helper).current_dir(root).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        #[cfg(windows)] {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = command.spawn().map_err(|e| format!(
-            "Python ({}) could not be started: {e}. Put python on PATH, or set STRIX_PYTHON to an interpreter",
-            python.display()))?;
-        child.stdin.take().ok_or("Missing helper stdin")?.write_all(&input).map_err(|e| e.to_string())?;
-        let output = child.wait_with_output().map_err(|e| e.to_string())?;
-        let result: Value = serde_json::from_slice(&output.stdout).map_err(|e| format!("Invalid manager response: {e}; {}", String::from_utf8_lossy(&output.stderr)))?;
-        if result.get("ok").and_then(Value::as_bool) != Some(true) {
-            // a coded error travels whole ({error, code, params}) so the pages can render it in
-            // their own language; anything else is the plain message
-            return Err(match result.get("code") {
-                Some(_) => result.to_string(),
-                None => result.get("error").and_then(Value::as_str).unwrap_or("The manager reported a failure").to_owned(),
-            });
-        }
-        Ok(result["data"].clone())
-    }).await.map_err(|e| e.to_string())?
+        pipe.write_all(&input).map_err(|_| "Manager pipe closed")?;
+        drop(pipe);
+        let mut out = Vec::new();
+        child.stdout.take().ok_or("Manager pipe unavailable")?.take((64<<20)+1)
+            .read_to_end(&mut out).map_err(|_| "Manager pipe closed")?;
+        if out.len()>64<<20 { return Err(r#"{"code":"response_too_large","error":"The response is too large.","params":{}}"#.into()); }
+        let v: Value = serde_json::from_slice(&out).map_err(|_| "Malformed manager response")?;
+        if v["ok"] != true { return Err(v.to_string()); }
+        Ok(v["data"].clone())
+    })();
+    if outcome.is_err() { let _ = child.kill(); }
+    let _ = child.wait();
+    outcome
 }

@@ -22,6 +22,10 @@ import time
 import urllib.request
 import uuid
 
+# The embedded interpreter's isolated search path omits the application's tools.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from brain_runtime_host import HostError, OPS as RUNTIME_OPS, Runtime, home as brain_home
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'config' / 'jan'
 # The one runtime: the pinned pwilkin llama.cpp branch built against the TheRock ROCm SDK in
@@ -146,7 +150,12 @@ KV_TYPES = ('f16', 'q8_0')
 # checkpoints each in RAM
 COMMIT_LOW_BYTES = 8 << 30
 HIDDEN = 0x08000000 if os.name == 'nt' else 0
-HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+class LocalOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), LocalOnly())
 
 
 class ManagerError(ValueError):
@@ -154,7 +163,7 @@ class ManagerError(ValueError):
     English for the JSON callers; the pages render `errors.<code>` from their own locale."""
     def __init__(self, code, **params):
         self.code, self.params = code, params
-        super().__init__(ERRORS[code].format(**params))
+        super().__init__(ERRORS.get(code, code.replace('_', ' ').capitalize() + '.').format(**params))
 
 
 def fail(code, **params):
@@ -347,6 +356,10 @@ def read_json(path, default):
 
 
 def atomic_json(path, data):
+    if path.name=='process.json':
+        from brain_runtime_host import write_json
+        retry_busy(lambda:write_json(path,data))
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -460,11 +473,11 @@ def identifier(path):
     return hashlib.sha256(str(Path(path).resolve()).casefold().encode()).hexdigest()[:20]
 
 
-def checked_file(value):
+def checked_file(value, roots=None):
     path = Path(value).resolve(strict=True)
     if not path.is_file() or path.suffix.lower() != '.gguf':
         fail('not_gguf')
-    if not any(path.is_relative_to(Path(root).resolve()) for root in settings()['roots']):
+    if not any(path.is_relative_to(Path(root).resolve()) for root in (settings()['roots'] if roots is None else roots)):
         fail('outside_roots')
     if re.search(r'-(?!00001)\d{5}-of-\d{5}\.gguf$', path.name):
         fail('not_first_shard')
@@ -683,12 +696,13 @@ def quant_label(name, meta):
     return str(meta.get('general.file_type', ''))
 
 
-def catalog(refresh=False, _after_merge=False):
+def catalog(refresh=False, _after_merge=False, roots=None):
     cached = read_json(DATA / 'catalog.json', None)
-    if cached is not None and not refresh: return cached
+    if roots is None: roots = settings()['roots']
+    if cached is not None and not refresh and cached.get('roots') == roots: return cached
     found = []
     seen = set()
-    for root in settings()['roots']:
+    for root in roots:
         for parent, dirs, files in os.walk(root, followlinks=False):
             dirs[:] = [d for d in dirs if not d.startswith('.') and not Path(parent, d).is_symlink()]
             for name in sorted(files):
@@ -698,7 +712,7 @@ def catalog(refresh=False, _after_merge=False):
                 if key in seen: continue
                 seen.add(key)
                 try:
-                    path = checked_file(path)
+                    path = checked_file(path, roots)
                     meta = metadata(path)
                     split = re.search(r'-(\d{5})-of-(\d{5})\.gguf$', name)
                     shards = [path]
@@ -718,9 +732,9 @@ def catalog(refresh=False, _after_merge=False):
     # file is then scanned like any other, once
     merged, errors = merge_heads(found) if refresh and not _after_merge else ([], {})
     if merged:
-        result = catalog(True, _after_merge=True)
+        result = catalog(True, _after_merge=True, roots=roots)
     else:
-        result = {'models': sorted(found, key=lambda x: (x['role'], x['filename'])), 'roots': settings()['roots'], 'scanned_at': dt.datetime.now().astimezone().isoformat()}
+        result = {'models': sorted(found, key=lambda x: (x['role'], x['filename'])), 'roots': roots, 'scanned_at': dt.datetime.now().astimezone().isoformat()}
     if refresh and not _after_merge:
         result.update(merged=merged, merge_errors=errors)
     atomic_json(DATA / 'catalog.json', result)
@@ -1712,12 +1726,17 @@ def process_identity(pid, terminate=False, expected=None, exe_name='llama-server
     k.TerminateProcess.argtypes = [wintypes.HANDLE,wintypes.UINT]
     k.WaitForSingleObject.argtypes = [wintypes.HANDLE,wintypes.DWORD]
     handle = k.OpenProcess(0x1000 | 0x100000 | (1 if terminate else 0), False, int(pid))
-    if not handle: return None
+    if not handle:
+        if ctypes.get_last_error() == 87:
+            return None
+        raise HostError('owner_unknown')
     try:
+        if k.WaitForSingleObject(handle,0)==0:
+            return None
         buf, size = ctypes.create_unicode_buffer(32768), wintypes.DWORD(32768)
-        if not k.QueryFullProcessImageNameW(handle,0,buf,ctypes.byref(size)): return None
+        if not k.QueryFullProcessImageNameW(handle,0,buf,ctypes.byref(size)): raise HostError('owner_unknown')
         times = [wintypes.FILETIME() for _ in range(4)]
-        if not k.GetProcessTimes(handle,*[ctypes.byref(t) for t in times]): return None
+        if not k.GetProcessTimes(handle,*[ctypes.byref(t) for t in times]): raise HostError('owner_unknown')
         birth = times[0].dwHighDateTime << 32 | times[0].dwLowDateTime
         result = {'pid':int(pid), 'exe':str(Path(buf.value).resolve()), 'birth':birth}
         if terminate:
@@ -1727,7 +1746,7 @@ def process_identity(pid, terminate=False, expected=None, exe_name='llama-server
             if result != expected or Path(result['exe']).name.lower() != exe_name:
                 fail('identity_changed')
             if not k.TerminateProcess(handle,0): fail('stop_failed')
-            k.WaitForSingleObject(handle,10000)
+            if k.WaitForSingleObject(handle,10000) != 0: raise HostError('stop_timeout')
         return result
     finally: k.CloseHandle(handle)
 
@@ -1763,7 +1782,33 @@ def auth_headers(server):
 def public(s):
     """A process record without the API key it keeps for the manager's own requests: what status() and start hand
     to the pages, which never get the key that way."""
-    return {k: v for k, v in s.items() if k != 'api_key'}
+    return {k: v for k, v in s.items() if k not in ('api_key','admin_token','owner','launch_id')}
+
+
+def listener_matches(record):
+    """Match the IPv4 listening socket and the full launch identity before attaching credentials."""
+    ident = record.get('identity') or {}
+    if not ident or type(record.get('port')) is not int:
+        return False
+    size = wintypes.DWORD()
+    table = ctypes.windll.iphlpapi.GetExtendedTcpTable
+    if table(None,ctypes.byref(size),False,socket.AF_INET,3,0) != 122:
+        return False
+    buf = ctypes.create_string_buffer(size.value)
+    if table(buf,ctypes.byref(size),False,socket.AF_INET,3,0) != 0:
+        return False
+    count, = struct.unpack_from('<I',buf)
+    for i in range(count):
+        state,addr,port,_,_,pid = struct.unpack_from('<6I',buf,4+24*i)
+        if (state == 2 and pid == ident['pid'] and socket.ntohs(port & 65535) == record['port']
+                and socket.inet_ntoa(struct.pack('<I',addr)) in (ANY_ADDRESS,record.get('host',LOOPBACK))):
+            return process_identity(pid) == ident
+    return False
+
+
+def can_poll(record):
+    return (record.get('adopted') is False and isinstance(record.get('api_key'),str)
+            and record['api_key'] != '***' and listener_matches(record))
 
 
 def lan_addresses():
@@ -1809,6 +1854,7 @@ def apply_live(s, m, cfg):
     reload: False."""
     run = s.get('profile') or {}
     if not s.get('identity') or s.get('model_id') != m['id'] or not run.get('mtp') or not cfg.get('mtp'): return False
+    if not can_poll(s): return False
     changed = {k for k in set(cfg) | set(run) if cfg.get(k) != run.get(k)}
     if changed != {'draft_max'} or int(cfg['draft_max']) > draft_limit(run): return False
     try:
@@ -1823,26 +1869,36 @@ def apply_live(s, m, cfg):
     return True
 
 
-def persist_conversations(saved):
-    """Before a stop, with the disk tier on: the conversations still in the server's slots leave memory with it,
-    and the tier writes a conversation's recurrent state only when it leaves (POST /strix/persist answers once
-    the writer is done). Best effort - a runtime without the endpoint, or one that does not answer in time, is
-    stopped all the same."""
-    if not (saved.get('profile') or {}).get('prompt_cache_disk'): return
-    try:
-        srv = listening(saved)
-        req = urllib.request.Request(base_url(srv) + '/strix/persist', data=b'{}', method='POST',
-                                     headers={'Content-Type': 'application/json', **auth_headers(srv)})
-        with HTTP.open(req, timeout=150) as res: res.read()
-    except (urllib.error.URLError, TimeoutError, OSError, ValueError): pass
-
-
 def discover():
-    script = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process -Filter \"Name = 'llama-server.exe'\" | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress"
-    p = subprocess.run(['powershell.exe','-NoProfile','-Command',script],capture_output=True,encoding='utf-8',errors='replace',creationflags=HIDDEN,timeout=15)
-    entries = json.loads(p.stdout) if p.stdout.strip() else []
-    if isinstance(entries,dict): entries=[entries]
-    return entries
+    """Enumerate candidate servers without reading any process command line."""
+    class Entry(ctypes.Structure):
+        _fields_=[('size',wintypes.DWORD),('usage',wintypes.DWORD),('pid',wintypes.DWORD),
+                  ('heap',ctypes.c_size_t),('module',wintypes.DWORD),('threads',wintypes.DWORD),
+                  ('parent',wintypes.DWORD),('priority',wintypes.LONG),('flags',wintypes.DWORD),
+                  ('exe',wintypes.WCHAR*260)]
+    k=ctypes.WinDLL('kernel32',use_last_error=True)
+    k.CreateToolhelp32Snapshot.restype=wintypes.HANDLE
+    snapshot=wintypes.HANDLE(k.CreateToolhelp32Snapshot(2,0))
+    if snapshot.value==wintypes.HANDLE(-1).value: raise HostError('owner_unknown')
+    try:
+        row=Entry()
+        row.size=ctypes.sizeof(row)
+        present=k.Process32FirstW(snapshot,ctypes.byref(row))
+        result=[]
+        while present:
+            if row.exe.lower()=='llama-server.exe':
+                try:
+                    ident=process_identity(row.pid)
+                except HostError:
+                    result.append({'ProcessId':row.pid,'ExecutablePath':None})
+                else:
+                    if ident:
+                        result.append({'ProcessId':row.pid,'ExecutablePath':ident['exe']})
+            present=k.Process32NextW(snapshot,ctypes.byref(row))
+        if ctypes.get_last_error()!=18: raise HostError('owner_unknown')
+        return result
+    finally:
+        k.CloseHandle(snapshot)
 
 
 def state():
@@ -1857,32 +1913,7 @@ def state():
                  profile=saved.get('profile'), log=saved['log'])}
         atomic_json(DATA / 'process.json', saved)
         return saved
-    # Adopt a server of ours on the configured local endpoint: the exact project binary, or a
-    # llama-server on our port started with our launch flags by another copy of this manager (an
-    # earlier install, a checkout in another directory). Without the second case a model loaded
-    # from one copy could not be unloaded from the next, and its port stayed taken. The port is the
-    # configured one (8080 unless Configuration › Network or RULITH_PORT says otherwise), on loopback
-    # or on the network: an earlier version's server is on 127.0.0.1:8080, the defaults.
-    net = network()
-    hosts = {LOOPBACK, ANY_ADDRESS, net['host']}
-    for p in discover():
-        cmd = p.get('CommandLine') or ''
-        ours = managed_runtime(p.get('ExecutablePath')) or (
-            Path(p.get('ExecutablePath') or '').name.lower() == 'llama-server.exe' and '--lazy-mode on-direct' in cmd)
-        host = re.search(r'--host\s+(\S+)', cmd)
-        if ours and re.search(rf'--port\s+{net["port"]}(?:\s|$)', cmd) and host and host.group(1) in hosts:
-            model_match = re.search(r'(?:^|\s)-m\s+(?:"([^"]+)"|(\S+))', cmd)
-            log_match = re.search(r'--log-file\s+(?:"([^"]+)"|(\S+))', cmd)
-            key_match = re.search(r'--api-key\s+(?:"([^"]*)"|(\S+))', cmd)
-            identity = process_identity(p['ProcessId'])
-            if identity and Path(identity['exe']) == Path(p['ExecutablePath']).resolve():
-                # its key is kept for the manager's own requests, and only there: the command shown has it masked
-                saved = dict(identity=identity, model_path=next((v for v in model_match.groups() if v), '') if model_match else '',
-                             log=next((v for v in log_match.groups() if v), '') if log_match else '',
-                             command=masked_command(cmd), adopted=True, host=host.group(1), port=net['port'],
-                             api_key=next((v for v in key_match.groups() if v), '') if key_match else '')
-                atomic_json(DATA/'process.json',saved)
-                return saved
+    # Discovery reports other processes to the coordinator without importing their command lines.
     result = {'last_log':saved.get('log', saved.get('last_log',''))}
     if saved.get('exited'): result['exited'] = saved['exited']
     return result
@@ -1917,6 +1948,9 @@ def status():
         # a network setting saved while it runs applies when it loads again; the pages say so meanwhile
         net = network()
         result['network_pending'] = (srv['host'], srv['port'], srv['api_key']) != (net['host'], net['port'], net['api_key'])
+        if not can_poll(s):
+            result.update(failure='Live server credentials or listener identity unavailable.',failure_code='status_unavailable')
+            return result
         try:
             if http_json('/health', srv).get('status')=='ok':
                 result['status']='ready'
@@ -1933,28 +1967,9 @@ def status():
         if events:
             result['memory_events'] = events
         if result['status'] == 'loading' and load_stalled(s):
-            # issue #29: the direct-read load stopped making progress - started again through mmap, kept for this model
-            m = next((x for x in catalog()['models'] if x.get('id') == s.get('model_id')), None)
-            if m and isinstance(s.get('profile'), dict) and loader_of(m) != 'mmap':
-                remember_loader(m, 'mmap')
-                process_identity(s['identity']['pid'], True, s['identity'])
-                atomic_json(DATA/'process.json', {'last_log': s.get('log', '')})
-                launch(m, s['profile'])
-                n = state(); n['replaced'] = True; atomic_json(DATA/'process.json', n)
-                result['status'] = 'loading'
-                result['replaced'] = 'loader'
-        if result['status'] == 'ready' and note_gpu_use(s):
-            # the carve is full as the load becomes ready: its first long prompt would overfill it and the driver
-            # would move buffers to system memory every few seconds. Reloaded once, placed by what was just measured
-            m = next((x for x in catalog()['models'] if x.get('id') == s.get('model_id')), None)
-            if m and isinstance(s.get('profile'), dict):
-                persist_conversations(s)
-                process_identity(s['identity']['pid'], True, s['identity'])
-                atomic_json(DATA/'process.json', {'last_log': s.get('log', '')})
-                launch(m, s['profile'])
-                n = state(); n['replaced'] = True; atomic_json(DATA/'process.json', n)
-                result['status'] = 'loading'
-                result['replaced'] = 'placement'
+            result['replacement_needed'] = 'loader'
+        elif result['status'] == 'ready' and note_gpu_use(s):
+            result['replacement_needed'] = 'placement'
     return result
 
 
@@ -1965,6 +1980,8 @@ def slots():
     s = state()
     if not s.get('identity'):
         return {'slots': []}
+    if not can_poll(s):
+        return {'slots':None}
     srv = listening(s)
     try:
         with HTTP.open(urllib.request.Request(base_url(srv) + '/slots', headers=auth_headers(srv)), timeout=2) as res:
@@ -2082,12 +2099,11 @@ def load_stalled(s):
         return False
 
 
-def launch(m, cfg):
+def launch(m, cfg, context=None):
     """Start the runtime for model m with the already validated profile cfg: check the port, write
     the log banner, record the process identity."""
     net = network()
-    try: http_json('/health', net); fail('port_busy', port=net['port'])
-    except (urllib.error.URLError,TimeoutError): pass
+    # Binding checks the port without sending credentials to an unknown listener.
     # Check port before allocating model memory; do not stop unrelated engines. A server on 0.0.0.0
     # also answers on loopback, where the manager and the chat reach it, so both must be free.
     for host in (net['host'], LOOPBACK) if net['host'] == ANY_ADDRESS else (net['host'],):
@@ -2106,6 +2122,8 @@ def launch(m, cfg):
     log.parent.mkdir(exist_ok=True)
     command=argv(m,cfg,net)
     env=runtime_environment(cfg)
+    admin = os.urandom(32).hex()
+    env['RULITH_LAUNCH_ADMIN'] = admin
     # the server's request log beside its console log: every request as received, the raw output and the parsed tool
     # calls, for debugging (STRIX_REQUEST_LOG, since 0.5.2; repeated long parts are written once per file).
     # RULITH_REQUEST_LOG=0 in the environment turns it off
@@ -2136,6 +2154,8 @@ def launch(m, cfg):
                started_at=dt.datetime.now().astimezone().isoformat(),adopted=False,
                runtime_env={k:v for k,v in env.items() if k.startswith(('LLAMA_','GGML_','STRIX_'))},
                host=net['host'],port=net['port'],api_key=net['api_key'],mem=gpu_share_estimate(m,cfg))
+    if context:
+        saved.update(owner=context['owner'],launch_id=context.get('launch_id') or str(uuid.uuid4()),admin_token=admin)
     atomic_json(DATA/'process.json',saved)
     return public(saved)
 
@@ -2457,7 +2477,7 @@ def dl_cancel(jobdir, delete_parts=True):
     return dl_status()
 
 
-def handle(op, data):
+def handle(op, data, context=None):
     if op=='catalog': return catalog(bool(data.get('refresh')))
     if op=='dl_catalog': return dl_catalog()
     if op=='dl_search': return dl_search(data)
@@ -2493,7 +2513,9 @@ def handle(op, data):
     if op=='save':
         m=model_by_id(data['id']); cfg=validate_profile(data['profile'],m)
         all_cfg=settings();all_cfg['profiles'][m['id']]={**cfg,'version':PROFILE_VERSION};atomic_json(DATA/'settings.json',all_cfg)
-        s=state(); live=apply_live(s,m,cfg)
+        s=state(); live=False
+        if context and context.get('permit') and s.get('owner')==context.get('owner'):
+            live=apply_live(s,m,cfg)
         return {'profile':cfg,'restart_required':bool(s.get('identity')) and not live,'applied_live':live,'argv':masked(argv(m,cfg))}
     if op=='network': return network_view()
     if op=='save_network':
@@ -2502,40 +2524,234 @@ def handle(op, data):
         all_cfg=settings();all_cfg['network']=net;atomic_json(DATA/'settings.json',all_cfg)
         s=state()
         return {'network':network_view(s),'restart_required':bool(s.get('identity'))}
-    if op=='stop':
-        s=state()
-        if s.get('identity'):
-            persist_conversations(s)
-            process_identity(s['identity']['pid'],True,s['identity'])
-        atomic_json(DATA/'process.json',{'last_log':s.get('log',s.get('last_log',''))})
-        return {'status':'stopped'}
-    if op=='start':
-        m=model_by_id(data['id'])
-        if m['role']!='model': fail('not_a_model')
-        cfg=validate_profile(data.get('profile',profile(m)),m)
-        if state().get('identity'): fail('already_loaded')
-        return {**launch(m,cfg),'status':'loading'}
+    if op in ('start','stop'):
+        return host_request(op,data)
     fail('unknown_op')
 
 
 # read-only operations that wait on the network: run without the manager lock (main)
 UNLOCKED_OPS = ('dl_search', 'dl_repo', 'dl_readme', 'dl_info')
+INFERENCE_OPS = frozenset('catalog status logs slots profile roots save start stop network save_network dl_catalog '
+                          'dl_search dl_repo dl_readme dl_info dl_start dl_status dl_pause dl_resume dl_cancel'.split())
+
+
+def host_request(op, data, context=None):
+    from brain_host_abi import BrainHostV1, DOWNLOAD, OPS as MODULE_OPS, frame_data, frame_result, log_slice, ui_store
+    from mode_coordinator import Coordinator, Engines, OPS as MODE_OPS, identity
+    runtime = Runtime(brain_home())
+    if op in RUNTIME_OPS:
+        return runtime.operation(op,data)
+    ctx = context or {}
+    host = BrainHostV1(runtime, ROOT, settings()['roots'], context, ctx.get('host_kind','inference'))
+    engines = Engines(sys.modules[__name__],host,context)
+    journal_owner = {**ctx['owner'],**ctx.get('parent_identity',{})} if ctx.get('owner') else None
+    coordinator = Coordinator(runtime.config,journal_owner,engines)
+    if op=='mode_status':
+        if data: fail('request_invalid')
+        if ctx.get('permit'):
+            coordinator.recover()
+        return coordinator.status()
+    if op=='host_replay' and context:
+        prior=coordinator.replay(coordinator.read(),data['op'],data['data'])
+        if prior is not None:
+            return coordinator.status(prior)
+        fail('switch_busy')
+    if op=='save' and context:
+        from mode_coordinator import BUSY
+        if coordinator.read()['state'] in BUSY:fail('switch_busy')
+        if ctx.get('permit'):
+            active,r=engines.current()
+            if active=='inference':
+                engines.check(active,r)
+        from brain_runtime_host import lease
+        with lease(DATA/'manager.lock'):
+            return handle('save',data,ctx)
+    if op in MODE_OPS or op in ('host_run','host_finish_start','host_accept','start','stop','host_close','host_replace'):
+        if not ctx.get('permit'): fail('owner_required')
+        coordinator.recover()
+        if op=='host_finish_start':
+            j=coordinator.read()
+            if j['state']!='waiting_ready' or j['owner']!=journal_owner:fail('transition_stale')
+            try:
+                mode,record=engines.current()
+                if mode!='inference' or identity(record)!=j['dest_identity']:raise HostError('owner_unknown')
+                engines.ready(mode,record,j['transition_id'])
+                engines.admission(mode,record,j['transition_id'],True)
+                coordinator.update(state='inference_ready',selected='inference',target=None,error=None)
+            except Exception as e:
+                coordinator.update(state='blocked',error=dict(code=getattr(e,'code','ready_timeout'),params={}))
+            return coordinator.status()
+        if op=='host_run':
+            return coordinator.run()
+        if op=='host_accept':
+            j,fresh = coordinator.accept(data['op'],data['data'])
+            return dict(fresh=fresh,status=coordinator.status(j))
+        if op in MODE_OPS:
+            j,fresh = coordinator.accept(op,data)
+            return coordinator.run() if fresh else coordinator.status(j)
+        j = coordinator.read()
+        from mode_coordinator import BUSY
+        if j['state'] in BUSY or j['target']: fail('switch_busy')
+        mode,record = engines.current()
+        if op=='host_close' or op=='stop':
+            if mode:
+                if op=='stop' and mode!=ctx.get('scope','inference'): fail('owner_busy')
+                tid = str(uuid.uuid4())
+                snap = engines.snapshot(mode,record)
+                coordinator.update(state='checking',source=mode,source_identity=identity(record),dest_identity=None,
+                                   target=mode,restore=snap,transition_id=tid,owner=journal_owner,error=None,
+                                   requests=[*j['requests'][-31:],dict(op='host_stop',data={},request_id=tid,transition_id=tid)])
+                try:
+                    coordinator.barrier(mode,record,tid)
+                except Exception as exc:
+                    code = getattr(exc,'code','save_failed')
+                    coordinator.update(state='save_failed' if code in ('persist_failed','save_failed') else 'blocked',
+                                       error=dict(code=code,params={}))
+                    raise HostError(code) from None
+                coordinator.update(state='idle',target=None)
+            elif op=='stop':
+                path=engines.paths[ctx.get('scope','inference')]
+                prior=read_json(path,{})
+                if 'exited' in prior:
+                    atomic_json(path,{'last_log':prior.get('last_log','')})
+            return {'status':'stopped'}
+        if op=='host_replace':
+            if mode!='inference': fail('owner_busy')
+            model = model_by_id(record['model_id'])
+            if data.get('reason')=='loader': remember_loader(model,'mmap')
+            host_request('stop',{},ctx)
+            data = dict(id=model['id'],profile=record['profile'])
+        if j['selected']!='inference': fail('switch_busy')
+        if engines.current()[0]: fail('already_loaded')
+        model = model_by_id(data['id'])
+        if model['role']!='model': fail('not_a_model')
+        cfg = validate_profile(data.get('profile',profile(model)),model)
+        tid = str(uuid.uuid4())
+        ctx['launch_id']=tid
+        coordinator.update(state='starting',source=None,target='inference',transition_id=tid,owner=journal_owner,
+                           restore=engines.snapshot('inference',None),dest_identity=None,error=None,
+                           requests=[*j['requests'][-31:],dict(op='start',data=dict(model_id=model['id'],model_path=model['path'],
+                                      profile=cfg),request_id=tid,transition_id=tid)])
+        try:
+            result = launch(model,cfg,ctx)
+            mode,record = engines.current()
+            if mode!='inference': raise HostError('owner_unknown')
+        except Exception:
+            coordinator.update(state='blocked',error=dict(code='launch_failed',params={}))
+            raise
+        coordinator.update(state='waiting_ready',dest_identity=identity(record))
+        return {**result,'status':'loading'}
+    if op in ('ui_store_read','ui_store_write') and context:
+        return ui_store(runtime.config,op,data)
+    if op=='host_verify' and context:
+        with runtime.generation():
+            _,digest = runtime.verified(runtime.live)
+            if ctx.get('digest') != digest: raise HostError('runtime_untrusted')
+            return {'verified':True}
+    if op=='host_launch_view' and context:
+        r = host.process_state()
+        if not r: raise HostError('brain_not_running')
+        return dict(status='loading',model_id=r['model_id'],started_at=r['started_at'],
+                    brain={k:r['brain'][k] for k in ('dir','read_only')})
+    if op=='host_endpoint' and context:
+        mode,r = engines.current()
+        if mode!='brain': raise HostError('brain_not_running')
+        if coordinator.read()['state'] in ('draining','saving_brain','stopping','starting','waiting_ready'):
+            raise HostError('switch_busy')
+        url,headers = engines.endpoint('brain',r)
+        return dict(url=url,headers=headers)
+    if ctx.get('frame'):
+        approved = {Path(p).resolve() for p in ctx.get('picked',[])}
+        if op!='brain_folder_add':
+            prefs = host.read_json(host.config_dir/'settings.json',{})
+            app = prefs.get('brain_app') or {}
+            approved.update(Path(p).resolve() for p in [*prefs.get('roots',[]),*app.get('known',[]),
+                app.get('memory_dir'),host.brain_home,*ctx.get('offered',[])] if isinstance(p,(str,Path)) and p)
+        frame_data(op,data,approved)
+        if op in ('status','logs'):
+            active,record=engines.current()
+            r=record if active=='brain' else {}
+            if op=='logs':
+                log = Path(r.get('log') or host.read_json(host.config_dir/'process.json',{}).get('last_log',''))
+                if not log.resolve().is_relative_to(host.brain_home/'logs') or not log.is_file():
+                    return dict(file='',offset=0,reset=False,text='')
+                return log_slice(log,data.get('offset',0),r)
+            if not r: return dict(status='stopped',endpoint='')
+            base=base_url(listening(r))
+            ready=False
+            if listener_matches(r):
+                try: ready = engines.request('brain',r,'/health').get('status')=='ok'
+                except OSError: pass
+            return dict(status='ready' if ready else 'loading',endpoint=base,started_at=r['started_at'],
+                        brain={k:r['brain'][k] for k in ('dir','read_only')})
+        if op=='roots':
+            from brain_runtime_host import lease
+            with lease(host.config_dir/'manager.lock'):
+                cfg = host.read_json(host.config_dir/'settings.json',{})
+                cfg['roots'] = list(dict.fromkeys(data['roots']))
+                host.atomic_json(host.config_dir/'settings.json',cfg)
+            return dict(roots=cfg['roots'])
+        if op in DOWNLOAD:
+            return host.download(op,data)
+        if op in ('brain_memory','brain_app_start'): fail('op_denied')
+        if op not in ('brain_app','brain_licence','brain_capacity','brain_self','brain_room','brain_web_settings'):
+            host.process_state()
+            if coordinator.read()['state'] in ('draining','saving_brain','stopping'): fail('switch_busy')
+    if op in MODULE_OPS:
+        if op=='brain_app_start' and not ctx.get('permit'): fail('owner_required')
+        result=host.invoke(op,data)
+        return frame_result(result) if ctx.get('frame') else result
+    fail('unknown_op')
+
+
+def native_context():
+    # Only a child of this installation's actual desktop process consumes the private pipe header.
+    raw = sys.stdin.buffer.readline(65537)
+    if len(raw)>65536 or not raw.endswith(b'\n'): fail('request_invalid')
+    import msvcrt
+    if ctypes.windll.kernel32.GetFileType(wintypes.HANDLE(msvcrt.get_osfhandle(sys.stdin.fileno())))!=3:
+        fail('owner_required')
+    ctx = json.loads(raw)
+    if not isinstance(ctx,dict): fail('owner_required')
+    ident = process_identity(os.getppid())
+    if not ident: fail('owner_required')
+    exe = Path(ident['exe'])
+    if exe.name.lower() not in ('rulith-inference.exe','rulith-brain.exe','jan.exe'): fail('owner_required')
+    installed = exe.parent/'runtime'
+    dev = ROOT/'src/jan/src-tauri'
+    if not (installed.resolve()==ROOT or exe.is_relative_to(ROOT) and dev.is_dir()): fail('owner_required')
+    ctx['owner'] = {k:ctx['owner'][k] for k in ('host','install_id','instance_id')}
+    ctx['parent_identity'] = {**ident,'birth':str(ident['birth'])}
+    return ctx
 
 
 def main():
     sys.stdout.reconfigure(encoding='utf-8')
     try:
-        raw=sys.stdin.buffer.read(65537)
-        if len(raw)>65536: fail('request_too_large')
-        request=json.loads(raw)
-        if not isinstance(request,dict): fail('request_invalid')
+        context = native_context() if sys.argv[1:]==['--native'] else None
+        limit = (16<<20)+8192 if context and context.get('store') else 65536
+        raw=sys.stdin.buffer.read(limit+1)
+        if len(raw)>limit: fail('request_too_large')
+        try:
+            request=json.loads(raw.decode('utf-8'))
+        except (UnicodeError,ValueError):
+            fail('request_invalid')
+        if (not isinstance(request,dict) or set(request)-{'op','data'} or not isinstance(request.get('op'),str)
+                or not isinstance(request.get('data',{}),dict)): fail('request_invalid')
+        op = request['op']
+        if context and context.get('store') and op not in ('ui_store_read','ui_store_write'): fail('op_denied')
         # Serialize all access across the short-lived native IPC helpers - except the Downloads reads that wait on the
         # network (search, a repository's files or model card) and change nothing here: holding the lock through a
         # 1-2 s request made the page's other calls queue past msvcrt's 10 s limit ([Errno 36], 0.6.1).
-        DATA.mkdir(parents=True,exist_ok=True)
-        if request.get('op') in UNLOCKED_OPS:
+        if (op.startswith(('brain_','mode_','host_','ui_store_')) or op in ('brain','start','stop')
+                or context and (op=='save' or context.get('frame'))):
+            result=host_request(op,request.get('data',{}),context)
+        elif op not in INFERENCE_OPS:
+            fail('unknown_op')
+        elif request.get('op') in UNLOCKED_OPS:
             result=handle(request['op'],request.get('data',{}))
         else:
+            DATA.mkdir(parents=True,exist_ok=True)
             with (DATA/'manager.lock').open('a+b') as lock:
                 import msvcrt
                 if lock.tell()==0: lock.write(b'0');lock.flush()
@@ -2551,11 +2767,11 @@ def main():
                 try: result=handle(request['op'],request.get('data',{}))
                 finally: lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
         print(json.dumps({'ok':True,'data':result},ensure_ascii=False))
-    except ManagerError as exc:
+    except (ManagerError,HostError) as exc:
         print(json.dumps({'ok':False,'error':str(exc),'code':exc.code,'params':exc.params},ensure_ascii=False))
         sys.exit(1)
-    except Exception as exc:
-        print(json.dumps({'ok':False,'error':str(exc)},ensure_ascii=False))
+    except Exception:
+        print(json.dumps({'ok':False,'error':'The manager could not complete the request.','code':'manager_failed','params':{}}))
         sys.exit(1)
 
 
