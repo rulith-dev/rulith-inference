@@ -13,6 +13,7 @@ import ConfigurationView from './ConfigurationView'
 import LogsView from './LogsView'
 import DownloadsView from './DownloadsView'
 import './strixllama.css'
+import { useMode, inferenceAllowed } from './brainBridge'
 
 export type View = 'models' | 'downloads' | 'configuration' | 'logs'
 
@@ -29,6 +30,8 @@ export default function StrixLlamaPage({ view }: { view: View }) {
   const clearError = useModelStore(s => s.clearError)
   useEffect(() => { if (!catalog) void loadCatalog() }, [catalog, loadCatalog])
   const state = serverState(status)
+  const mode = useMode(s => s.mode)
+  const allowed = inferenceAllowed(mode)
 
   return (
     <div className="flex h-svh w-full flex-col">
@@ -39,6 +42,8 @@ export default function StrixLlamaPage({ view }: { view: View }) {
       </div>
       <main className={cn('min-h-0 flex-1', view === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto')}>
         <div className={cn('mx-auto flex w-full max-w-[1280px] flex-col gap-5 px-6 py-6', view === 'logs' && 'min-h-0 flex-1')}>
+          {!allowed && <Notice tone="info" title={tr(mode ? 'brain.states.' + mode.state : 'brain.connecting')}
+            action={<Button size="sm" variant="outline" asChild><Link to="/brain">{tr('brain.open')}</Link></Button>} />}
           {status && !status.runtime_available && <Notice tone="error" title={tr('runtimeMissing')} />}
           {pollError && <Notice tone="error">{describeError(pollError, tr)}</Notice>}
           {error ? (
@@ -66,9 +71,9 @@ export default function StrixLlamaPage({ view }: { view: View }) {
               {tr('commitLow', { available: ((status.commit_available ?? 0) / 2 ** 30).toFixed(1), limit: ((status.commit_limit ?? 0) / 2 ** 30).toFixed(1) })}
             </Notice>
           )}
-          {view === 'models' && <ModelsView />}
+          {view === 'models' && <fieldset disabled={!allowed} inert={!allowed}><ModelsView /></fieldset>}
           {view === 'downloads' && <DownloadsView />}
-          {view === 'configuration' && <ConfigurationView />}
+          {view === 'configuration' && <fieldset disabled={!allowed} inert={!allowed}><ConfigurationView /></fieldset>}
           {view === 'logs' && <LogsView />}
           {view !== 'logs' && <PageFooter />}
         </div>
