@@ -293,3 +293,21 @@ import(/* delayed */ './local.mjs');"""
         for raw,code in ((b'{"op":"start"}','owner_required'),(b'{"op":"status","data":[]}','request_invalid')):
             p=subprocess.run(cmd,input=raw,capture_output=True)
             self.assertEqual(json.loads(p.stdout)['code'],code)
+
+
+class EngineCheckTests(unittest.TestCase):
+    def test_check_engine_puts_the_app_runtimes_rocm_first_on_path(self):
+        # 11-26: on a clean Windows the install over an existing runtime failed: the check ran llama-server.exe
+        # without the app's runtime bin/hip on PATH, where hipBLAS and rocBLAS are, so it never started.
+        from unittest.mock import patch
+        seen = {}
+        def run(cmd, **kw):
+            seen.update(kw)
+            return subprocess.CompletedProcess(cmd, 0)
+        hip = Path(rt.__file__).resolve().parent.parent / 'bin' / 'hip'
+        with patch.object(rt.Path, 'is_dir', lambda p: p == hip or os.path.isdir(p)):
+            with patch.object(rt.subprocess, 'run', run):
+                rt.Runtime.check_engine(Path(tempfile.gettempdir()))
+        path = seen['env']['PATH'].split(os.pathsep)
+        self.assertEqual(Path(path[0]), hip)
+        self.assertGreaterEqual({k.upper() for k in seen['env']}, {k.upper() for k in os.environ})

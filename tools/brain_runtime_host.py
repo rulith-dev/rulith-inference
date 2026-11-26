@@ -59,6 +59,15 @@ class HostError(ValueError):
         super().__init__(messages.get(code,code.replace('_', ' ').capitalize() + '.'))
 
 
+def engine_environment(env=None):
+    """The environment a Brain engine runs in: the app runtime's bin\\hip (beside this tools folder) first on PATH."""
+    env = dict(os.environ if env is None else env)
+    hip = Path(__file__).resolve().parent.parent / 'bin' / 'hip'
+    if hip.is_dir():
+        env['PATH'] = str(hip) + os.pathsep + env.get('PATH', '')
+    return env
+
+
 def require(condition, code='runtime_integrity'):
     if not condition:
         raise HostError(code)
@@ -373,7 +382,11 @@ class Runtime:
 
     @staticmethod
     def check_engine(root):
-        r = subprocess.run([str(root / 'llama-server.exe'), '--version'], cwd=root, timeout=30,
+        # The engine loads the rest of ROCm (hipBLAS, rocBLAS) from the app's runtime\bin\hip, as every Brain launch
+        # puts it on PATH (brain_env): without it the check itself failed with "DLL not found" and every install
+        # over an existing runtime ended as runtime_integrity (11-26, found on a clean Windows).
+        env = engine_environment()
+        r = subprocess.run([str(root / 'llama-server.exe'), '--version'], cwd=root, timeout=30, env=env,
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         require(r.returncode == 0)
