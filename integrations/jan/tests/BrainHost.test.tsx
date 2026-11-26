@@ -82,6 +82,21 @@ describe('Brain route', () => {
       generation, v: 1, type: 'flushed', id: event.id, ok, ...(!ok && { code: 'store_flush_failed' }),
     })
   })
+  it('keeps a live revocation visible through mode refreshes until Reopen is pressed', async () => {
+    verified = true
+    const ready: Mode = { ...mode, selected: 'brain', active: 'brain', state: 'brain_ready' }
+    useMode.setState({ mode: ready })
+    render(<BrainHost />)
+    const frame = await screen.findByTitle('Rulith Brain')
+    fireEvent.error(frame)
+    await screen.findByText('bridge_protocol')
+    await waitFor(() => expect(frame).not.toBeInTheDocument())
+    act(() => useMode.setState({ mode: { ...ready } }))
+    expect(screen.queryByTitle('Rulith Brain')).toBeNull()
+    fireEvent.click(screen.getByText('brain.reopen'))
+    expect(await screen.findByTitle('Rulith Brain')).not.toBe(frame)
+    expect(screen.queryByText('bridge_protocol')).toBeNull()
+  })
   it('keeps the frame and engine in place when the UI cannot flush', async () => {
     verified = true
     vi.spyOn(BrainBridge.prototype, 'flush').mockResolvedValue(false)

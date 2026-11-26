@@ -69,6 +69,33 @@ describe('Brain parent port', () => {
     reply({ v: 1, type: 'end', id, next_seq: 1 })
     expect(f.port.postMessage.mock.calls.map(([m]) => m.type)).toEqual(['head','chunk','error'])
   })
+  it('keeps a streaming chat connected when the first native acknowledgement is delayed', async () => {
+    const f = fixture()
+    let release!: () => void
+    const first = new Promise<void>(resolve => { release = resolve })
+    let applied = 0
+    f.send.mockImplementation(async m => {
+      if (m.type !== 'ack') return
+      const next = Number(m.next_seq)
+      if (next === 1) await first
+      if (next < applied) throw new Error('bridge_protocol')
+      applied = next
+    })
+    f.connect()
+    f.receive(request('memory_stream', { method: 'POST', path: '/v1/memory/input' }))
+    const reply = f.send.mock.calls[0][1]
+    reply({ v: 1, type: 'head', id, status: 200, headers: {} })
+    for (let seq = 0; seq < 3; seq++) {
+      reply({ v: 1, type: 'chunk', id, seq, text: 'hello' })
+      f.receive({ v: 1, type: 'ack', id, next_seq: seq + 1 })
+    }
+    release()
+    await Promise.allSettled(f.send.mock.results.map(result => result.value))
+    await vi.waitFor(() => expect(applied).toBe(3))
+    expect(f.revoked).not.toHaveBeenCalled()
+    reply({ v: 1, type: 'end', id, next_seq: 3 })
+    expect(f.port.postMessage.mock.lastCall?.[0]).toMatchObject({ type: 'end', next_seq: 3 })
+  })
   it('vetoes a failed flush and resumes editing on the same port', async () => {
     const f = fixture(); f.connect()
     const done = f.bridge.flush('switch', id)

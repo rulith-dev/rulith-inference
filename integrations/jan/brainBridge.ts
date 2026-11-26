@@ -182,7 +182,7 @@ function requestError(msg: Wire) {
 
 type Pending = {
   op: string; stream: boolean; head: boolean; next: number; ack: number
-  sizes: number[]; outstanding: number; cancelled: boolean; reply: (msg: Wire) => void
+  acknowledging?: boolean; sizes: number[]; outstanding: number; cancelled: boolean; reply: (msg: Wire) => void
 }
 export function nativeSender(generation: string): Send {
   return (request, reply) => {
@@ -232,7 +232,7 @@ export class BrainBridge {
   private fail(id: string, code: string, params: Obj = {}) {
     this.post({ type: 'error', id, code, message: code, params })
   }
-  private receive = ({ data: msg, ports }: MessageEvent) => {
+  private receive = async ({ data: msg, ports }: MessageEvent) => {
     if (this.dead) return
     if (!object(msg) || ports.length || msg.v !== 1) return this.close('protocol')
     if (msg.type === 'close' && exact(msg, 'v type reason') && [...reasons, 'protocol'].includes(String(msg.reason)))
@@ -253,6 +253,19 @@ export class BrainBridge {
         if (!uint(msg.next_seq) || msg.next_seq < p.ack || msg.next_seq > p.next) return this.close('protocol')
         for (const n of p.sizes.splice(0, msg.next_seq - p.ack)) p.outstanding -= n
         p.ack = msg.next_seq
+        // Native calls can run out of order. Keep one cumulative acknowledgement in flight per stream.
+        if (p.acknowledging) return
+        p.acknowledging = true
+        try {
+          let sent: number
+          do {
+            sent = p.ack
+            await this.send({ v: 1, type: 'ack', id, next_seq: sent }, p.reply)
+          } while (this.pending.get(id) === p && !p.cancelled && p.ack > sent)
+        } catch {
+          if (this.pending.get(id) === p && !p.cancelled) this.close('protocol')
+        } finally { p.acknowledging = false }
+        return
       }
       void this.send(msg as Wire, p.reply).catch(() => this.close('protocol'))
       return
