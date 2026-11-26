@@ -44,6 +44,16 @@ measured itself wrong.
 [docs/getting-started.md](docs/getting-started.md) walks through it with what to expect at each step and what to do
 when a step fails.
 
+## Rulith Brain
+
+The **Brain** page in the sidebar (since 0.8.0) runs [Rulith Brain](https://rulith.ai/brain.html), long-term memory
+for your local model, with the model files already in Inference: teach it documents and conversations, and it answers
+from them later. Inference and Brain take turns on the GPU - switching saves the side you leave first, and a
+conversation left in Inference continues where it was. Brain in Inference and the Rulith Brain app share one licence,
+one set of memories and one set of settings. The Brain runtime (about 90 MB) downloads on the first visit and is
+checked against its signature before it is used; it is a separate download under its own licence, with a 30-day
+trial.
+
 ## Models
 
 Tuned and measured: Qwen3.8-Flash-Next in four files. Quality is the KL divergence to the BF16 model (lower is

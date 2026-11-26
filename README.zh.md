@@ -38,6 +38,13 @@ Rulith Inference 0.6.9，目标机器，应用默认设置（GPU 显存 64 GB �
 
 [docs/getting-started.zh.md](docs/getting-started.zh.md) 逐步说明每一步该看到什么、某一步失败时怎么办。
 
+## Rulith Brain
+
+侧栏的 **Brain** 页面（0.8.0 起）运行 [Rulith Brain](https://rulith.ai/brain.html)——给本地模型的长期记忆，直接用
+Inference 里已有的模型文件：把文档和对话教给它，之后它能据此回答。Inference 和 Brain 轮流使用 GPU：切换时先保存要离开
+的一方，留在 Inference 里的对话回来后接着进行。Inference 里的 Brain 和 Rulith Brain 应用共用同一份授权、同一组记忆和同一套
+设置。Brain 运行时（约 90 MB）在第一次打开时下载，使用前先校验签名；它是单独的下载，按自己的许可提供，可试用 30 天。
+
 ## 模型
 
 调优并实测过的是 Qwen3.8-Flash-Next 的四个文件。质量用与 BF16 模型的 KL 散度（越低越接近）和六类文本上的 top-1
